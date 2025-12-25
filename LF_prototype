@@ -56,7 +56,8 @@ ESCALATION_PHASE_HIGH = 75.0
 CONTROL_GAIN_PER_TICK = 1.6
 CONTROL_LOSS_PER_TICK = 0.9
 CONTROL_WIN_HOLD = 100.0
-
+ESCALATION_PHASE_MID = 45.0
+ESCALATION_PHASE_HIGH = 75.0
 # -----------------------------
 # Data structures
 # -----------------------------
@@ -309,6 +310,10 @@ def compute_pressure(gs: GameState) -> Tuple[float, float]:
         air_permission = 0.7 + 0.3 * (1.0 - ad / 100.0)  # lower RU AD -> slightly better coalition effectiveness
     if gs.posture == "DOMINANCE":
         air_permission += 0.6  # air superiority opens windows
+
+    air_mult = budget_factor(gs.budget_air, min_mult=0.6, max_mult=1.35)
+    mun_mult = budget_factor(gs.budget_munitions, min_mult=0.6, max_mult=1.35)
+    logi_mult = budget_factor(gs.budget_logistics, min_mult=0.7, max_mult=1.4)
 
     air_mult = budget_factor(gs.budget_air, min_mult=0.6, max_mult=1.35)
     mun_mult = budget_factor(gs.budget_munitions, min_mult=0.6, max_mult=1.35)
@@ -616,6 +621,8 @@ def check_win(gs: GameState) -> Optional[str]:
     p = gs.regions[gs.obj_port].control
     if a >= CONTROL_WIN_HOLD and p >= CONTROL_WIN_HOLD:
         return "WIN: Both objectives occupied simultaneously."
+    if gs.escalation >= ESCALATION_LOSS_THRESHOLD:
+        return "LOSS: Escalation pressure exceeded tolerance; coalition forced to halt."
     if gs.t_sec >= MATCH_MINUTES * 60:
         return "LOSS: Time expired; RU consolidation complete."
     return None
