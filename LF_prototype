@@ -40,6 +40,7 @@ FRONTLINE_SHIFT_CLAMP = 6.0      # max movement per tick
 
 BASE_CREDITS = 120
 INCOME_PER_TICK = 25.0
+SUPPLY_ZONE_BONUS = 50
 
 
 def clamp(value: float, lo: float, hi: float) -> float:
@@ -68,9 +69,10 @@ class Player:
     defense_prod: float = 25.0
     credits: int = BASE_CREDITS
     purchases: Dict[int, int] = field(default_factory=dict)
+    supply_zones: int = 0
 
     def __post_init__(self) -> None:
-        for key in range(1, 6):
+        for key in range(1, 7):
             self.purchases.setdefault(key, 0)
 
     @property
@@ -105,6 +107,7 @@ class GameState:
     player2: Player
     frontline: float = 50.0  # distance from player1 position (0..100)
     history: List[str] = field(default_factory=list)
+    ticks_elapsed: int = 0
 
     def record(self, message: str) -> None:
         self.history.append(message)
@@ -156,6 +159,13 @@ def make_factories() -> Dict[int, Factory]:
             description="Raises air defense production by +10.",
             apply_effect=lambda p: setattr(p, "defense_prod", p.defense_prod + 10),
         ),
+        6: Factory(
+            key=6,
+            name="Supply Zone",
+            cost=85,
+            description=f"Generates +{SUPPLY_ZONE_BONUS} credits every 5th tick.",
+            apply_effect=lambda p: setattr(p, "supply_zones", p.supply_zones + 1),
+        ),
     }
 
 
@@ -179,6 +189,7 @@ def describe_store(factories: Dict[int, Factory]) -> str:
 
 
 def advance_tick(state: GameState) -> Tuple[float, float]:
+    state.ticks_elapsed += 1
     p1_prod = state.player1.total_production
     p2_prod = state.player2.total_production
     advantage = p1_prod - p2_prod
@@ -192,25 +203,41 @@ def advance_tick(state: GameState) -> Tuple[float, float]:
     state.player1.earn_income()
     state.player2.earn_income()
 
+    if state.ticks_elapsed % 5 == 0:
+        for player in (state.player1, state.player2):
+            if player.supply_zones > 0:
+                bonus = player.supply_zones * SUPPLY_ZONE_BONUS
+                player.credits += bonus
+                state.record(f"{player.name} gained {bonus} bonus credits from supply zones on tick {state.ticks_elapsed}.")
+
     state.record(
         f"Tick: P1 prod {p1_prod:.2f} vs P2 {p2_prod:.2f} -> frontline shift {delta:+.2f} to {state.frontline_ratio:.2f}%"
     )
     return p1_prod, p2_prod
 
 
-def buy_factory(state: GameState, player_key: str, factory_id: int, factories: Dict[int, Factory]) -> str:
+def buy_factory(
+    state: GameState, player_key: str, factory_id: int, factories: Dict[int, Factory], quantity: int = 1
+) -> str:
     player = state.player1 if player_key.lower() in ("1", "p1", "player1") else state.player2
     if factory_id not in factories:
         raise ValueError(f"Factory {factory_id} is not in the store.")
+    if quantity <= 0:
+        raise ValueError("Quantity must be at least 1.")
 
     factory = factories[factory_id]
-    if player.credits < factory.cost:
-        raise ValueError(f"{player.name} lacks credits ({player.credits}) for {factory.name} (cost {factory.cost}).")
+    total_cost = factory.cost * quantity
+    if player.credits < total_cost:
+        raise ValueError(
+            f"{player.name} lacks credits ({player.credits}) for {quantity}x {factory.name} (cost {total_cost})."
+        )
 
-    player.credits -= factory.cost
-    player.apply_factory(factory)
-    state.record(f"{player.name} bought {factory.name} for {factory.cost} credits.")
-    return f"{player.name} bought {factory.name}. Remaining credits: {player.credits}"
+    player.credits -= total_cost
+    for _ in range(quantity):
+        player.apply_factory(factory)
+    plural = "factory" if quantity == 1 else "factories"
+    state.record(f"{player.name} bought {quantity} {factory.name} {plural} for {total_cost} credits.")
+    return f"{player.name} bought {quantity}x {factory.name}. Remaining credits: {player.credits}"
 
 
 def show_status(state: GameState) -> str:
@@ -227,7 +254,7 @@ def print_help() -> str:
         "Commands:\n"
         "  status                  -> show both players and the front line\n"
         "  store                   -> list factories and effects\n"
-        "  buy <p1|p2> <id>        -> purchase a factory for the chosen player\n"
+        "  buy <p1|p2> <id> [n|max]-> purchase factories (single, n copies, or max affordable)\n"
         "  tick [n]                -> advance the simulation by n ticks (default 1)\n"
         "  log                     -> show recent events\n"
         "  help                    -> show this message\n"
@@ -264,10 +291,22 @@ def interactive_loop(state: GameState, factories: Dict[int, Factory]) -> None:
             elif cmd == "log":
                 print("\n".join(state.history[-10:]) or "No history yet.")
             elif cmd == "buy":
-                if len(parts) != 3:
-                    print("Usage: buy <p1|p2> <factory_id>")
+                if len(parts) < 3:
+                    print("Usage: buy <p1|p2> <factory_id> [n|max]")
                     continue
-                message = buy_factory(state, parts[1], int(parts[2]), factories)
+                quantity = 1
+                if len(parts) >= 4:
+                    if parts[3].lower() == "max":
+                        factory_id = int(parts[2])
+                        if factory_id not in factories:
+                            print(f"Factory {factory_id} is not in the store.")
+                            continue
+                        factory = factories[factory_id]
+                        player = state.player1 if parts[1].lower() in ("1", "p1", "player1") else state.player2
+                        quantity = max(1, player.credits // factory.cost)
+                    else:
+                        quantity = int(parts[3])
+                message = buy_factory(state, parts[1], int(parts[2]), factories, quantity)
                 print(message)
             elif cmd == "tick":
                 ticks = int(parts[1]) if len(parts) > 1 else 1
