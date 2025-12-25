@@ -534,6 +534,8 @@ def check_win(gs: GameState) -> Optional[str]:
     p = gs.regions[gs.obj_port].control
     if a >= CONTROL_WIN_HOLD and p >= CONTROL_WIN_HOLD:
         return "WIN: Both objectives occupied simultaneously."
+    if gs.escalation >= ESCALATION_LOSS_THRESHOLD:
+        return "LOSS: Escalation pressure exceeded tolerance; coalition forced to halt."
     if gs.t_sec >= MATCH_MINUTES * 60:
         return "LOSS: Time expired; RU consolidation complete."
     return None
