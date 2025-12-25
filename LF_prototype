@@ -49,11 +49,12 @@ ESCALATION_TIGHTEN_START = 30.0
 ESCALATION_STEP_MINOR = 2.5
 ESCALATION_STEP_MAJOR = 6.0
 ESCALATION_MAX = 100.0
-ESCALATION_LOSS_THRESHOLD = 100.0
+ESCALATION_PHASE_MID = 45.0
+ESCALATION_PHASE_HIGH = 75.0
 
 # Objective control thresholds
-CONTROL_GAIN_PER_TICK = 1.2
-CONTROL_LOSS_PER_TICK = 1.0
+CONTROL_GAIN_PER_TICK = 1.6
+CONTROL_LOSS_PER_TICK = 0.9
 CONTROL_WIN_HOLD = 100.0
 ESCALATION_PHASE_MID = 45.0
 ESCALATION_PHASE_HIGH = 75.0
@@ -301,12 +302,18 @@ def compute_pressure(gs: GameState) -> Tuple[float, float]:
         "INTERDICT": 1.05,
         "DEEP_STRIKE": 1.00,
         "CAS": 1.10,
-        "DOMINANCE": 1.15,
+        "DOMINANCE": 1.35,
     }.get(gs.posture, 1.0)
 
     air_permission = 1.0
-    if gs.posture in ("SEAD", "DEEP_STRIKE", "INTERDICT", "CAS"):
+    if gs.posture in ("SEAD", "DEEP_STRIKE", "INTERDICT", "CAS", "DOMINANCE"):
         air_permission = 0.7 + 0.3 * (1.0 - ad / 100.0)  # lower RU AD -> slightly better coalition effectiveness
+    if gs.posture == "DOMINANCE":
+        air_permission += 0.6  # air superiority opens windows
+
+    air_mult = budget_factor(gs.budget_air, min_mult=0.6, max_mult=1.35)
+    mun_mult = budget_factor(gs.budget_munitions, min_mult=0.6, max_mult=1.35)
+    logi_mult = budget_factor(gs.budget_logistics, min_mult=0.7, max_mult=1.4)
 
     air_mult = budget_factor(gs.budget_air, min_mult=0.6, max_mult=1.35)
     mun_mult = budget_factor(gs.budget_munitions, min_mult=0.6, max_mult=1.35)
@@ -315,6 +322,9 @@ def compute_pressure(gs: GameState) -> Tuple[float, float]:
     coalition_pressure = BASE_COALITION_PRESSURE * posture_mult * air_permission
     coalition_pressure *= ((air_mult + mun_mult) / 2.0) * logi_mult
     coalition_pressure += random.uniform(-PRESSURE_NOISE, PRESSURE_NOISE)
+
+    if gs.posture == "DOMINANCE":
+        ru_pressure *= 0.8  # RU ground push hampered by air control
 
     return max(0.0, ru_pressure), max(0.0, coalition_pressure)
 
@@ -330,7 +340,7 @@ def tick_objectives(gs: GameState, ru_pressure: float, coalition_pressure: float
             continue
         # Objective difficulty: defender advantage when RU control is strong
         difficulty = (1.15 if r.control < -20 else 1.0) * obj_resist
-        delta = (coalition_pressure - ru_pressure) / 40.0  # scale down
+        delta = (coalition_pressure - ru_pressure) / 35.0  # slightly more responsive
         if delta > 0:
             r.control += CONTROL_GAIN_PER_TICK * delta * logi_support / difficulty
         else:
@@ -598,7 +608,8 @@ def buy_item(gs: GameState, item: str) -> None:
 def print_objectives(gs: GameState) -> None:
     print("MISSION OBJECTIVES:")
     print(f"  - Hold both strategic objectives ({gs.obj_airbase} and {gs.obj_port}) at +100 control simultaneously.")
-    print("  - Drain RU industry/logistics to open pressure windows; fronts move automatically.")
+    print("  - Drain RU industry/logistics to open pressure windows; fronts move automatically (no manual move orders).")
+    print("  - Increase coalition pressure with offensive postures (SEAD/INTERDICT/DEEP_STRIKE/CAS/DOMINANCE) and let ticks advance.")
     print(f"  - Time limit: {MATCH_MINUTES} minutes of sim time; advance with 'n <ticks>'.")
     print(f"  - Budget pool: allocate up to {TOTAL_BUDGET:0.0f} total across Air / Munitions / Logistics / Repairs; allocations impact pressure and control.")
     print(f"  - Money accrues each tick ({MONEY_PER_TICK:0.1f}); shop item 'Dominance Package' unlocks DOMINANCE posture (cost {SHOP_DOMINANCE_COST:0.0f}).")
@@ -634,6 +645,7 @@ def help_text() -> str:
         " - Escalation reflects confrontation intensity; expect harder RU push at high pressure (no direct loss).\n"
         " - Time limit: advance sim time with 'n <ticks>'; 120 ticks ≈ full 30-minute window.\n"
         " - Money accrues automatically; purchase 'Dominance Package' to unlock DOMINANCE posture (AD -10 each tick).\n"
+        " - To capture: set an offensive posture, ensure Air/Munitions/Logistics budgets are healthy, then advance ticks.\n"
     )
 
 def rebalance_budget(gs: GameState) -> None:
@@ -741,4 +753,7 @@ def main() -> None:
             print("Unknown command. Type 'h' for help.")
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except EOFError:
+        pass
