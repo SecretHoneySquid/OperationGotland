@@ -36,9 +36,27 @@ BASE_RU_PRESSURE = 55.0           # how hard RU can press baseline (abstract)
 BASE_COALITION_PRESSURE = 35.0    # how much coalition can press baseline (abstract)
 PRESSURE_NOISE = 2.0
 
+# Budget tuning
+BUDGET_BASELINE = 60.0
+TOTAL_BUDGET = 240.0
+
+# Money system (shop)
+MONEY_PER_TICK = 5.0
+SHOP_DOMINANCE_COST = 80.0
+
+# Escalation tuning
+ESCALATION_TIGHTEN_START = 30.0
+ESCALATION_STEP_MINOR = 2.5
+ESCALATION_STEP_MAJOR = 6.0
+ESCALATION_MAX = 100.0
+# Legacy compatibility (no longer used as a loss trigger)
+ESCALATION_LOSS_THRESHOLD = ESCALATION_MAX
+ESCALATION_PHASE_MID = 45.0
+ESCALATION_PHASE_HIGH = 75.0
+
 # Objective control thresholds
-CONTROL_GAIN_PER_TICK = 1.2
-CONTROL_LOSS_PER_TICK = 1.0
+CONTROL_GAIN_PER_TICK = 1.6
+CONTROL_LOSS_PER_TICK = 0.9
 CONTROL_WIN_HOLD = 100.0
 
 # -----------------------------
@@ -65,9 +83,9 @@ class Asset:
     def apply_damage(self, dmg: float) -> None:
         self.hp = max(0.0, self.hp - dmg)
 
-    def tick_repair(self) -> None:
+    def tick_repair(self, repair_rate: float = REPAIR_PER_TICK) -> None:
         if self.repairable and self.hp > 0.0 and self.hp < MAX_HP:
-            self.hp = min(MAX_HP, self.hp + REPAIR_PER_TICK)
+            self.hp = min(MAX_HP, self.hp + repair_rate)
 
 @dataclass
 class Region:
@@ -121,10 +139,18 @@ class GameState:
     budget_logistics: float = 60.0
     budget_repairs: float = 60.0
     stress: float = 0.0  # 0..100 (not yet deeply modeled)
+    money: float = 100.0
+    income_per_tick: float = MONEY_PER_TICK
 
     # Objective names
     obj_airbase: str = "Airbase Cluster"
     obj_port: str = "Industrial Port"
+
+    # Escalation
+    escalation: float = 0.0  # 0..ESCALATION_MAX
+
+    # Unlocks
+    dominance_unlocked: bool = False
 
     def high_isr(self) -> bool:
         return any(src.active and src.high_isr for src in self.intel_sources.values())
@@ -172,6 +198,53 @@ def push_feed(gs: GameState, text: str) -> None:
     if len(gs.intel_feed) > 200:
         gs.intel_feed = gs.intel_feed[-200:]
 
+def budget_factor(value: float, min_mult: float = 0.5, max_mult: float = 1.5) -> float:
+    return max(min_mult, min(max_mult, 0.5 + 0.5 * (value / BUDGET_BASELINE)))
+
+def add_escalation(gs: GameState, delta: float, reason: str, emit: bool = True) -> None:
+    """
+    Adjust escalation pressure with clamping and contextual feed entries.
+    """
+    if delta == 0:
+        return
+    before = gs.escalation
+    gs.escalation = max(0.0, min(ESCALATION_MAX, gs.escalation + delta))
+    after = gs.escalation
+
+    crossed = (before < ESCALATION_TIGHTEN_START) and (after >= ESCALATION_TIGHTEN_START)
+    if emit:
+        if delta > 0 and after > before:
+            intensity = "minor" if delta <= ESCALATION_STEP_MINOR else "major"
+            push_feed(gs, f"[ESC] Escalation +{delta:0.1f} ({intensity}) from {reason}. Pressure now {after:0.1f}.")
+        elif delta < 0 and after < before:
+            push_feed(gs, f"[ESC] Escalation eased by {-delta:0.1f} from {reason}. Pressure now {after:0.1f}.")
+
+    if crossed and emit:
+        push_feed(gs, "[ESC] Political risk monitors tightening; aggressive postures may face constraints.")
+
+def escalation_tighten_factor(gs: GameState) -> float:
+    """
+    Returns a multiplier applied to RU push when escalation is high.
+    """
+    if gs.escalation < ESCALATION_TIGHTEN_START:
+        return 1.0
+    over = gs.escalation - ESCALATION_TIGHTEN_START
+    # up to ~35% more RU pressure as confrontation escalates
+    return min(1.35, 1.0 + (over / 200.0))
+
+def escalation_phase(gs: GameState) -> Tuple[float, float, float, float]:
+    """
+    Returns multipliers for (repair_rate, systemic_damage, objective_resistance, delay_factor).
+    Higher escalation means reduced repair, stronger systemic effects, softer objectives, and quicker propagation.
+    """
+    if gs.escalation >= ESCALATION_PHASE_HIGH:
+        return (0.45, 1.6, 0.65, 0.55)
+    if gs.escalation >= ESCALATION_PHASE_MID:
+        return (0.65, 1.35, 0.8, 0.7)
+    if gs.escalation >= ESCALATION_TIGHTEN_START:
+        return (0.85, 1.15, 0.9, 0.85)
+    return (1.0, 1.0, 1.0, 1.0)
+
 def apply_scheduled_effects(gs: GameState) -> None:
     due = [e for e in gs.scheduled_effects if e.apply_at_sec <= gs.t_sec]
     gs.scheduled_effects = [e for e in gs.scheduled_effects if e.apply_at_sec > gs.t_sec]
@@ -181,21 +254,45 @@ def apply_scheduled_effects(gs: GameState) -> None:
                 gs.caps[k].value += dv
                 gs.caps[k].clamp()
 
+def tick_escalation(gs: GameState) -> None:
+    """
+    Small natural easing over time to prevent runaway unless continuously provoked.
+    """
+    if gs.escalation <= 0:
+        return
+    add_escalation(gs, -0.05, "time passing", emit=False)
+
 def tick_repairs(gs: GameState) -> None:
+    repair_mult, _, _, _ = escalation_phase(gs)
+    eff_repair = REPAIR_PER_TICK * repair_mult
     for r in gs.regions.values():
         for a in r.assets:
-            a.tick_repair()
+            a.tick_repair(eff_repair)
+
+def apply_dominance_effect(gs: GameState) -> None:
+    """
+    Dominance posture reduces RU air defense by a flat amount each tick once unlocked.
+    """
+    if gs.posture != "DOMINANCE" or not gs.dominance_unlocked:
+        return
+    ad = gs.caps["Air Defense Effectiveness"]
+    before = ad.value
+    ad.value = max(CAP_MIN, ad.value - 10.0)
+    ad.clamp()
+    if ad.value < before:
+        ad.last_display_value = ad.value  # make visible immediately
 
 def compute_pressure(gs: GameState) -> Tuple[float, float]:
     """
     Returns (ru_pressure, coalition_pressure) as abstract numbers.
     Coupled to capabilities. Higher RU industry/logistics -> higher RU pressure.
-    Coalition pressure lightly influenced by posture and budget allocation (very simplified).
+    Coalition pressure influenced by posture, budget, and air defense.
     """
     ind = gs.caps["Industrial Output"].value
     log = gs.caps["Logistics Throughput"].value
 
     ru_pressure = BASE_RU_PRESSURE * (0.5 + 0.5 * (ind / 100.0)) * (0.6 + 0.4 * (log / 100.0))
+    ru_pressure *= escalation_tighten_factor(gs)
     ru_pressure += random.uniform(-PRESSURE_NOISE, PRESSURE_NOISE)
 
     # Coalition pressure: depends on posture effectiveness + (inverse of RU air defense when air-centric)
@@ -206,14 +303,25 @@ def compute_pressure(gs: GameState) -> Tuple[float, float]:
         "INTERDICT": 1.05,
         "DEEP_STRIKE": 1.00,
         "CAS": 1.10,
+        "DOMINANCE": 1.35,
     }.get(gs.posture, 1.0)
 
     air_permission = 1.0
-    if gs.posture in ("SEAD", "DEEP_STRIKE", "INTERDICT", "CAS"):
+    if gs.posture in ("SEAD", "DEEP_STRIKE", "INTERDICT", "CAS", "DOMINANCE"):
         air_permission = 0.7 + 0.3 * (1.0 - ad / 100.0)  # lower RU AD -> slightly better coalition effectiveness
+    if gs.posture == "DOMINANCE":
+        air_permission += 0.6  # air superiority opens windows
+
+    air_mult = budget_factor(gs.budget_air, min_mult=0.6, max_mult=1.35)
+    mun_mult = budget_factor(gs.budget_munitions, min_mult=0.6, max_mult=1.35)
+    logi_mult = budget_factor(gs.budget_logistics, min_mult=0.7, max_mult=1.4)
 
     coalition_pressure = BASE_COALITION_PRESSURE * posture_mult * air_permission
+    coalition_pressure *= ((air_mult + mun_mult) / 2.0) * logi_mult
     coalition_pressure += random.uniform(-PRESSURE_NOISE, PRESSURE_NOISE)
+
+    if gs.posture == "DOMINANCE":
+        ru_pressure *= 0.8  # RU ground push hampered by air control
 
     return max(0.0, ru_pressure), max(0.0, coalition_pressure)
 
@@ -221,16 +329,19 @@ def tick_objectives(gs: GameState, ru_pressure: float, coalition_pressure: float
     """
     Control moves based on relative pressure, with objectives harder to flip.
     """
+    logi_support = budget_factor(gs.budget_logistics, min_mult=0.7, max_mult=1.4)
+    repair_buffer = budget_factor(gs.budget_repairs, min_mult=0.6, max_mult=1.25)
+    _, _, obj_resist, _ = escalation_phase(gs)
     for r in gs.regions.values():
         if not r.is_objective():
             continue
         # Objective difficulty: defender advantage when RU control is strong
-        difficulty = 1.15 if r.control < -20 else 1.0
-        delta = (coalition_pressure - ru_pressure) / 40.0  # scale down
+        difficulty = (1.15 if r.control < -20 else 1.0) * obj_resist
+        delta = (coalition_pressure - ru_pressure) / 35.0  # slightly more responsive
         if delta > 0:
-            r.control += CONTROL_GAIN_PER_TICK * delta / difficulty
+            r.control += CONTROL_GAIN_PER_TICK * delta * logi_support / difficulty
         else:
-            r.control += CONTROL_LOSS_PER_TICK * delta * difficulty
+            r.control += CONTROL_LOSS_PER_TICK * delta * difficulty / repair_buffer
         r.control = max(-100.0, min(100.0, r.control))
 
 def visible_cap_value(gs: GameState, cap: Capability) -> str:
@@ -293,14 +404,16 @@ def schedule_systemic_effect(gs: GameState, asset_kind: str, dmg: float) -> None
     Translate asset damage into capability deltas (instant in model, but UI visibility is gated).
     We schedule it after a short delay to represent assessment / propagation.
     """
-    # You asked for ~2 minutes when not high ISR. We'll make systemic impact apply after 60–120s.
-    # ISR affects player visibility, not "reality"; but we keep a small delay for the "system response".
-    apply_delay = random.randint(60, 120)
+    # You asked for ~2 minutes when not high ISR. Escalation makes systems more brittle and faster to react.
+    _, sys_mult, _, delay_mult = escalation_phase(gs)
+    base_delay = random.randint(60, 120)
+    apply_delay = max(20, int(base_delay * delay_mult))
     apply_at = gs.t_sec + apply_delay
 
     # Scale deltas: single hits often <1% total; large packages can be >=1%.
     # Here dmg is 0..100, but we apply tiny deltas.
     d = max(0.05, min(0.8, dmg / 120.0))  # 0.05..0.8
+    d *= sys_mult
     deltas: Dict[str, float] = {}
 
     if asset_kind == "sam":
@@ -330,6 +443,11 @@ def tick_air_ops(gs: GameState) -> None:
         # ISR improves visibility; in MVP it's already "high_isr"
         if random.random() < 0.25:
             push_feed(gs, "[ISR] Additional coverage maintained over depth targets; confidence tightening.")
+        return
+    if gs.posture == "DOMINANCE":
+        # Dominance is a sustained air control push; handled in apply_dominance_effect
+        if random.random() < 0.2:
+            push_feed(gs, "[AIR:DOM] Air superiority push sustained; RU air nodes pressured.")
         return
 
     # Budget check (very simplified)
@@ -372,6 +490,19 @@ def tick_air_ops(gs: GameState) -> None:
         msg += " Losses reported."
     push_feed(gs, msg)
 
+    # Escalation response: deep strikes / objective hits draw more attention
+    posture_esc = {
+        "SEAD": ESCALATION_STEP_MINOR,
+        "INTERDICT": ESCALATION_STEP_MINOR + 0.5,
+        "DEEP_STRIKE": ESCALATION_STEP_MAJOR,
+        "CAS": ESCALATION_STEP_MINOR * 0.6,
+    }.get(gs.posture, ESCALATION_STEP_MINOR)
+    if region.is_objective():
+        posture_esc += 1.5
+    if losses:
+        posture_esc += 0.8
+    add_escalation(gs, posture_esc, f"{gs.posture} pressure over {region.name}")
+
     # Systemic degradation (small per hit)
     schedule_systemic_effect(gs, asset.kind, dmg)
 
@@ -396,9 +527,14 @@ def maybe_emit_report(gs: GameState) -> None:
 def tick(gs: GameState) -> None:
     gs.t_sec += TICK_SECONDS
 
+    # Economy accrual
+    gs.money += gs.income_per_tick
+
     apply_scheduled_effects(gs)
+    tick_escalation(gs)
     tick_repairs(gs)
     tick_air_ops(gs)
+    apply_dominance_effect(gs)
 
     ru_p, co_p = compute_pressure(gs)
     tick_objectives(gs, ru_p, co_p)
@@ -421,6 +557,9 @@ def print_status(gs: GameState) -> None:
     for k in ("Industrial Output", "Logistics Throughput", "Air Defense Effectiveness"):
         cap = gs.caps[k]
         print(f"  - {k:24s}: {visible_cap_value(gs, cap)}")
+    esc_bar = int((gs.escalation / ESCALATION_MAX) * 20)
+    tightening = " (tightening)" if gs.escalation >= ESCALATION_TIGHTEN_START else ""
+    print(f"  Escalation Pressure: {gs.escalation:5.1f}{tightening}  [{('#'*esc_bar).ljust(20)}]")
     print("-" * 88)
     print("OBJECTIVES (control: -100 RU .. +100 Coalition; win at +100):")
     for name in (gs.obj_airbase, gs.obj_port):
@@ -429,13 +568,50 @@ def print_status(gs: GameState) -> None:
         print(f"  - {name:18s}: {r.control:7.1f}  [{('#'* (bar//5)).ljust(20)}]")
     print("-" * 88)
     print("BUDGET (very simplified):")
+    used = gs.budget_air + gs.budget_munitions + gs.budget_logistics + gs.budget_repairs
     print(f"  Air={gs.budget_air:5.1f}  Munitions={gs.budget_munitions:5.1f}  Logistics={gs.budget_logistics:5.1f}  Repairs={gs.budget_repairs:5.1f}")
+    print(f"  Total committed: {used:5.1f} / {TOTAL_BUDGET:5.1f}")
+    print(f"  Money: {gs.money:6.1f}  (income per tick={gs.income_per_tick:0.1f})")
+    if gs.dominance_unlocked:
+        print("  Unlocks: DOMINANCE posture available.")
     print("-" * 88)
 
 def print_feed(gs: GameState, n: int = 10) -> None:
     print("INTEL FEED (latest):")
     for e in gs.intel_feed[-n:]:
         print(f"  [{fmt_time(e.t_sec)}] {e.text}")
+
+def show_shop(gs: GameState) -> None:
+    print("SHOP:")
+    status = "Unlocked" if gs.dominance_unlocked else f"Cost {SHOP_DOMINANCE_COST:0.0f}"
+    affordable = "" if gs.money >= SHOP_DOMINANCE_COST else " (insufficient funds)"
+    print(f"  - Dominance Package ({status}){affordable}: Unlocks DOMINANCE posture (AD -10 each tick).")
+    print(f"Money available: {gs.money:0.1f}")
+
+def buy_item(gs: GameState, item: str) -> None:
+    if item.lower() in {"dominance", "dom"}:
+        if gs.dominance_unlocked:
+            print("Dominance already unlocked.")
+            return
+        if gs.money < SHOP_DOMINANCE_COST:
+            print("Not enough money.")
+            return
+        gs.money -= SHOP_DOMINANCE_COST
+        gs.dominance_unlocked = True
+        push_feed(gs, "[SHOP] Dominance Package purchased. DOMINANCE posture unlocked (AD -10 per tick).")
+        return
+    print("Unknown item.")
+
+def print_objectives(gs: GameState) -> None:
+    print("MISSION OBJECTIVES:")
+    print(f"  - Hold both strategic objectives ({gs.obj_airbase} and {gs.obj_port}) at +100 control simultaneously.")
+    print("  - Drain RU industry/logistics to open pressure windows; fronts move automatically (no manual move orders).")
+    print("  - Increase coalition pressure with offensive postures (SEAD/INTERDICT/DEEP_STRIKE/CAS/DOMINANCE) and let ticks advance.")
+    print(f"  - Time limit: {MATCH_MINUTES} minutes of sim time; advance with 'n <ticks>'.")
+    print(f"  - Budget pool: allocate up to {TOTAL_BUDGET:0.0f} total across Air / Munitions / Logistics / Repairs; allocations impact pressure and control.")
+    print(f"  - Money accrues each tick ({MONEY_PER_TICK:0.1f}); shop item 'Dominance Package' unlocks DOMINANCE posture (cost {SHOP_DOMINANCE_COST:0.0f}).")
+    print("  - Escalation reflects confrontation intensity; expect RU pushback at higher levels but no direct loss trigger.")
+    print("-" * 88)
 
 def check_win(gs: GameState) -> Optional[str]:
     a = gs.regions[gs.obj_airbase].control
@@ -449,16 +625,22 @@ def check_win(gs: GameState) -> Optional[str]:
 def help_text() -> str:
     return (
         "Commands:\n"
-        "  p <ISR|SEAD|INTERDICT|DEEP_STRIKE|CAS>    set air posture\n"
+        "  p <ISR|SEAD|INTERDICT|DEEP_STRIKE|CAS|DOMINANCE>    set air posture\n"
         "  s                                        show status\n"
         "  f                                        show intel feed\n"
         "  n <ticks>                                advance simulation by N ticks (default 1)\n"
         "  b                                        budget rebalance (simple)\n"
+        "  shop / buy <item>                        view or purchase shop items\n"
         "  q                                        quit\n"
         "\n"
         "Notes:\n"
         " - Small strikes usually cause <1% systemic deltas (may not visibly move bars).\n"
         " - Capability effects apply after ~60–120s (propagation), visibility depends on ISR.\n"
+        " - Budgets matter: Air/Munitions/Logistics drive pressure and control; total pool is capped.\n"
+        " - Escalation reflects confrontation intensity; expect harder RU push at high pressure (no direct loss).\n"
+        " - Time limit: advance sim time with 'n <ticks>'; 120 ticks ≈ full 30-minute window.\n"
+        " - Money accrues automatically; purchase 'Dominance Package' to unlock DOMINANCE posture (AD -10 each tick).\n"
+        " - To capture: set an offensive posture, ensure Air/Munitions/Logistics budgets are healthy, then advance ticks.\n"
     )
 
 def rebalance_budget(gs: GameState) -> None:
@@ -479,18 +661,28 @@ def rebalance_budget(gs: GameState) -> None:
     gs.budget_repairs += dr
     gs.budget_logistics += dl
 
+    total_used = gs.budget_air + gs.budget_munitions + gs.budget_repairs + gs.budget_logistics
+    if total_used > TOTAL_BUDGET:
+        scale = TOTAL_BUDGET / total_used
+        gs.budget_air *= scale
+        gs.budget_munitions *= scale
+        gs.budget_repairs *= scale
+        gs.budget_logistics *= scale
+        push_feed(gs, f"[ECON] Budgets scaled to stay within total pool ({TOTAL_BUDGET:0.0f}).")
+
     overshoot = sum(max(0.0, -x) for x in (gs.budget_air, gs.budget_munitions, gs.budget_repairs, gs.budget_logistics))
     if overshoot > 0:
         gs.stress = min(100.0, gs.stress + overshoot * 0.5)
         push_feed(gs, f"[ECON] Budget deficits accepted; war economy stress increased (stress={gs.stress:0.1f}).")
 
-    push_feed(gs, "[ECON] Budget priorities updated.")
+    push_feed(gs, "[ECON] Budget priorities updated and will affect operational pressure.")
 
 def main() -> None:
     random.seed(7)
     gs = make_world()
 
     print(help_text())
+    print_objectives(gs)
     print_status(gs)
     print_feed(gs, 8)
 
@@ -518,7 +710,9 @@ def main() -> None:
             print_feed(gs, 12)
         elif c == "p" and len(parts) >= 2:
             p = parts[1].upper()
-            if p not in {"ISR", "SEAD", "INTERDICT", "DEEP_STRIKE", "CAS"}:
+            if p == "DOMINANCE" and not gs.dominance_unlocked:
+                print("DOMINANCE locked. Buy the Dominance Package in the shop.")
+            elif p not in {"ISR", "SEAD", "INTERDICT", "DEEP_STRIKE", "CAS", "DOMINANCE"}:
                 print("Invalid posture.")
             else:
                 gs.posture = p
@@ -530,14 +724,31 @@ def main() -> None:
                     n = max(1, int(parts[1]))
                 except ValueError:
                     n = 1
+            ended = False
             for _ in range(n):
                 tick(gs)
+                verdict = check_win(gs)
+                if verdict:
+                    print("\n" + verdict)
+                    print_status(gs)
+                    print_feed(gs, 12)
+                    ended = True
+                    break
+            if ended:
+                break
             print_status(gs)
             print_feed(gs, 8)
         elif c == "b":
             rebalance_budget(gs)
+        elif c == "shop":
+            show_shop(gs)
+        elif c == "buy" and len(parts) >= 2:
+            buy_item(gs, parts[1])
         else:
             print("Unknown command. Type 'h' for help.")
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except EOFError:
+        pass
