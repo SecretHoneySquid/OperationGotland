@@ -1,0 +1,543 @@
+#!/usr/bin/env python3
+"""
+Northern Breakwater - mechanics-first CLI prototype (no external libs)
+
+Run:
+  python northern_breakwater.py
+
+Goal:
+  Test the causal loop: assets -> capability bars -> pressure -> objectives
+  with delayed visibility and operations as postures/packages (abstracted).
+"""
+
+from __future__ import annotations
+from dataclasses import dataclass, field
+from typing import Dict, List, Optional, Tuple
+import random
+import time
+
+# -----------------------------
+# Constants / tuning knobs
+# -----------------------------
+MATCH_MINUTES = 30
+TICK_SECONDS = 15                 # simulation tick granularity (in-game seconds)
+UI_REPORT_INTERVAL_SEC = 120      # intel report cadence (2 minutes)
+VISIBILITY_MIN_DELTA = 1.0        # % minimum change to show on bars unless high ISR
+
+REPAIR_PER_TICK = 0.4             # HP per tick
+MAX_HP = 100.0
+
+# Capability bar ranges (display as 0..100)
+CAP_MIN = 0.0
+CAP_MAX = 100.0
+
+# Pressure model
+BASE_RU_PRESSURE = 55.0           # how hard RU can press baseline (abstract)
+BASE_COALITION_PRESSURE = 35.0    # how much coalition can press baseline (abstract)
+PRESSURE_NOISE = 2.0
+
+# Objective control thresholds
+CONTROL_GAIN_PER_TICK = 1.2
+CONTROL_LOSS_PER_TICK = 1.0
+CONTROL_WIN_HOLD = 100.0
+
+# -----------------------------
+# Data structures
+# -----------------------------
+@dataclass
+class Capability:
+    name: str
+    value: float
+    last_display_value: float = field(default=0.0)  # for quantized UI changes
+
+    def clamp(self) -> None:
+        self.value = max(CAP_MIN, min(CAP_MAX, self.value))
+
+@dataclass
+class Asset:
+    kind: str                      # "factory", "rail", "sam", "airfield"
+    hp: float = MAX_HP
+    repairable: bool = True
+
+    def damaged(self) -> bool:
+        return self.hp < MAX_HP
+
+    def apply_damage(self, dmg: float) -> None:
+        self.hp = max(0.0, self.hp - dmg)
+
+    def tick_repair(self) -> None:
+        if self.repairable and self.hp > 0.0 and self.hp < MAX_HP:
+            self.hp = min(MAX_HP, self.hp + REPAIR_PER_TICK)
+
+@dataclass
+class Region:
+    name: str
+    tag: str                       # "RU_DEPTH", "BALTIC", "OBJ"
+    assets: List[Asset] = field(default_factory=list)
+    # control ranges: -100 (RU) .. +100 (Coalition)
+    control: float = 0.0
+
+    def is_objective(self) -> bool:
+        return self.tag == "OBJ"
+
+@dataclass
+class IntelSource:
+    name: str
+    active: bool
+    strength: int  # 1..5 (weak..certain). For MVP: HUMINT=2, ISR=3/4.
+    # when active, reduces uncertainty / accelerates visibility
+    high_isr: bool = False
+
+@dataclass
+class Event:
+    t_sec: int
+    text: str
+
+@dataclass
+class ScheduledEffect:
+    apply_at_sec: int
+    deltas: Dict[str, float]  # capability name -> delta
+
+@dataclass
+class GameState:
+    t_sec: int = 0
+    # Capabilities represent RU theater state in MVP
+    caps: Dict[str, Capability] = field(default_factory=dict)
+    regions: Dict[str, Region] = field(default_factory=dict)
+
+    # Intel & visibility
+    intel_sources: Dict[str, IntelSource] = field(default_factory=dict)
+    intel_feed: List[Event] = field(default_factory=list)
+    next_report_sec: int = UI_REPORT_INTERVAL_SEC
+
+    # Scheduled systemic effects (delayed)
+    scheduled_effects: List[ScheduledEffect] = field(default_factory=list)
+
+    # Coalition posture priorities (very simplified)
+    posture: str = "ISR"  # ISR, SEAD, INTERDICT, DEEP_STRIKE, CAS
+    # Budget model (super collapsed)
+    budget_air: float = 60.0
+    budget_munitions: float = 60.0
+    budget_logistics: float = 60.0
+    budget_repairs: float = 60.0
+    stress: float = 0.0  # 0..100 (not yet deeply modeled)
+
+    # Objective names
+    obj_airbase: str = "Airbase Cluster"
+    obj_port: str = "Industrial Port"
+
+    def high_isr(self) -> bool:
+        return any(src.active and src.high_isr for src in self.intel_sources.values())
+
+# -----------------------------
+# Map setup
+# -----------------------------
+def make_world() -> GameState:
+    gs = GameState()
+
+    gs.caps = {
+        "Industrial Output": Capability("Industrial Output", 78.0, 78.0),
+        "Logistics Throughput": Capability("Logistics Throughput", 74.0, 74.0),
+        "Air Defense Effectiveness": Capability("Air Defense Effectiveness", 72.0, 72.0),
+    }
+
+    # Regions: keep small
+    regions = [
+        Region("Baltic Corridor", "BALTIC", assets=[Asset("rail"), Asset("rail")], control=-10.0),
+        Region("Coastal Belt", "BALTIC", assets=[Asset("sam"), Asset("sam"), Asset("airfield")], control=-15.0),
+        Region("Industrial Depth", "RU_DEPTH", assets=[Asset("factory"), Asset("factory"), Asset("energy")], control=-30.0),
+        Region(gs.obj_airbase, "OBJ", assets=[Asset("airfield"), Asset("sam"), Asset("sam")], control=-40.0),
+        Region(gs.obj_port, "OBJ", assets=[Asset("factory"), Asset("rail"), Asset("energy")], control=-45.0),
+    ]
+    gs.regions = {r.name: r for r in regions}
+
+    # Intel sources: start weak
+    gs.intel_sources = {
+        "HUMINT": IntelSource("HUMINT", active=True, strength=2, high_isr=False),
+        "ISR": IntelSource("ISR", active=True, strength=3, high_isr=True),  # treat as higher-res for MVP
+        # SATINT/SIGINT can be added later as buttons
+    }
+
+    gs.intel_feed.append(Event(0, "GOTLAND OCCUPIED: Coalition preparing limited strike response under escalation constraints."))
+    gs.intel_feed.append(Event(0, "[HUMINT] Reports of rapid RU consolidation around key infrastructure (unconfirmed)."))
+
+    return gs
+
+# -----------------------------
+# Core mechanics
+# -----------------------------
+def push_feed(gs: GameState, text: str) -> None:
+    gs.intel_feed.append(Event(gs.t_sec, text))
+    # keep feed bounded
+    if len(gs.intel_feed) > 200:
+        gs.intel_feed = gs.intel_feed[-200:]
+
+def apply_scheduled_effects(gs: GameState) -> None:
+    due = [e for e in gs.scheduled_effects if e.apply_at_sec <= gs.t_sec]
+    gs.scheduled_effects = [e for e in gs.scheduled_effects if e.apply_at_sec > gs.t_sec]
+    for eff in due:
+        for k, dv in eff.deltas.items():
+            if k in gs.caps:
+                gs.caps[k].value += dv
+                gs.caps[k].clamp()
+
+def tick_repairs(gs: GameState) -> None:
+    for r in gs.regions.values():
+        for a in r.assets:
+            a.tick_repair()
+
+def compute_pressure(gs: GameState) -> Tuple[float, float]:
+    """
+    Returns (ru_pressure, coalition_pressure) as abstract numbers.
+    Coupled to capabilities. Higher RU industry/logistics -> higher RU pressure.
+    Coalition pressure lightly influenced by posture and budget allocation (very simplified).
+    """
+    ind = gs.caps["Industrial Output"].value
+    log = gs.caps["Logistics Throughput"].value
+
+    ru_pressure = BASE_RU_PRESSURE * (0.5 + 0.5 * (ind / 100.0)) * (0.6 + 0.4 * (log / 100.0))
+    ru_pressure += random.uniform(-PRESSURE_NOISE, PRESSURE_NOISE)
+
+    # Coalition pressure: depends on posture effectiveness + (inverse of RU air defense when air-centric)
+    ad = gs.caps["Air Defense Effectiveness"].value
+    posture_mult = {
+        "ISR": 0.85,
+        "SEAD": 0.95,
+        "INTERDICT": 1.05,
+        "DEEP_STRIKE": 1.00,
+        "CAS": 1.10,
+    }.get(gs.posture, 1.0)
+
+    air_permission = 1.0
+    if gs.posture in ("SEAD", "DEEP_STRIKE", "INTERDICT", "CAS"):
+        air_permission = 0.7 + 0.3 * (1.0 - ad / 100.0)  # lower RU AD -> slightly better coalition effectiveness
+
+    coalition_pressure = BASE_COALITION_PRESSURE * posture_mult * air_permission
+    coalition_pressure += random.uniform(-PRESSURE_NOISE, PRESSURE_NOISE)
+
+    return max(0.0, ru_pressure), max(0.0, coalition_pressure)
+
+def tick_objectives(gs: GameState, ru_pressure: float, coalition_pressure: float) -> None:
+    """
+    Control moves based on relative pressure, with objectives harder to flip.
+    """
+    for r in gs.regions.values():
+        if not r.is_objective():
+            continue
+        # Objective difficulty: defender advantage when RU control is strong
+        difficulty = 1.15 if r.control < -20 else 1.0
+        delta = (coalition_pressure - ru_pressure) / 40.0  # scale down
+        if delta > 0:
+            r.control += CONTROL_GAIN_PER_TICK * delta / difficulty
+        else:
+            r.control += CONTROL_LOSS_PER_TICK * delta * difficulty
+        r.control = max(-100.0, min(100.0, r.control))
+
+def visible_cap_value(gs: GameState, cap: Capability) -> str:
+    """
+    Quantized: only show changes >= 1% unless high ISR.
+    Also show confidence band (very simplified).
+    """
+    hi = gs.high_isr()
+    shown = cap.last_display_value
+
+    delta = cap.value - shown
+    if hi:
+        # show if >= 0.5% when high ISR
+        if abs(delta) >= 0.5:
+            cap.last_display_value = cap.value
+            shown = cap.value
+    else:
+        if abs(delta) >= VISIBILITY_MIN_DELTA:
+            cap.last_display_value = cap.value
+            shown = cap.value
+
+    # Confidence: in MVP we use HUMINT+ISR -> medium/high
+    conf = "MEDIUM" if not hi else "HIGH"
+    # Show as range band
+    band = 4.0 if conf == "MEDIUM" else 2.0
+    lo = max(0.0, shown - band)
+    hi2 = min(100.0, shown + band)
+    return f"{shown:5.1f}%  (est {lo:4.0f}–{hi2:4.0f}, {conf})"
+
+def choose_target(gs: GameState) -> Optional[Tuple[Region, Asset]]:
+    """
+    Select a strike target based on posture.
+    """
+    # Candidate assets by posture
+    want_kinds = {
+        "SEAD": {"sam"},
+        "INTERDICT": {"rail"},
+        "DEEP_STRIKE": {"factory", "energy", "airfield"},
+        "CAS": {"sam", "rail"},  # abstracted: CAS also benefits from suppressed defenses/logistics
+        "ISR": set(),
+    }.get(gs.posture, set())
+
+    if not want_kinds:
+        return None
+
+    candidates: List[Tuple[Region, Asset]] = []
+    for r in gs.regions.values():
+        for a in r.assets:
+            if a.hp <= 0.0:
+                continue
+            if a.kind in want_kinds:
+                candidates.append((r, a))
+
+    if not candidates:
+        return None
+    return random.choice(candidates)
+
+def schedule_systemic_effect(gs: GameState, asset_kind: str, dmg: float) -> None:
+    """
+    Translate asset damage into capability deltas (instant in model, but UI visibility is gated).
+    We schedule it after a short delay to represent assessment / propagation.
+    """
+    # You asked for ~2 minutes when not high ISR. We'll make systemic impact apply after 60–120s.
+    # ISR affects player visibility, not "reality"; but we keep a small delay for the "system response".
+    apply_delay = random.randint(60, 120)
+    apply_at = gs.t_sec + apply_delay
+
+    # Scale deltas: single hits often <1% total; large packages can be >=1%.
+    # Here dmg is 0..100, but we apply tiny deltas.
+    d = max(0.05, min(0.8, dmg / 120.0))  # 0.05..0.8
+    deltas: Dict[str, float] = {}
+
+    if asset_kind == "sam":
+        deltas["Air Defense Effectiveness"] = -d
+    elif asset_kind == "rail":
+        deltas["Logistics Throughput"] = -d
+    elif asset_kind == "factory":
+        deltas["Industrial Output"] = -d
+    elif asset_kind == "energy":
+        # keep energy folded into industrial/logistics in MVP
+        deltas["Industrial Output"] = -d * 0.6
+        deltas["Logistics Throughput"] = -d * 0.4
+    elif asset_kind == "airfield":
+        # airfield hits degrade air defense modestly and logistics a bit (repair burden)
+        deltas["Air Defense Effectiveness"] = -d * 0.4
+        deltas["Logistics Throughput"] = -d * 0.3
+        deltas["Industrial Output"] = -d * 0.3
+
+    gs.scheduled_effects.append(ScheduledEffect(apply_at, deltas))
+
+def tick_air_ops(gs: GameState) -> None:
+    """
+    Executes one abstract strike 'pulse' depending on posture.
+    Shows planes in UI as events; damages an asset and schedules systemic effects.
+    """
+    if gs.posture == "ISR":
+        # ISR improves visibility; in MVP it's already "high_isr"
+        if random.random() < 0.25:
+            push_feed(gs, "[ISR] Additional coverage maintained over depth targets; confidence tightening.")
+        return
+
+    # Budget check (very simplified)
+    if gs.budget_air <= 0 or gs.budget_munitions <= 0:
+        push_feed(gs, "[OPS] Air operations constrained by budget/munitions; posture effectiveness reduced.")
+        return
+
+    tgt = choose_target(gs)
+    if not tgt:
+        return
+    region, asset = tgt
+
+    # Interception / attrition risk influenced by RU air defense
+    ad = gs.caps["Air Defense Effectiveness"].value
+    intercept_risk = min(0.85, max(0.05, ad / 110.0))  # 0.05..0.85
+    losses = 0
+    if random.random() < intercept_risk * 0.25:
+        losses = 1  # abstract loss event
+        gs.budget_air = max(0.0, gs.budget_air - 2.0)
+
+    # Damage magnitude varies by posture
+    base_dmg = {
+        "SEAD": 18.0,
+        "INTERDICT": 16.0,
+        "DEEP_STRIKE": 22.0,
+        "CAS": 12.0,
+    }.get(gs.posture, 14.0)
+
+    # If air defense is high, effectiveness reduced (permission component)
+    eff = 1.0 - (ad / 140.0)  # high AD reduces effect
+    eff = max(0.45, min(1.0, eff))
+    dmg = base_dmg * eff
+
+    asset.apply_damage(dmg)
+    gs.budget_munitions = max(0.0, gs.budget_munitions - 1.5)
+
+    # Visual + feed
+    msg = f"[AIR:{gs.posture}] Strike executed on {asset.kind.upper()} in {region.name}. Asset HP now {asset.hp:0.0f}%."
+    if losses:
+        msg += " Losses reported."
+    push_feed(gs, msg)
+
+    # Systemic degradation (small per hit)
+    schedule_systemic_effect(gs, asset.kind, dmg)
+
+def maybe_emit_report(gs: GameState) -> None:
+    if gs.t_sec < gs.next_report_sec:
+        return
+    gs.next_report_sec += UI_REPORT_INTERVAL_SEC
+
+    # Simple assessment text
+    ind = gs.caps["Industrial Output"].value
+    log = gs.caps["Logistics Throughput"].value
+    ad = gs.caps["Air Defense Effectiveness"].value
+
+    def qual(x: float) -> str:
+        if x >= 75: return "ROBUST"
+        if x >= 55: return "SERVICEABLE"
+        if x >= 40: return "STRAINED"
+        return "DEGRADED"
+
+    push_feed(gs, f"INTEL UPDATE: RU Industry={qual(ind)}, Logistics={qual(log)}, AirDefense={qual(ad)}. (assessment)")
+
+def tick(gs: GameState) -> None:
+    gs.t_sec += TICK_SECONDS
+
+    apply_scheduled_effects(gs)
+    tick_repairs(gs)
+    tick_air_ops(gs)
+
+    ru_p, co_p = compute_pressure(gs)
+    tick_objectives(gs, ru_p, co_p)
+
+    maybe_emit_report(gs)
+
+# -----------------------------
+# UI (CLI)
+# -----------------------------
+def fmt_time(t_sec: int) -> str:
+    m = t_sec // 60
+    s = t_sec % 60
+    return f"{m:02d}:{s:02d}"
+
+def print_status(gs: GameState) -> None:
+    print("\n" + "=" * 88)
+    print(f"TIME {fmt_time(gs.t_sec)} / {MATCH_MINUTES:02d}:00    POSTURE: {gs.posture}")
+    print("-" * 88)
+    print("RU THEATER CAPABILITIES (estimated):")
+    for k in ("Industrial Output", "Logistics Throughput", "Air Defense Effectiveness"):
+        cap = gs.caps[k]
+        print(f"  - {k:24s}: {visible_cap_value(gs, cap)}")
+    print("-" * 88)
+    print("OBJECTIVES (control: -100 RU .. +100 Coalition; win at +100):")
+    for name in (gs.obj_airbase, gs.obj_port):
+        r = gs.regions[name]
+        bar = int((r.control + 100) / 2)  # 0..100
+        print(f"  - {name:18s}: {r.control:7.1f}  [{('#'* (bar//5)).ljust(20)}]")
+    print("-" * 88)
+    print("BUDGET (very simplified):")
+    print(f"  Air={gs.budget_air:5.1f}  Munitions={gs.budget_munitions:5.1f}  Logistics={gs.budget_logistics:5.1f}  Repairs={gs.budget_repairs:5.1f}")
+    print("-" * 88)
+
+def print_feed(gs: GameState, n: int = 10) -> None:
+    print("INTEL FEED (latest):")
+    for e in gs.intel_feed[-n:]:
+        print(f"  [{fmt_time(e.t_sec)}] {e.text}")
+
+def check_win(gs: GameState) -> Optional[str]:
+    a = gs.regions[gs.obj_airbase].control
+    p = gs.regions[gs.obj_port].control
+    if a >= CONTROL_WIN_HOLD and p >= CONTROL_WIN_HOLD:
+        return "WIN: Both objectives occupied simultaneously."
+    if gs.t_sec >= MATCH_MINUTES * 60:
+        return "LOSS: Time expired; RU consolidation complete."
+    return None
+
+def help_text() -> str:
+    return (
+        "Commands:\n"
+        "  p <ISR|SEAD|INTERDICT|DEEP_STRIKE|CAS>    set air posture\n"
+        "  s                                        show status\n"
+        "  f                                        show intel feed\n"
+        "  n <ticks>                                advance simulation by N ticks (default 1)\n"
+        "  b                                        budget rebalance (simple)\n"
+        "  q                                        quit\n"
+        "\n"
+        "Notes:\n"
+        " - Small strikes usually cause <1% systemic deltas (may not visibly move bars).\n"
+        " - Capability effects apply after ~60–120s (propagation), visibility depends on ISR.\n"
+    )
+
+def rebalance_budget(gs: GameState) -> None:
+    # Super-collapsed "year" rebalance: trade air vs munitions vs repairs
+    print("Budget rebalance (enter deltas, can be negative). Example: air +5, mun -5")
+    try:
+        da = float(input("  ΔAir: ").strip() or "0")
+        dm = float(input("  ΔMunitions: ").strip() or "0")
+        dr = float(input("  ΔRepairs: ").strip() or "0")
+        dl = float(input("  ΔLogistics: ").strip() or "0")
+    except ValueError:
+        print("Invalid input.")
+        return
+
+    # Allow going negative but add stress (not yet fully used)
+    gs.budget_air += da
+    gs.budget_munitions += dm
+    gs.budget_repairs += dr
+    gs.budget_logistics += dl
+
+    overshoot = sum(max(0.0, -x) for x in (gs.budget_air, gs.budget_munitions, gs.budget_repairs, gs.budget_logistics))
+    if overshoot > 0:
+        gs.stress = min(100.0, gs.stress + overshoot * 0.5)
+        push_feed(gs, f"[ECON] Budget deficits accepted; war economy stress increased (stress={gs.stress:0.1f}).")
+
+    push_feed(gs, "[ECON] Budget priorities updated.")
+
+def main() -> None:
+    random.seed(7)
+    gs = make_world()
+
+    print(help_text())
+    print_status(gs)
+    print_feed(gs, 8)
+
+    while True:
+        verdict = check_win(gs)
+        if verdict:
+            print("\n" + verdict)
+            print_status(gs)
+            print_feed(gs, 12)
+            break
+
+        cmd = input("\n> ").strip()
+        if not cmd:
+            continue
+        parts = cmd.split()
+        c = parts[0].lower()
+
+        if c == "q":
+            break
+        elif c == "h":
+            print(help_text())
+        elif c == "s":
+            print_status(gs)
+        elif c == "f":
+            print_feed(gs, 12)
+        elif c == "p" and len(parts) >= 2:
+            p = parts[1].upper()
+            if p not in {"ISR", "SEAD", "INTERDICT", "DEEP_STRIKE", "CAS"}:
+                print("Invalid posture.")
+            else:
+                gs.posture = p
+                push_feed(gs, f"[OPS] Coalition air posture set to {p}.")
+        elif c == "n":
+            n = 1
+            if len(parts) >= 2:
+                try:
+                    n = max(1, int(parts[1]))
+                except ValueError:
+                    n = 1
+            for _ in range(n):
+                tick(gs)
+            print_status(gs)
+            print_feed(gs, 8)
+        elif c == "b":
+            rebalance_budget(gs)
+        else:
+            print("Unknown command. Type 'h' for help.")
+
+if __name__ == "__main__":
+    main()
