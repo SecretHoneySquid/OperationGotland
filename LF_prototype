@@ -19,6 +19,8 @@ Factories (buy from the store with credits):
   3. Arms Plant           -> raises arms production.
   4. Aircraft Works       -> raises aircraft production.
   5. Defense Complex      -> raises air defense production.
+  6. Supply Zone          -> periodic credit bonus.
+  7. Artillery Battery    -> reloads shells to damage enemy logistics.
 
 Run interactively:
   python LF_prototype
@@ -41,10 +43,23 @@ FRONTLINE_SHIFT_CLAMP = 6.0      # max movement per tick
 BASE_CREDITS = 120
 INCOME_PER_TICK = 25.0
 SUPPLY_ZONE_BONUS = 50
+ARTILLERY_BATTERY_COST = 90
+ARTILLERY_DAMAGE = 12.5
+ARTILLERY_SHELL_CAP = 15
+LOGISTICS_MIN = 10.0
+LOGISTICS_MAX = 250.0
 
 
 def clamp(value: float, lo: float, hi: float) -> float:
     return max(lo, min(hi, value))
+
+
+def apply_artillery_battery(player: "Player") -> None:
+    """
+    Adds a new artillery battery and fills shells to the new capacity.
+    """
+    player.artillery_batteries += 1
+    player.artillery_shells = player.artillery_capacity
 
 
 @dataclass
@@ -70,9 +85,11 @@ class Player:
     credits: int = BASE_CREDITS
     purchases: Dict[int, int] = field(default_factory=dict)
     supply_zones: int = 0
+    artillery_batteries: int = 0
+    artillery_shells: int = 0
 
     def __post_init__(self) -> None:
-        for key in range(1, 7):
+        for key in range(1, 8):
             self.purchases.setdefault(key, 0)
 
     @property
@@ -95,6 +112,21 @@ class Player:
 
     def earn_income(self) -> None:
         self.credits += self.income_this_tick()
+
+    @property
+    def artillery_capacity(self) -> int:
+        return self.artillery_batteries * ARTILLERY_SHELL_CAP
+
+    def reload_artillery(self) -> int:
+        if self.artillery_batteries <= 0:
+            return 0
+        capacity = self.artillery_capacity
+        if capacity <= self.artillery_shells:
+            return 0
+        available_space = capacity - self.artillery_shells
+        loaded = min(self.artillery_batteries, available_space)
+        self.artillery_shells += loaded
+        return loaded
 
     def apply_factory(self, factory: Factory) -> None:
         factory.apply(self)
@@ -136,7 +168,9 @@ def make_factories() -> Dict[int, Factory]:
             name="Logistics Hub",
             cost=70,
             description="Improves logistics health by +20% (helps every production type).",
-            apply_effect=lambda p: setattr(p, "logistics_health", clamp(p.logistics_health * 1.2, 10.0, 250.0)),
+            apply_effect=lambda p: setattr(
+                p, "logistics_health", clamp(p.logistics_health * 1.2, LOGISTICS_MIN, LOGISTICS_MAX)
+            ),
         ),
         3: Factory(
             key=3,
@@ -166,6 +200,16 @@ def make_factories() -> Dict[int, Factory]:
             description=f"Generates +{SUPPLY_ZONE_BONUS} credits every 5th tick.",
             apply_effect=lambda p: setattr(p, "supply_zones", p.supply_zones + 1),
         ),
+        7: Factory(
+            key=7,
+            name="Artillery Battery",
+            cost=ARTILLERY_BATTERY_COST,
+            description=(
+                f"Adds an artillery battery that reloads 1 shell per tick "
+                f"(max {ARTILLERY_SHELL_CAP} shells each); shells deal {ARTILLERY_DAMAGE} logistics damage."
+            ),
+            apply_effect=lambda p: apply_artillery_battery(p),
+        ),
     }
 
 
@@ -175,6 +219,7 @@ def describe_player(player: Player) -> str:
         f"  Vehicles {player.vehicle_prod:.1f} | Arms {player.arms_prod:.1f} | "
         f"Aircraft {player.aircraft_prod:.1f} | Air Defense {player.defense_prod:.1f}",
         f"  Total Production (all types x logistics): {player.total_production:.2f}",
+        f"  Artillery: {player.artillery_batteries} batteries | Shells {player.artillery_shells}/{player.artillery_capacity}",
         "  Purchases: " + ", ".join(f"F{key} x{count}" for key, count in sorted(player.purchases.items())),
     ]
     return "\n".join(parts)
@@ -203,6 +248,14 @@ def advance_tick(state: GameState) -> Tuple[float, float]:
     state.player1.earn_income()
     state.player2.earn_income()
 
+    for player in (state.player1, state.player2):
+        loaded = player.reload_artillery()
+        if loaded:
+            note = f"{player.name} reloaded {loaded} artillery shells ({player.artillery_shells}/{player.artillery_capacity})."
+            if player.artillery_shells == player.artillery_capacity:
+                note += " Artillery is fully stocked."
+            state.record(note)
+
     if state.ticks_elapsed % 5 == 0:
         for player in (state.player1, state.player2):
             if player.supply_zones > 0:
@@ -214,6 +267,37 @@ def advance_tick(state: GameState) -> Tuple[float, float]:
         f"Tick: P1 prod {p1_prod:.2f} vs P2 {p2_prod:.2f} -> frontline shift {delta:+.2f} to {state.frontline_ratio:.2f}%"
     )
     return p1_prod, p2_prod
+
+
+def fire_artillery(state: GameState, attacker_key: str, shells: int) -> str:
+    attacker = state.player1 if attacker_key.lower() in ("1", "p1", "player1") else state.player2
+    defender = state.player2 if attacker is state.player1 else state.player1
+
+    if attacker.artillery_batteries <= 0:
+        raise ValueError(f"{attacker.name} has no artillery batteries to fire.")
+    if shells <= 0:
+        raise ValueError("Shells fired must be at least 1.")
+
+    available_shells = attacker.artillery_shells
+    if available_shells <= 0:
+        raise ValueError(f"{attacker.name} has no loaded artillery shells.")
+
+    shells_used = min(shells, available_shells)
+    attacker.artillery_shells -= shells_used
+    damage = round(shells_used * ARTILLERY_DAMAGE, 2)
+    before = defender.logistics_health
+    defender.logistics_health = clamp(defender.logistics_health - damage, LOGISTICS_MIN, LOGISTICS_MAX)
+    actual_damage = round(before - defender.logistics_health, 2)
+
+    state.record(
+        f"{attacker.name} fired {shells_used} artillery shells at {defender.name}, dealing {actual_damage:.1f} logistics damage."
+    )
+
+    return (
+        f"{attacker.name} fired {shells_used} shell(s) at {defender.name}, "
+        f"dealing {actual_damage:.1f} logistics damage. {defender.name} logistics now "
+        f"{defender.logistics_health:.1f}. Shells remaining: {attacker.artillery_shells}/{attacker.artillery_capacity}"
+    )
 
 
 def buy_factory(
@@ -255,6 +339,7 @@ def print_help() -> str:
         "  status                  -> show both players and the front line\n"
         "  store                   -> list factories and effects\n"
         "  buy <p1|p2> <id> [n|max]-> purchase factories (single, n copies, or max affordable)\n"
+        "  fire <p1|p2> <n|all>    -> spend shells from artillery batteries to damage enemy logistics\n"
         "  tick [n]                -> advance the simulation by n ticks (default 1)\n"
         "  log                     -> show recent events\n"
         "  help                    -> show this message\n"
@@ -307,6 +392,18 @@ def interactive_loop(state: GameState, factories: Dict[int, Factory]) -> None:
                     else:
                         quantity = int(parts[3])
                 message = buy_factory(state, parts[1], int(parts[2]), factories, quantity)
+                print(message)
+            elif cmd in ("fire", "artillery"):
+                if len(parts) < 3:
+                    print("Usage: fire <p1|p2> <n|all>")
+                    continue
+                attacker = state.player1 if parts[1].lower() in ("1", "p1", "player1") else state.player2
+                shells_arg = parts[2].lower()
+                if shells_arg in ("all", "max"):
+                    shells = attacker.artillery_shells
+                else:
+                    shells = int(shells_arg)
+                message = fire_artillery(state, parts[1], shells)
                 print(message)
             elif cmd == "tick":
                 ticks = int(parts[1]) if len(parts) > 1 else 1
