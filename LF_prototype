@@ -36,6 +36,13 @@ BASE_RU_PRESSURE = 55.0           # how hard RU can press baseline (abstract)
 BASE_COALITION_PRESSURE = 35.0    # how much coalition can press baseline (abstract)
 PRESSURE_NOISE = 2.0
 
+# Escalation tuning
+ESCALATION_TIGHTEN_START = 30.0
+ESCALATION_STEP_MINOR = 2.5
+ESCALATION_STEP_MAJOR = 6.0
+ESCALATION_MAX = 100.0
+ESCALATION_LOSS_THRESHOLD = 100.0
+
 # Objective control thresholds
 CONTROL_GAIN_PER_TICK = 1.2
 CONTROL_LOSS_PER_TICK = 1.0
@@ -126,6 +133,9 @@ class GameState:
     obj_airbase: str = "Airbase Cluster"
     obj_port: str = "Industrial Port"
 
+    # Escalation
+    escalation: float = 0.0  # 0..ESCALATION_MAX
+
     def high_isr(self) -> bool:
         return any(src.active and src.high_isr for src in self.intel_sources.values())
 
@@ -172,6 +182,37 @@ def push_feed(gs: GameState, text: str) -> None:
     if len(gs.intel_feed) > 200:
         gs.intel_feed = gs.intel_feed[-200:]
 
+def add_escalation(gs: GameState, delta: float, reason: str, emit: bool = True) -> None:
+    """
+    Adjust escalation pressure with clamping and contextual feed entries.
+    """
+    if delta == 0:
+        return
+    before = gs.escalation
+    gs.escalation = max(0.0, min(ESCALATION_MAX, gs.escalation + delta))
+    after = gs.escalation
+
+    crossed = (before < ESCALATION_TIGHTEN_START) and (after >= ESCALATION_TIGHTEN_START)
+    if emit:
+        if delta > 0 and after > before:
+            intensity = "minor" if delta <= ESCALATION_STEP_MINOR else "major"
+            push_feed(gs, f"[ESC] Escalation +{delta:0.1f} ({intensity}) from {reason}. Pressure now {after:0.1f}.")
+        elif delta < 0 and after < before:
+            push_feed(gs, f"[ESC] Escalation eased by {-delta:0.1f} from {reason}. Pressure now {after:0.1f}.")
+
+    if crossed and emit:
+        push_feed(gs, "[ESC] Political risk monitors tightening; aggressive postures may face constraints.")
+
+def escalation_tighten_factor(gs: GameState) -> float:
+    """
+    Returns a multiplier applied to coalition effectiveness when escalation is high.
+    """
+    if gs.escalation < ESCALATION_TIGHTEN_START:
+        return 1.0
+    over = gs.escalation - ESCALATION_TIGHTEN_START
+    # up to ~35% reduction as pressure approaches max
+    return max(0.65, 1.0 - (over / 200.0))
+
 def apply_scheduled_effects(gs: GameState) -> None:
     due = [e for e in gs.scheduled_effects if e.apply_at_sec <= gs.t_sec]
     gs.scheduled_effects = [e for e in gs.scheduled_effects if e.apply_at_sec > gs.t_sec]
@@ -180,6 +221,14 @@ def apply_scheduled_effects(gs: GameState) -> None:
             if k in gs.caps:
                 gs.caps[k].value += dv
                 gs.caps[k].clamp()
+
+def tick_escalation(gs: GameState) -> None:
+    """
+    Small natural easing over time to prevent runaway unless continuously provoked.
+    """
+    if gs.escalation <= 0:
+        return
+    add_escalation(gs, -0.05, "time passing", emit=False)
 
 def tick_repairs(gs: GameState) -> None:
     for r in gs.regions.values():
@@ -213,6 +262,7 @@ def compute_pressure(gs: GameState) -> Tuple[float, float]:
         air_permission = 0.7 + 0.3 * (1.0 - ad / 100.0)  # lower RU AD -> slightly better coalition effectiveness
 
     coalition_pressure = BASE_COALITION_PRESSURE * posture_mult * air_permission
+    coalition_pressure *= escalation_tighten_factor(gs)
     coalition_pressure += random.uniform(-PRESSURE_NOISE, PRESSURE_NOISE)
 
     return max(0.0, ru_pressure), max(0.0, coalition_pressure)
@@ -372,6 +422,19 @@ def tick_air_ops(gs: GameState) -> None:
         msg += " Losses reported."
     push_feed(gs, msg)
 
+    # Escalation response: deep strikes / objective hits draw more attention
+    posture_esc = {
+        "SEAD": ESCALATION_STEP_MINOR,
+        "INTERDICT": ESCALATION_STEP_MINOR + 0.5,
+        "DEEP_STRIKE": ESCALATION_STEP_MAJOR,
+        "CAS": ESCALATION_STEP_MINOR * 0.6,
+    }.get(gs.posture, ESCALATION_STEP_MINOR)
+    if region.is_objective():
+        posture_esc += 1.5
+    if losses:
+        posture_esc += 0.8
+    add_escalation(gs, posture_esc, f"{gs.posture} pressure over {region.name}")
+
     # Systemic degradation (small per hit)
     schedule_systemic_effect(gs, asset.kind, dmg)
 
@@ -397,6 +460,7 @@ def tick(gs: GameState) -> None:
     gs.t_sec += TICK_SECONDS
 
     apply_scheduled_effects(gs)
+    tick_escalation(gs)
     tick_repairs(gs)
     tick_air_ops(gs)
 
@@ -421,6 +485,9 @@ def print_status(gs: GameState) -> None:
     for k in ("Industrial Output", "Logistics Throughput", "Air Defense Effectiveness"):
         cap = gs.caps[k]
         print(f"  - {k:24s}: {visible_cap_value(gs, cap)}")
+    esc_bar = int((gs.escalation / ESCALATION_MAX) * 20)
+    tightening = " (tightening)" if gs.escalation >= ESCALATION_TIGHTEN_START else ""
+    print(f"  Escalation Pressure: {gs.escalation:5.1f}{tightening}  [{('#'*esc_bar).ljust(20)}]")
     print("-" * 88)
     print("OBJECTIVES (control: -100 RU .. +100 Coalition; win at +100):")
     for name in (gs.obj_airbase, gs.obj_port):
@@ -442,6 +509,8 @@ def check_win(gs: GameState) -> Optional[str]:
     p = gs.regions[gs.obj_port].control
     if a >= CONTROL_WIN_HOLD and p >= CONTROL_WIN_HOLD:
         return "WIN: Both objectives occupied simultaneously."
+    if gs.escalation >= ESCALATION_LOSS_THRESHOLD:
+        return "LOSS: Escalation pressure exceeded tolerance; coalition forced to halt."
     if gs.t_sec >= MATCH_MINUTES * 60:
         return "LOSS: Time expired; RU consolidation complete."
     return None
@@ -459,6 +528,7 @@ def help_text() -> str:
         "Notes:\n"
         " - Small strikes usually cause <1% systemic deltas (may not visibly move bars).\n"
         " - Capability effects apply after ~60–120s (propagation), visibility depends on ISR.\n"
+        " - Aggressive postures raise escalation pressure; at high pressure effectiveness tightens and can cause loss.\n"
     )
 
 def rebalance_budget(gs: GameState) -> None:
