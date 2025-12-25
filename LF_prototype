@@ -46,8 +46,6 @@ ESCALATION_STEP_MINOR = 2.5
 ESCALATION_STEP_MAJOR = 6.0
 ESCALATION_MAX = 100.0
 ESCALATION_LOSS_THRESHOLD = 100.0
-ESCALATION_PHASE_MID = 45.0
-ESCALATION_PHASE_HIGH = 75.0
 
 # Objective control thresholds
 CONTROL_GAIN_PER_TICK = 1.2
@@ -222,19 +220,6 @@ def escalation_tighten_factor(gs: GameState) -> float:
     # up to ~35% more RU pressure as confrontation escalates
     return min(1.35, 1.0 + (over / 200.0))
 
-def escalation_phase(gs: GameState) -> Tuple[float, float, float, float]:
-    """
-    Returns multipliers for (repair_rate, systemic_damage, objective_resistance, delay_factor).
-    Higher escalation means reduced repair, stronger systemic effects, softer objectives, and quicker propagation.
-    """
-    if gs.escalation >= ESCALATION_PHASE_HIGH:
-        return (0.45, 1.6, 0.65, 0.55)
-    if gs.escalation >= ESCALATION_PHASE_MID:
-        return (0.65, 1.35, 0.8, 0.7)
-    if gs.escalation >= ESCALATION_TIGHTEN_START:
-        return (0.85, 1.15, 0.9, 0.85)
-    return (1.0, 1.0, 1.0, 1.0)
-
 def apply_scheduled_effects(gs: GameState) -> None:
     due = [e for e in gs.scheduled_effects if e.apply_at_sec <= gs.t_sec]
     gs.scheduled_effects = [e for e in gs.scheduled_effects if e.apply_at_sec > gs.t_sec]
@@ -302,7 +287,6 @@ def tick_objectives(gs: GameState, ru_pressure: float, coalition_pressure: float
     """
     logi_support = budget_factor(gs.budget_logistics, min_mult=0.7, max_mult=1.4)
     repair_buffer = budget_factor(gs.budget_repairs, min_mult=0.6, max_mult=1.25)
-    _, _, obj_resist, _ = escalation_phase(gs)
     for r in gs.regions.values():
         if not r.is_objective():
             continue
@@ -554,6 +538,8 @@ def check_win(gs: GameState) -> Optional[str]:
     p = gs.regions[gs.obj_port].control
     if a >= CONTROL_WIN_HOLD and p >= CONTROL_WIN_HOLD:
         return "WIN: Both objectives occupied simultaneously."
+    if gs.escalation >= ESCALATION_LOSS_THRESHOLD:
+        return "LOSS: Escalation pressure exceeded tolerance; coalition forced to halt."
     if gs.t_sec >= MATCH_MINUTES * 60:
         return "LOSS: Time expired; RU consolidation complete."
     return None
