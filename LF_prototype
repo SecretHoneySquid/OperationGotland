@@ -49,6 +49,8 @@ ESCALATION_TIGHTEN_START = 30.0
 ESCALATION_STEP_MINOR = 2.5
 ESCALATION_STEP_MAJOR = 6.0
 ESCALATION_MAX = 100.0
+# Legacy compatibility (no longer used as a loss trigger)
+ESCALATION_LOSS_THRESHOLD = ESCALATION_MAX
 ESCALATION_PHASE_MID = 45.0
 ESCALATION_PHASE_HIGH = 75.0
 
@@ -310,10 +312,6 @@ def compute_pressure(gs: GameState) -> Tuple[float, float]:
         air_permission = 0.7 + 0.3 * (1.0 - ad / 100.0)  # lower RU AD -> slightly better coalition effectiveness
     if gs.posture == "DOMINANCE":
         air_permission += 0.6  # air superiority opens windows
-
-    air_mult = budget_factor(gs.budget_air, min_mult=0.6, max_mult=1.35)
-    mun_mult = budget_factor(gs.budget_munitions, min_mult=0.6, max_mult=1.35)
-    logi_mult = budget_factor(gs.budget_logistics, min_mult=0.7, max_mult=1.4)
 
     air_mult = budget_factor(gs.budget_air, min_mult=0.6, max_mult=1.35)
     mun_mult = budget_factor(gs.budget_munitions, min_mult=0.6, max_mult=1.35)
