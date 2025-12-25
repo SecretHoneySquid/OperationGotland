@@ -33,7 +33,7 @@ from __future__ import annotations
 
 import argparse
 from dataclasses import dataclass, field
-from typing import Callable, Dict, List, Tuple
+from typing import Callable, Dict, List, Optional, Tuple
 
 FRONTLINE_MIN = 0.0
 FRONTLINE_MAX = 100.0
@@ -233,7 +233,7 @@ def describe_store(factories: Dict[int, Factory]) -> str:
     return "\n".join(lines)
 
 
-def advance_tick(state: GameState) -> Tuple[float, float]:
+def advance_tick(state: GameState) -> Tuple[float, float, Optional[str]]:
     state.ticks_elapsed += 1
     p1_prod = state.player1.total_production
     p2_prod = state.player2.total_production
@@ -245,6 +245,21 @@ def advance_tick(state: GameState) -> Tuple[float, float]:
         delta = clamp(advantage / FRONTLINE_SHIFT_DIVISOR, -FRONTLINE_SHIFT_CLAMP, FRONTLINE_SHIFT_CLAMP)
 
     state.frontline = clamp(state.frontline + delta, FRONTLINE_MIN, FRONTLINE_MAX)
+
+    # If the frontline hits either bound, the game ends immediately so callers can stop ticking.
+    winner: Optional[str] = None
+    if state.frontline <= FRONTLINE_MIN:
+        winner = state.player2.name
+    elif state.frontline >= FRONTLINE_MAX:
+        winner = state.player1.name
+
+    if winner:
+        state.record(
+            f"{winner} wins on tick {state.ticks_elapsed}! Front line reached {state.frontline_ratio:.2f}% "
+            f"(P1 prod {p1_prod:.2f} vs P2 {p2_prod:.2f})."
+        )
+        return p1_prod, p2_prod, winner
+
     state.player1.earn_income()
     state.player2.earn_income()
 
@@ -266,7 +281,7 @@ def advance_tick(state: GameState) -> Tuple[float, float]:
     state.record(
         f"Tick: P1 prod {p1_prod:.2f} vs P2 {p2_prod:.2f} -> frontline shift {delta:+.2f} to {state.frontline_ratio:.2f}%"
     )
-    return p1_prod, p2_prod
+    return p1_prod, p2_prod, None
 
 
 def fire_artillery(state: GameState, attacker_key: str, shells: int) -> str:
@@ -407,8 +422,15 @@ def interactive_loop(state: GameState, factories: Dict[int, Factory]) -> None:
                 print(message)
             elif cmd == "tick":
                 ticks = int(parts[1]) if len(parts) > 1 else 1
+                winner: Optional[str] = None
                 for _ in range(max(1, ticks)):
-                    advance_tick(state)
+                    _, _, winner = advance_tick(state)
+                    if winner:
+                        print(f"{winner} wins! Game over after {state.ticks_elapsed} ticks.")
+                        print(show_status(state))
+                        break
+                if winner:
+                    break
                 print(show_status(state))
             else:
                 print("Unknown command. Type 'help' for options.")
@@ -430,9 +452,14 @@ def main() -> None:
     state = GameState(player1=Player("Player 1"), player2=Player("Player 2"))
 
     if args.ticks > 0:
+        winner: Optional[str] = None
         for _ in range(max(1, args.ticks)):
-            advance_tick(state)
+            _, _, winner = advance_tick(state)
+            if winner:
+                break
         print(show_status(state))
+        if winner:
+            print(f"\n{winner} wins after {state.ticks_elapsed} ticks!")
         print("\nRecent events:")
         for line in state.history[-10:]:
             print(" -", line)
