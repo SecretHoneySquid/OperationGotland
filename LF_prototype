@@ -76,9 +76,9 @@ class Asset:
     def apply_damage(self, dmg: float) -> None:
         self.hp = max(0.0, self.hp - dmg)
 
-    def tick_repair(self) -> None:
+    def tick_repair(self, repair_rate: float = REPAIR_PER_TICK) -> None:
         if self.repairable and self.hp > 0.0 and self.hp < MAX_HP:
-            self.hp = min(MAX_HP, self.hp + REPAIR_PER_TICK)
+            self.hp = min(MAX_HP, self.hp + repair_rate)
 
 @dataclass
 class Region:
@@ -238,9 +238,11 @@ def tick_escalation(gs: GameState) -> None:
     add_escalation(gs, -0.05, "time passing", emit=False)
 
 def tick_repairs(gs: GameState) -> None:
+    repair_mult, _, _, _ = escalation_phase(gs)
+    eff_repair = REPAIR_PER_TICK * repair_mult
     for r in gs.regions.values():
         for a in r.assets:
-            a.tick_repair()
+            a.tick_repair(eff_repair)
 
 def compute_pressure(gs: GameState) -> Tuple[float, float]:
     """
@@ -289,7 +291,7 @@ def tick_objectives(gs: GameState, ru_pressure: float, coalition_pressure: float
         if not r.is_objective():
             continue
         # Objective difficulty: defender advantage when RU control is strong
-        difficulty = 1.15 if r.control < -20 else 1.0
+        difficulty = (1.15 if r.control < -20 else 1.0) * obj_resist
         delta = (coalition_pressure - ru_pressure) / 40.0  # scale down
         if delta > 0:
             r.control += CONTROL_GAIN_PER_TICK * delta * logi_support / difficulty
@@ -357,14 +359,16 @@ def schedule_systemic_effect(gs: GameState, asset_kind: str, dmg: float) -> None
     Translate asset damage into capability deltas (instant in model, but UI visibility is gated).
     We schedule it after a short delay to represent assessment / propagation.
     """
-    # You asked for ~2 minutes when not high ISR. We'll make systemic impact apply after 60–120s.
-    # ISR affects player visibility, not "reality"; but we keep a small delay for the "system response".
-    apply_delay = random.randint(60, 120)
+    # You asked for ~2 minutes when not high ISR. Escalation makes systems more brittle and faster to react.
+    _, sys_mult, _, delay_mult = escalation_phase(gs)
+    base_delay = random.randint(60, 120)
+    apply_delay = max(20, int(base_delay * delay_mult))
     apply_at = gs.t_sec + apply_delay
 
     # Scale deltas: single hits often <1% total; large packages can be >=1%.
     # Here dmg is 0..100, but we apply tiny deltas.
     d = max(0.05, min(0.8, dmg / 120.0))  # 0.05..0.8
+    d *= sys_mult
     deltas: Dict[str, float] = {}
 
     if asset_kind == "sam":
