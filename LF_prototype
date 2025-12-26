@@ -19,8 +19,6 @@ Factories (buy from the store with credits):
   3. Arms Plant           -> raises arms production.
   4. Aircraft Works       -> raises aircraft production.
   5. Defense Complex      -> raises air defense production.
-  6. Supply Zone          -> periodic credit bonus.
-  7. Artillery Battery    -> reloads shells to damage enemy logistics.
 
 Run interactively:
   python LF_prototype
@@ -33,33 +31,23 @@ from __future__ import annotations
 
 import argparse
 from dataclasses import dataclass, field
-from typing import Callable, Dict, List, Optional, Tuple
+from typing import Callable, Dict, List, Tuple
 
 FRONTLINE_MIN = 0.0
 FRONTLINE_MAX = 100.0
 FRONTLINE_SHIFT_DIVISOR = 20.0   # higher = slower movement
 FRONTLINE_SHIFT_CLAMP = 6.0      # max movement per tick
+FRONTLINE_UNIT_WEIGHT = 0.25     # how much unit advantage moves the line (relative to production)
 
 BASE_CREDITS = 120
 INCOME_PER_TICK = 25.0
 SUPPLY_ZONE_BONUS = 50
-ARTILLERY_BATTERY_COST = 90
-ARTILLERY_DAMAGE = 12.5
-ARTILLERY_SHELL_CAP = 15
-LOGISTICS_MIN = 10.0
-LOGISTICS_MAX = 250.0
+UNIT_BUILD_RATE = 0.12            # how many units per production point per tick
+COMBAT_SCALE = 0.02               # higher = deadlier exchanges per tick
 
 
 def clamp(value: float, lo: float, hi: float) -> float:
     return max(lo, min(hi, value))
-
-
-def apply_artillery_battery(player: "Player") -> None:
-    """
-    Adds a new artillery battery and fills shells to the new capacity.
-    """
-    player.artillery_batteries += 1
-    player.artillery_shells = player.artillery_capacity
 
 
 @dataclass
@@ -85,11 +73,17 @@ class Player:
     credits: int = BASE_CREDITS
     purchases: Dict[int, int] = field(default_factory=dict)
     supply_zones: int = 0
-    artillery_batteries: int = 0
-    artillery_shells: int = 0
+    # Unit pools
+    arms: float = 0.0
+    vehicles: float = 0.0  # IFVs
+    tanks: float = 0.0
+    aircraft: float = 0.0
+    def_arms: float = 0.0
+    def_vehicle: float = 0.0
+    def_air: float = 0.0
 
     def __post_init__(self) -> None:
-        for key in range(1, 8):
+        for key in range(1, 7):
             self.purchases.setdefault(key, 0)
 
     @property
@@ -113,24 +107,29 @@ class Player:
     def earn_income(self) -> None:
         self.credits += self.income_this_tick()
 
-    @property
-    def artillery_capacity(self) -> int:
-        return self.artillery_batteries * ARTILLERY_SHELL_CAP
-
-    def reload_artillery(self) -> int:
-        if self.artillery_batteries <= 0:
-            return 0
-        capacity = self.artillery_capacity
-        if capacity <= self.artillery_shells:
-            return 0
-        available_space = capacity - self.artillery_shells
-        loaded = min(self.artillery_batteries, available_space)
-        self.artillery_shells += loaded
-        return loaded
-
     def apply_factory(self, factory: Factory) -> None:
         factory.apply(self)
         self.purchases[factory.key] += 1
+
+    def produce_units(self) -> None:
+        """
+        Convert production into unit stocks each tick.
+        """
+        factor = self.logistics_health / 100.0
+        self.vehicles += self.vehicle_prod * UNIT_BUILD_RATE * factor
+        self.arms += self.arms_prod * UNIT_BUILD_RATE * factor
+        self.aircraft += self.aircraft_prod * UNIT_BUILD_RATE * factor
+        self.def_air += self.defense_prod * UNIT_BUILD_RATE * factor * 0.4
+        self.def_vehicle += self.defense_prod * UNIT_BUILD_RATE * factor * 0.35
+        self.def_arms += self.defense_prod * UNIT_BUILD_RATE * factor * 0.25
+        # Tanks scale with logistics and the heavier end of production (vehicles + arms)
+        self.tanks += ((self.vehicle_prod + self.arms_prod) / 2.0) * UNIT_BUILD_RATE * factor * 0.5
+
+    def apply_losses(self, losses: Dict[str, float]) -> None:
+        for key, dmg in losses.items():
+            if not hasattr(self, key):
+                continue
+            setattr(self, key, max(0.0, getattr(self, key) - dmg))
 
 
 @dataclass
@@ -168,9 +167,7 @@ def make_factories() -> Dict[int, Factory]:
             name="Logistics Hub",
             cost=70,
             description="Improves logistics health by +20% (helps every production type).",
-            apply_effect=lambda p: setattr(
-                p, "logistics_health", clamp(p.logistics_health * 1.2, LOGISTICS_MIN, LOGISTICS_MAX)
-            ),
+            apply_effect=lambda p: setattr(p, "logistics_health", clamp(p.logistics_health * 1.2, 10.0, 250.0)),
         ),
         3: Factory(
             key=3,
@@ -200,16 +197,6 @@ def make_factories() -> Dict[int, Factory]:
             description=f"Generates +{SUPPLY_ZONE_BONUS} credits every 5th tick.",
             apply_effect=lambda p: setattr(p, "supply_zones", p.supply_zones + 1),
         ),
-        7: Factory(
-            key=7,
-            name="Artillery Battery",
-            cost=ARTILLERY_BATTERY_COST,
-            description=(
-                f"Adds an artillery battery that reloads 1 shell per tick "
-                f"(max {ARTILLERY_SHELL_CAP} shells each); shells deal {ARTILLERY_DAMAGE} logistics damage."
-            ),
-            apply_effect=lambda p: apply_artillery_battery(p),
-        ),
     }
 
 
@@ -219,7 +206,10 @@ def describe_player(player: Player) -> str:
         f"  Vehicles {player.vehicle_prod:.1f} | Arms {player.arms_prod:.1f} | "
         f"Aircraft {player.aircraft_prod:.1f} | Air Defense {player.defense_prod:.1f}",
         f"  Total Production (all types x logistics): {player.total_production:.2f}",
-        f"  Artillery: {player.artillery_batteries} batteries | Shells {player.artillery_shells}/{player.artillery_capacity}",
+        "  Units: "
+        f"Arms {player.arms:.1f}, IFVs {player.vehicles:.1f}, Tanks {player.tanks:.1f}, "
+        f"Aircraft {player.aircraft:.1f}, Def(arms/veh/air) "
+        f"{player.def_arms:.1f}/{player.def_vehicle:.1f}/{player.def_air:.1f}",
         "  Purchases: " + ", ".join(f"F{key} x{count}" for key, count in sorted(player.purchases.items())),
     ]
     return "\n".join(parts)
@@ -233,7 +223,7 @@ def describe_store(factories: Dict[int, Factory]) -> str:
     return "\n".join(lines)
 
 
-def advance_tick(state: GameState) -> Tuple[float, float, Optional[str]]:
+def advance_tick(state: GameState) -> Tuple[float, float]:
     state.ticks_elapsed += 1
     p1_prod = state.player1.total_production
     p2_prod = state.player2.total_production
@@ -244,32 +234,17 @@ def advance_tick(state: GameState) -> Tuple[float, float, Optional[str]]:
     else:
         delta = clamp(advantage / FRONTLINE_SHIFT_DIVISOR, -FRONTLINE_SHIFT_CLAMP, FRONTLINE_SHIFT_CLAMP)
 
+    # Unit-driven pressure (not sole factor)
+    unit_adv = unit_pressure_advantage(state.player1, state.player2)
+    delta += unit_adv * FRONTLINE_UNIT_WEIGHT
+
     state.frontline = clamp(state.frontline + delta, FRONTLINE_MIN, FRONTLINE_MAX)
-
-    # If the frontline hits either bound, the game ends immediately so callers can stop ticking.
-    winner: Optional[str] = None
-    if state.frontline <= FRONTLINE_MIN:
-        winner = state.player2.name
-    elif state.frontline >= FRONTLINE_MAX:
-        winner = state.player1.name
-
-    if winner:
-        state.record(
-            f"{winner} wins on tick {state.ticks_elapsed}! Front line reached {state.frontline_ratio:.2f}% "
-            f"(P1 prod {p1_prod:.2f} vs P2 {p2_prod:.2f})."
-        )
-        return p1_prod, p2_prod, winner
-
     state.player1.earn_income()
     state.player2.earn_income()
+    state.player1.produce_units()
+    state.player2.produce_units()
 
-    for player in (state.player1, state.player2):
-        loaded = player.reload_artillery()
-        if loaded:
-            note = f"{player.name} reloaded {loaded} artillery shells ({player.artillery_shells}/{player.artillery_capacity})."
-            if player.artillery_shells == player.artillery_capacity:
-                note += " Artillery is fully stocked."
-            state.record(note)
+    resolve_combat(state)
 
     if state.ticks_elapsed % 5 == 0:
         for player in (state.player1, state.player2):
@@ -281,38 +256,95 @@ def advance_tick(state: GameState) -> Tuple[float, float, Optional[str]]:
     state.record(
         f"Tick: P1 prod {p1_prod:.2f} vs P2 {p2_prod:.2f} -> frontline shift {delta:+.2f} to {state.frontline_ratio:.2f}%"
     )
-    return p1_prod, p2_prod, None
+    return p1_prod, p2_prod
 
 
-def fire_artillery(state: GameState, attacker_key: str, shells: int) -> str:
-    attacker = state.player1 if attacker_key.lower() in ("1", "p1", "player1") else state.player2
-    defender = state.player2 if attacker is state.player1 else state.player1
+def resolve_combat(state: GameState) -> None:
+    """
+    Exchange casualties between players based on unit matchup rules.
+    """
+    p1_losses = casualties_from(state.player2, state.player1)
+    p2_losses = casualties_from(state.player1, state.player2)
 
-    if attacker.artillery_batteries <= 0:
-        raise ValueError(f"{attacker.name} has no artillery batteries to fire.")
-    if shells <= 0:
-        raise ValueError("Shells fired must be at least 1.")
+    if any(val > 0 for val in p1_losses.values()):
+        state.player1.apply_losses(p1_losses)
+    if any(val > 0 for val in p2_losses.values()):
+        state.player2.apply_losses(p2_losses)
 
-    available_shells = attacker.artillery_shells
-    if available_shells <= 0:
-        raise ValueError(f"{attacker.name} has no loaded artillery shells.")
+    if any(val > 0 for val in p1_losses.values()) or any(val > 0 for val in p2_losses.values()):
+        state.record(
+            f"Combat: P1 lost {format_losses(p1_losses)} | P2 lost {format_losses(p2_losses)}"
+        )
 
-    shells_used = min(shells, available_shells)
-    attacker.artillery_shells -= shells_used
-    damage = round(shells_used * ARTILLERY_DAMAGE, 2)
-    before = defender.logistics_health
-    defender.logistics_health = clamp(defender.logistics_health - damage, LOGISTICS_MIN, LOGISTICS_MAX)
-    actual_damage = round(before - defender.logistics_health, 2)
 
-    state.record(
-        f"{attacker.name} fired {shells_used} artillery shells at {defender.name}, dealing {actual_damage:.1f} logistics damage."
-    )
+def casualties_from(attacker: Player, defender: Player) -> Dict[str, float]:
+    """
+    Compute losses inflicted by attacker on defender.
+    """
+    # Effectiveness coefficients attacker_type -> defender_type
+    eff: Dict[str, Dict[str, float]] = {
+        "arms": {"vehicles": 0.6, "aircraft": 0.1},
+        "vehicles": {"arms": 0.8, "vehicles": 0.3},
+        "tanks": {"vehicles": 0.8, "tanks": 0.5, "def_vehicle": 0.6, "def_arms": 0.4},
+        "aircraft": {
+            "tanks": 0.9,
+            "vehicles": 0.7,
+            "aircraft": 0.6,
+            "def_air": 0.4,
+            "def_vehicle": 0.35,
+            "def_arms": 0.35,
+            "arms": 0.25,
+        },
+        "def_arms": {"arms": 0.7},
+        "def_vehicle": {"vehicles": 0.7},
+        "def_air": {"aircraft": 1.0},
+    }
 
-    return (
-        f"{attacker.name} fired {shells_used} shell(s) at {defender.name}, "
-        f"dealing {actual_damage:.1f} logistics damage. {defender.name} logistics now "
-        f"{defender.logistics_health:.1f}. Shells remaining: {attacker.artillery_shells}/{attacker.artillery_capacity}"
-    )
+    attacker_counts = {
+        "arms": attacker.arms,
+        "vehicles": attacker.vehicles,
+        "tanks": attacker.tanks,
+        "aircraft": attacker.aircraft,
+        "def_arms": attacker.def_arms,
+        "def_vehicle": attacker.def_vehicle,
+        "def_air": attacker.def_air,
+    }
+    losses: Dict[str, float] = {k: 0.0 for k in attacker_counts.keys()}
+
+    for atk_type, atk_count in attacker_counts.items():
+        if atk_count <= 0:
+            continue
+        for def_type, coeff in eff.get(atk_type, {}).items():
+            if hasattr(defender, def_type):
+                losses[def_type] += atk_count * coeff * COMBAT_SCALE
+
+    return {k: v for k, v in losses.items() if v > 0}
+
+
+def format_losses(losses: Dict[str, float]) -> str:
+    if not losses:
+        return "no losses"
+    return ", ".join(f"{k}:{v:.1f}" for k, v in sorted(losses.items()))
+
+
+def unit_pressure_advantage(p1: Player, p2: Player) -> float:
+    """
+    Convert unit advantage to a small frontline push component.
+    """
+    def power(p: Player) -> float:
+        return (
+            p.arms * 0.8
+            + p.vehicles * 1.0
+            + p.tanks * 1.3
+            + p.aircraft * 1.4
+            + p.def_arms * 0.5
+            + p.def_vehicle * 0.7
+            + p.def_air * 0.7
+        )
+
+    advantage = power(p1) - power(p2)
+    # Normalize to a small delta
+    return clamp(advantage / 50.0, -FRONTLINE_SHIFT_CLAMP / 2, FRONTLINE_SHIFT_CLAMP / 2)
 
 
 def buy_factory(
@@ -354,7 +386,6 @@ def print_help() -> str:
         "  status                  -> show both players and the front line\n"
         "  store                   -> list factories and effects\n"
         "  buy <p1|p2> <id> [n|max]-> purchase factories (single, n copies, or max affordable)\n"
-        "  fire <p1|p2> <n|all>    -> spend shells from artillery batteries to damage enemy logistics\n"
         "  tick [n]                -> advance the simulation by n ticks (default 1)\n"
         "  log                     -> show recent events\n"
         "  help                    -> show this message\n"
@@ -408,29 +439,10 @@ def interactive_loop(state: GameState, factories: Dict[int, Factory]) -> None:
                         quantity = int(parts[3])
                 message = buy_factory(state, parts[1], int(parts[2]), factories, quantity)
                 print(message)
-            elif cmd in ("fire", "artillery"):
-                if len(parts) < 3:
-                    print("Usage: fire <p1|p2> <n|all>")
-                    continue
-                attacker = state.player1 if parts[1].lower() in ("1", "p1", "player1") else state.player2
-                shells_arg = parts[2].lower()
-                if shells_arg in ("all", "max"):
-                    shells = attacker.artillery_shells
-                else:
-                    shells = int(shells_arg)
-                message = fire_artillery(state, parts[1], shells)
-                print(message)
             elif cmd == "tick":
                 ticks = int(parts[1]) if len(parts) > 1 else 1
-                winner: Optional[str] = None
                 for _ in range(max(1, ticks)):
-                    _, _, winner = advance_tick(state)
-                    if winner:
-                        print(f"{winner} wins! Game over after {state.ticks_elapsed} ticks.")
-                        print(show_status(state))
-                        break
-                if winner:
-                    break
+                    advance_tick(state)
                 print(show_status(state))
             else:
                 print("Unknown command. Type 'help' for options.")
@@ -452,14 +464,9 @@ def main() -> None:
     state = GameState(player1=Player("Player 1"), player2=Player("Player 2"))
 
     if args.ticks > 0:
-        winner: Optional[str] = None
         for _ in range(max(1, args.ticks)):
-            _, _, winner = advance_tick(state)
-            if winner:
-                break
+            advance_tick(state)
         print(show_status(state))
-        if winner:
-            print(f"\n{winner} wins after {state.ticks_elapsed} ticks!")
         print("\nRecent events:")
         for line in state.history[-10:]:
             print(" -", line)
