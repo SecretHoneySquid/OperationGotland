@@ -195,6 +195,8 @@ class Player:
         if len(self.build_queue) >= BUILD_QUEUE_MAX:
             raise ValueError(f"{self.name} purchase queue full (max {BUILD_QUEUE_MAX}).")
         build_time = BUILD_TIMES.get(factory.key, 2)
+        if len(self.build_queue) >= 9:
+            raise ValueError(f"{self.name} purchase queue full (max 9).")
         self.build_queue.append(BuildOrder(factory, build_time))
 
 
