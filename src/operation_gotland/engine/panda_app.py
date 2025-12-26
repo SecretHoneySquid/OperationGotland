@@ -27,7 +27,9 @@ class CncPandaApplication:
         self.runtime = runtime
         self._engine: Optional["ShowBase"] = None
         self._world: Optional["NodePath"] = None
-        self._frontline_node: Optional["NodePath"] = None
+        self._frontline_zone_p1: Optional["NodePath"] = None
+        self._frontline_zone_p2: Optional["NodePath"] = None
+        self._frontline_center: Optional["NodePath"] = None
         self._objective_nodes: List["NodePath"] = []
         self._unit_markers: Dict[str, Dict[str, List["NodePath"]]] = {}
         self._structure_nodes: Dict[str, Dict[str, List["NodePath"]]] = {}
@@ -36,6 +38,9 @@ class CncPandaApplication:
         self._info_text: Optional["OnscreenText"] = None
         self._upgrade_button: Optional["DirectButton"] = None
         self._stealth_button: Optional["DirectButton"] = None
+        self._build_buttons: List["DirectButton"] = []
+        self._side_button: Optional["DirectButton"] = None
+        self._build_side: str = "p1"
         self._selected_asset: Optional[Dict[str, str]] = None
         self._picker: Optional["CollisionTraverser"] = None
         self._picker_queue: Optional["CollisionHandlerQueue"] = None
@@ -50,6 +55,8 @@ class CncPandaApplication:
         self._tick_interval = 0.4
         self._mouse_dragging = False
         self._last_mouse_pos = None
+        self._ui_right_start = 0.0
+        self._ui_bottom_end = 0.0
 
     def boot(self) -> None:
         from direct.showbase.ShowBase import ShowBase  # type: ignore
@@ -68,7 +75,7 @@ class CncPandaApplication:
 
     def _build_scene(self) -> None:
         assert self._engine is not None
-        from direct.gui.DirectGui import DirectButton, DirectFrame, OnscreenText  # type: ignore
+        from direct.gui.DirectGui import DirectButton, DirectFrame, DirectLabel, OnscreenText  # type: ignore
         from panda3d.core import (  # type: ignore
             CardMaker,
             CollisionHandlerQueue,
@@ -102,8 +109,12 @@ class CncPandaApplication:
         grid.reparentTo(self._world)
         grid.setZ(0.1)
 
-        self._frontline_node = self._build_frontline_band(color=(0.8, 0.25, 0.2, 0.35))
-        self._frontline_node.reparentTo(self._world)
+        self._frontline_zone_p2 = self._build_frontline_band(color=(0.7, 0.2, 0.15, 0.25))
+        self._frontline_zone_p2.reparentTo(self._world)
+        self._frontline_zone_p1 = self._build_frontline_band(color=(0.15, 0.35, 0.7, 0.25))
+        self._frontline_zone_p1.reparentTo(self._world)
+        self._frontline_center = self._build_frontline_band(color=(0.9, 0.9, 0.9, 0.4), width=12.0)
+        self._frontline_center.reparentTo(self._world)
 
         self._build_bases()
         self._build_objectives()
@@ -113,7 +124,7 @@ class CncPandaApplication:
 
         self._ui_text = OnscreenText(
             text="",
-            pos=(0.02, 0.86),
+            pos=(self._ui_right_start - 0.95, -0.85),
             scale=0.045,
             fg=(0.9, 0.92, 0.95, 1.0),
             align=TextNode.ALeft,
@@ -121,7 +132,7 @@ class CncPandaApplication:
         )
         self._info_text = OnscreenText(
             text="",
-            pos=(0.62, 0.75),
+            pos=(self._ui_right_start + 0.05, 0.75),
             scale=0.04,
             fg=(0.9, 0.92, 0.95, 1.0),
             align=TextNode.ALeft,
@@ -129,21 +140,57 @@ class CncPandaApplication:
             mayChange=True,
         )
         self._upgrade_button = DirectButton(
-            text="Upgrade",
-            scale=0.05,
-            pos=(0.7, 0, 0.45),
+            text="Upgrade Tech",
+            scale=0.055,
+            pos=(self._ui_right_start + 0.18, 0, 0.28),
             command=self._handle_upgrade_click,
             parent=base.aspect2d,
         )
         self._upgrade_button.hide()
         self._stealth_button = DirectButton(
-            text="Stealth",
-            scale=0.05,
-            pos=(0.7, 0, 0.35),
+            text="Upgrade Stealth",
+            scale=0.055,
+            pos=(self._ui_right_start + 0.18, 0, 0.16),
             command=self._handle_stealth_click,
             parent=base.aspect2d,
         )
         self._stealth_button.hide()
+
+        build_label = DirectLabel(
+            text="Build",
+            scale=0.06,
+            pos=(self._ui_right_start + 0.12, 0, 0.02),
+            text_fg=(0.9, 0.92, 0.95, 1.0),
+            frameColor=(0, 0, 0, 0),
+            parent=base.aspect2d,
+        )
+        self._side_button = DirectButton(
+            text=f"Side: {self._build_side.upper()}",
+            scale=0.045,
+            pos=(self._ui_right_start + 0.2, 0, -0.08),
+            command=self._toggle_side,
+            parent=base.aspect2d,
+        )
+        self._build_buttons = []
+        build_items = [
+            ("Infantry Factory", "infantry_factory"),
+            ("Armor Factory", "armor_factory"),
+            ("Air Factory", "air_factory"),
+            ("Heli Factory", "heli_factory"),
+            ("Defense Factory", "defense_factory"),
+            ("Income", "income"),
+            ("Logistics", "logistics_hub"),
+        ]
+        for idx, (label, key) in enumerate(build_items):
+            button = DirectButton(
+                text=label,
+                scale=0.045,
+                pos=(self._ui_right_start + 0.18, 0, -0.18 - idx * 0.08),
+                command=self._handle_build_button,
+                extraArgs=[key],
+                parent=base.aspect2d,
+            )
+            self._build_buttons.append(button)
 
         self._picker = CollisionTraverser()
         self._picker_queue = CollisionHandlerQueue()
@@ -175,11 +222,11 @@ class CncPandaApplication:
             y += step
         return NodePath(lines.create())
 
-    def _build_frontline_band(self, color: Tuple[float, float, float, float]) -> "NodePath":
+    def _build_frontline_band(self, color: Tuple[float, float, float, float], width: float = 2000.0) -> "NodePath":
         from panda3d.core import CardMaker, NodePath  # type: ignore
 
         band = CardMaker("frontline")
-        band.setFrame(-2.0, 2.0, -self._map_width / 2, self._map_width / 2)
+        band.setFrame(-width / 2, width / 2, -self._map_width / 2, self._map_width / 2)
         node = band.generate()
         np = NodePath(node)
         np.setP(-90)
@@ -195,10 +242,10 @@ class CncPandaApplication:
         p2_base.setPos(-self._map_length / 2 + 180, 0, 0)
 
         for idx in range(8):
-            offset = (idx % 4) * 18 - 25
-            row = (idx // 4) * 24 - 12
-            self._spawn_box(p1_base, (offset, row, 0), (14, 14, 10), (0.22, 0.25, 0.3, 1))
-            self._spawn_box(p2_base, (offset, row, 0), (14, 14, 10), (0.3, 0.22, 0.2, 1))
+            offset = (idx % 4) * 26 - 38
+            row = (idx // 4) * 32 - 16
+            self._spawn_box(p1_base, (offset, row, 0), (20, 20, 14), (0.22, 0.25, 0.3, 1))
+            self._spawn_box(p2_base, (offset, row, 0), (20, 20, 14), (0.3, 0.22, 0.2, 1))
 
         self._spawn_runway(p1_base, (40, -70, 0))
         self._spawn_runway(p2_base, (-40, 70, 0))
@@ -228,8 +275,9 @@ class CncPandaApplication:
                     node.setTag("asset_key", key)
                     node.setTag("asset_side", side)
                     node.setTag("asset_index", str(idx))
-                    self._spawn_box(node, (0, 0, 0), (12, 12, 12), color, collidable=True)
-                    node.setPos(pos[0] + idx * 16, pos[1], pos[2])
+                    self._spawn_pad(node, (0, 0, 0), 18, (0.08, 0.1, 0.12, 1.0))
+                    self._spawn_box(node, (0, 0, 0), (24, 24, 16), color, collidable=True)
+                    node.setPos(pos[0] + idx * 28, pos[1], pos[2])
                     nodes.append(node)
                 self._structure_nodes[side].setdefault(key, []).extend(nodes)
 
@@ -242,6 +290,16 @@ class CncPandaApplication:
         runway_np.setPos(*pos)
         runway_np.setP(-90)
         runway_np.setColor(0.15, 0.15, 0.17, 1)
+
+    def _spawn_pad(self, parent: "NodePath", pos: Tuple[float, float, float], size: float, color) -> None:
+        from panda3d.core import CardMaker  # type: ignore
+
+        pad = CardMaker("pad")
+        pad.setFrame(-size, size, -size, size)
+        pad_np = parent.attachNewNode(pad.generate())
+        pad_np.setPos(*pos)
+        pad_np.setP(-90)
+        pad_np.setColor(*color)
 
     def _spawn_box(
         self,
@@ -336,9 +394,10 @@ class CncPandaApplication:
         assert self._world is not None
         self._sorties = []
         for side in ("p1", "p2"):
+            color = (0.6, 0.8, 1.0, 1.0) if side == "p1" else (1.0, 0.6, 0.4, 1.0)
             for idx in range(6):
                 node = self._world.attachNewNode(f"sortie_{side}_{idx}")
-                self._spawn_box(node, (0, 0, 0), (4, 6, 2), (0.75, 0.75, 0.9, 1))
+                self._spawn_box(node, (0, 0, 0), (6, 10, 3), color)
                 self._sorties.append(Sortie(node=node, side=side, progress=idx / 6, speed=0.04 + idx * 0.004))
 
     def _build_ui_panels(self) -> None:
@@ -346,16 +405,16 @@ class CncPandaApplication:
 
         assert self._engine is not None
         aspect = self._engine.getAspectRatio()
-        right_start = aspect * (1.0 - 0.2)
-        bottom_end = -1.0 + 0.2 * 2.0
+        self._ui_right_start = aspect * (1.0 - 0.2)
+        self._ui_bottom_end = -1.0 + 0.2 * 2.0
         DirectFrame(
             frameColor=(0.05, 0.07, 0.09, 0.9),
-            frameSize=(right_start, aspect, -1.0, 1.0),
+            frameSize=(self._ui_right_start, aspect, -1.0, 1.0),
             parent=self._engine.aspect2d,
         )
         DirectFrame(
             frameColor=(0.05, 0.07, 0.09, 0.9),
-            frameSize=(-aspect, aspect, -1.0, bottom_end),
+            frameSize=(-aspect, aspect, -1.0, self._ui_bottom_end),
             parent=self._engine.aspect2d,
         )
 
@@ -402,11 +461,20 @@ class CncPandaApplication:
         return task.cont
 
     def _update_world(self) -> None:
-        if not self._frontline_node:
+        if not self._frontline_center:
             return
         front = self.runtime.state.frontline
         front_x = self._map_pos(front.position)
-        self._frontline_node.setX(front_x)
+        if self._frontline_center:
+            self._frontline_center.setX(front_x)
+        if self._frontline_zone_p1:
+            p1_width = self._map_length / 2 - front_x
+            self._frontline_zone_p1.setX(front_x + p1_width / 2)
+            self._frontline_zone_p1.setScale(p1_width / self._map_length, 1.0, 1.0)
+        if self._frontline_zone_p2:
+            p2_width = front_x + self._map_length / 2
+            self._frontline_zone_p2.setX(-self._map_length / 2 + p2_width / 2)
+            self._frontline_zone_p2.setScale(p2_width / self._map_length, 1.0, 1.0)
 
         self._update_objectives()
         self._update_structures()
@@ -443,26 +511,27 @@ class CncPandaApplication:
                             (row - 2.5) * spacing + (col * 4 * direction),
                             2.0,
                         )
-                        node.setScale(1.0 + tier * 0.2)
+                        node.setScale(1.6 + tier * 0.25)
                         node.show()
                     else:
                         node.hide()
 
     def _update_sorties(self) -> None:
         front_x = self._map_pos(self.runtime.state.frontline.position)
-        p1_start = self._map_length / 2 - 140
-        p2_start = -self._map_length / 2 + 140
+        p1_start = self._map_length / 2 - 160
+        p2_start = -self._map_length / 2 + 160
         for sortie in self._sorties:
             sortie.progress = (sortie.progress + sortie.speed * 0.01) % 1.0
+            leg = abs(0.5 - sortie.progress) * 2.0
             if sortie.side == "p1":
                 x0, x1 = p1_start, front_x
-                y = -220 + (sortie.progress * 440)
-                x = x1 + (x0 - x1) * (1 - sortie.progress)
+                x = x1 + (x0 - x1) * leg
+                y = -180 + (sortie.progress * 360)
             else:
                 x0, x1 = p2_start, front_x
-                y = 220 - (sortie.progress * 440)
-                x = x1 + (x0 - x1) * (1 - sortie.progress)
-            z = 65 + 40 * abs(0.5 - sortie.progress)
+                x = x1 + (x0 - x1) * leg
+                y = 180 - (sortie.progress * 360)
+            z = 80 + 30 * (1.0 - leg)
             sortie.node.setPos(x, y, z)
 
     def _update_ui(self) -> None:
@@ -515,6 +584,7 @@ class CncPandaApplication:
                     else:
                         node.setColorScale(0.4, 0.4, 0.4, 0.6)
                         node.show()
+        self._highlight_selection()
 
     def _handle_click(self) -> None:
         if not self._engine or not self._picker or not self._picker_queue or not self._picker_ray:
@@ -538,6 +608,7 @@ class CncPandaApplication:
         asset_side = asset_node.getTag("asset_side")
         asset_index = asset_node.getTag("asset_index")
         self._selected_asset = {"key": asset_key, "side": asset_side, "index": asset_index}
+        self._highlight_selection()
         self._attempt_build(asset_key, asset_side, int(asset_index))
 
     def _attempt_build(self, asset_key: str, side: str, index: int) -> None:
@@ -583,10 +654,16 @@ class CncPandaApplication:
         lines = [f"{player.name} - {key}"]
         if key.endswith("_factory"):
             factory_key = self._factory_key_from_structure(key)
-            tier = player.factory_tiers.get(factory_key, 0) + 1
-            lines.append(f"Factory tier: {tier}")
+            tier = player.tech_levels.get(factory_key, 0) + 1
+            lines.append(f"Tech tier: {tier}")
+            cost = self._next_factory_cost(player, factory_key)
+            if cost:
+                lines.append(f"Upgrade cost: {cost}")
         if key == "air_factory":
             lines.append(f"Stealth tier: {player.air_stealth_level + 1}")
+            cost = self._next_stealth_cost(player)
+            if cost:
+                lines.append(f"Stealth cost: {cost}")
         if key == "defense_factory":
             lines.append(f"Defense range: {player.defense_range_tier + 1}")
         return "\n".join(lines)
@@ -608,6 +685,20 @@ class CncPandaApplication:
         else:
             self._stealth_button.hide()
 
+    def _highlight_selection(self) -> None:
+        for side_nodes in self._structure_nodes.values():
+            for nodes in side_nodes.values():
+                for node in nodes:
+                    node.setColorScale(1, 1, 1, 1)
+        if not self._selected_asset:
+            return
+        side = self._selected_asset["side"]
+        key = self._selected_asset["key"]
+        index = int(self._selected_asset["index"])
+        nodes = self._structure_nodes.get(side, {}).get(key, [])
+        if 0 <= index < len(nodes):
+            nodes[index].setColorScale(1.3, 1.3, 1.3, 1.0)
+
     def _factory_key_from_structure(self, structure_key: str) -> Optional[str]:
         mapping = {
             "infantry_factory": "infantry",
@@ -617,6 +708,31 @@ class CncPandaApplication:
             "defense_factory": "defense",
         }
         return mapping.get(structure_key)
+
+    def _next_factory_cost(self, player, factory_key: str) -> Optional[int]:
+        tier = player.tech_levels.get(factory_key, 0)
+        costs = self.runtime.settings.upgrades.factory_upgrade_costs
+        if tier >= len(costs):
+            return None
+        return costs[tier]
+
+    def _next_stealth_cost(self, player) -> Optional[int]:
+        tier = player.tech_levels.get("stealth", 0)
+        costs = self.runtime.settings.upgrades.stealth_upgrade_costs
+        if tier >= len(costs):
+            return None
+        return costs[tier]
+
+    def _handle_build_button(self, key: str) -> None:
+        try:
+            self.runtime.queue_structure(self._build_side, key, 1)
+        except ValueError:
+            return
+
+    def _toggle_side(self) -> None:
+        self._build_side = "p2" if self._build_side == "p1" else "p1"
+        if self._side_button:
+            self._side_button["text"] = f"Side: {self._build_side.upper()}"
 
     def _start_drag(self) -> None:
         if not self._engine or not self._engine.mouseWatcherNode.hasMouse():

@@ -38,6 +38,8 @@ class SimulationRuntime:
             frontline=FrontlineState(position=settings.frontline.max_position / 2.0),
             objectives=objectives,
         )
+        self._sync_tech_tiers(self.state.player1)
+        self._sync_tech_tiers(self.state.player2)
 
     def queue_structure(self, player_key: str, blueprint_id: str, quantity: int = 1) -> None:
         if blueprint_id not in self.blueprints:
@@ -90,11 +92,11 @@ class SimulationRuntime:
 
     def upgrade_factory(self, player_key: str, factory_key: str) -> None:
         player = self._player(player_key)
-        if factory_key not in player.factory_tiers:
-            raise ValueError(f"Unknown factory '{factory_key}'.")
-        if player.structures.get(f"{factory_key}_factory", 0) <= 0:
+        if factory_key not in player.tech_levels:
+            raise ValueError(f"Unknown tech '{factory_key}'.")
+        if factory_key != "stealth" and player.structures.get(f"{factory_key}_factory", 0) <= 0:
             raise ValueError(f"{player.name} has no {factory_key} factory.")
-        tier = player.factory_tiers[factory_key]
+        tier = player.tech_levels[factory_key]
         costs = self.settings.upgrades.factory_upgrade_costs
         if tier >= len(costs):
             raise ValueError("Factory already at max tier.")
@@ -102,19 +104,15 @@ class SimulationRuntime:
         if player.credits < cost:
             raise ValueError(f"{player.name} needs {cost} credits for upgrade.")
         player.credits -= cost
-        player.factory_tiers[factory_key] += 1
-        unit_keys = self._factory_unit_keys(factory_key)
-        for unit_key in unit_keys:
-            player.unit_tiers[unit_key] = min(player.factory_tiers[factory_key], 3)
-        if factory_key == "defense":
-            player.defense_range_tier = min(player.factory_tiers[factory_key], 2)
+        player.tech_levels[factory_key] += 1
+        self._sync_tech_tiers(player)
         self.state.record(f"{player.name} upgraded {factory_key} factory to tier {tier + 2}.")
 
     def upgrade_stealth(self, player_key: str) -> None:
         player = self._player(player_key)
         if player.structures.get("air_factory", 0) <= 0:
             raise ValueError(f"{player.name} has no air factory.")
-        tier = player.air_stealth_level
+        tier = player.tech_levels["stealth"]
         costs = self.settings.upgrades.stealth_upgrade_costs
         if tier >= len(costs):
             raise ValueError("Stealth already maxed.")
@@ -122,7 +120,8 @@ class SimulationRuntime:
         if player.credits < cost:
             raise ValueError(f"{player.name} needs {cost} credits for stealth.")
         player.credits -= cost
-        player.air_stealth_level += 1
+        player.tech_levels["stealth"] += 1
+        self._sync_tech_tiers(player)
         self.state.record(f"{player.name} upgraded aircraft stealth to tier {player.air_stealth_level + 1}.")
 
     def tick(self, count: int = 1) -> GameState:
@@ -506,6 +505,14 @@ class SimulationRuntime:
             "defense": ("def_arms", "def_vehicle", "def_air"),
         }
         return mapping.get(factory_key, tuple())
+
+    def _sync_tech_tiers(self, player: PlayerState) -> None:
+        for key in ("infantry", "armor", "air", "heli", "defense"):
+            tier = min(player.tech_levels.get(key, 0), 3)
+            for unit_key in self._factory_unit_keys(key):
+                player.unit_tiers[unit_key] = tier
+        player.air_stealth_level = min(player.tech_levels.get("stealth", 0), 3)
+        player.defense_range_tier = min(player.tech_levels.get("defense", 0), 2)
 
     def _current_phase(self) -> int:
         t1, t2 = self.settings.escalation.phase_thresholds

@@ -75,8 +75,15 @@ class PlayerState:
     air_posture: str = "ISR"
     air_stealth_level: int = 0
     defense_range_tier: int = 0
-    factory_tiers: Dict[str, int] = field(
-        default_factory=lambda: {"infantry": 0, "armor": 0, "air": 0, "heli": 0, "defense": 0}
+    tech_levels: Dict[str, int] = field(
+        default_factory=lambda: {
+            "infantry": 0,
+            "armor": 0,
+            "air": 0,
+            "heli": 0,
+            "defense": 0,
+            "stealth": 0,
+        }
     )
     unit_hp: Dict[str, float] = field(
         default_factory=lambda: {
