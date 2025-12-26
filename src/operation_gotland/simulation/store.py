@@ -18,47 +18,54 @@ class StructureBlueprint:
 
 def default_blueprints() -> Dict[str, StructureBlueprint]:
     """
-    A minimal set of placeholder blueprints. The numbers are intentionally
-    conservative; the real tuning will happen once we plug in the richer
-    content set.
+    Baseline structures used by the headless simulation. Tags encode the
+    systemic effects that runtime will interpret each tick.
     """
     blueprints: List[StructureBlueprint] = [
         StructureBlueprint(
-            key="ifv_factory",
-            name="IFV Factory",
-            cost=55,
-            description="Boosts IFV vehicle throughput and tank pipeline.",
-            tags=("production", "armor"),
+            key="factory",
+            name="Factory Complex",
+            cost=90,
+            description="Adds production throughput for all unit classes.",
+            tags=("factory", "industry"),
+        ),
+        StructureBlueprint(
+            key="income",
+            name="Revenue Facility",
+            cost=75,
+            description="Generates steady war funding each tick.",
+            tags=("income",),
         ),
         StructureBlueprint(
             key="logistics_hub",
             name="Logistics Hub",
-            cost=70,
-            description="Improves overall logistics health.",
+            cost=65,
+            description="Raises logistics resilience and repair throughput.",
             tags=("logistics",),
         ),
         StructureBlueprint(
-            key="aircraft_works",
-            name="Aircraft Works",
+            key="def_arms",
+            name="Anti-Infantry Grid",
+            cost=55,
+            build_time=2,
+            description="Suppresses infantry pressure along the front.",
+            tags=("defense", "def_arms"),
+        ),
+        StructureBlueprint(
+            key="def_vehicle",
+            name="Anti-Armor Emplacements",
+            cost=70,
+            build_time=2,
+            description="Suppresses IFV and tank pressure.",
+            tags=("defense", "def_vehicle"),
+        ),
+        StructureBlueprint(
+            key="def_air",
+            name="Air Defense Network",
             cost=80,
-            description="Opens the air production track.",
-            tags=("production", "air"),
-        ),
-        StructureBlueprint(
-            key="helipad",
-            name="Helipad",
-            cost=30,
-            description="Adds helicopter capacity; supports missile unlock path.",
-            build_time=1,
-            tags=("air", "unlock"),
-        ),
-        StructureBlueprint(
-            key="missile_authorization",
-            name="Missile Corps Authorization",
-            cost=500,
-            description="Unlocks missile launchers once the right pre-reqs are met.",
             build_time=3,
-            tags=("unlock",),
+            description="Suppresses aircraft pressure and air posture effects.",
+            tags=("defense", "def_air"),
         ),
     ]
     return {bp.key: bp for bp in blueprints}
