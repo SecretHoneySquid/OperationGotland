@@ -502,7 +502,7 @@ def casualties_from(attacker: Player, defender: Player) -> Dict[str, float]:
         "tanks": {"vehicles": 0.8, "tanks": 0.5, "def_vehicle": 0.6, "def_arms": 0.4},
         "aircraft": {
             "tanks": 0.9,
-            "vehicles": 1.62,  # buff vs IFVs/vehicles (20% increase)
+            "vehicles": 1.9,  # further buff vs IFVs/vehicles
             "aircraft": 0.6,
             "def_air": 0.4,
             "def_vehicle": 0.5,  # more threat to vehicle defenses
@@ -670,6 +670,17 @@ def update_pressure_progress(current: float, pushing_net: float, opposing_net: f
     return clamp(progress, 0.0, FRONTLINE_PRESSURE_THRESHOLD * 1.5)
 
 
+def apply_breakthrough_attrition(state: GameState) -> None:
+    """
+    When a frontline segment is taken, both sides lose 75% of all unit pools to reflect the costly push.
+    """
+    for player in (state.player1, state.player2):
+        for attr in ("arms", "vehicles", "tanks", "aircraft", "helicopters", "def_arms", "def_vehicle", "def_air", "missile_launchers"):
+            current = getattr(player, attr, 0.0)
+            setattr(player, attr, round(current * 0.25, 2))
+    state.record("Breakthrough attrition: both sides reduced to 25% of prior frontline forces.")
+
+
 def apply_frontline_pressure(state: GameState, p1_net: float, p2_net: float) -> None:
     """
     Update pressure meters and move the front line in discrete 25% jumps.
@@ -700,6 +711,9 @@ def apply_frontline_pressure(state: GameState, p1_net: float, p2_net: float) -> 
             f"{state.player2.name} counter-broke! Front line pushed back to {state.frontline_ratio:.0f}% "
             f"(progress reset)."
         )
+
+    # Major breakthrough attrition: both sides lose 75% of current troops before the next buildup.
+    apply_breakthrough_attrition(state)
 
     check_victory(state)
     if state.winner:
