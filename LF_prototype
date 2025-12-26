@@ -48,7 +48,7 @@ BASE_CREDITS = 120
 INCOME_PER_TICK = 25.0
 SUPPLY_ZONE_BONUS = 50
 UNIT_BUILD_RATE = 0.12            # how many units per production point per tick
-COMBAT_SCALE = 0.02               # higher = deadlier exchanges per tick
+COMBAT_SCALE = 0.04               # higher = deadlier exchanges per tick
 SORTIE_DURATION = 3               # ticks a sortie aircraft are away
 
 # Building system
@@ -287,7 +287,7 @@ def make_factories() -> Dict[int, Factory]:
             key=10,
             name="Missile Corps Authorization",
             cost=500,
-            description="Unlocks missile launchers after owning IFV & Tank plants.",
+            description="Unlocks missile launchers (requires armor plants or Aircraft Works + 3 Helipads).",
             apply_effect=lambda p: unlock_missiles(p),
         ),
         11: Factory(
@@ -576,6 +576,7 @@ def apply_armored_factory(player: Player, vehicle_boost: float, tank_boost: floa
     projected = dict(player.purchases)
     projected[key] = projected.get(key, 0) + 1
     maybe_apply_armor_synergy(player, projected)
+    maybe_update_missile_prereq(player)
 
 
 def maybe_apply_armor_synergy(player: Player, projected_purchases: Optional[Dict[int, int]] = None) -> None:
@@ -586,13 +587,14 @@ def maybe_apply_armor_synergy(player: Player, projected_purchases: Optional[Dict
         player.armored_synergy_bonus = True
         player.logistics_health = clamp(player.logistics_health + 5, 10.0, 250.0)
         player.defense_prod += 3
+        maybe_update_missile_prereq(player)
 
 
 def unlock_missiles(player: Player) -> None:
     if player.missile_unlocked:
         return
-    if not (player.purchases.get(1, 0) > 0 and player.purchases.get(9, 0) > 0):
-        raise ValueError("Missile unlock requires at least one IFV Factory and one Tank Foundry.")
+    if not missile_authorization_allowed(player):
+        raise ValueError("Missile unlock requires armor plants or Aircraft Works + 3 Helipads.")
     player.missile_unlocked = True
 
 
@@ -602,6 +604,24 @@ def add_helipad(player: Player) -> None:
     player.helipads += 1
     player.helicopters += 5
     player.arms_prod = round(player.arms_prod * 1.05, 2)
+    maybe_update_missile_prereq(player)
+
+
+def missile_authorization_allowed(player: Player) -> bool:
+    armor_path = player.purchases.get(1, 0) > 0 and player.purchases.get(9, 0) > 0
+    air_path = player.purchases.get(4, 0) > 0 and player.helipads >= 3
+    return armor_path or air_path
+
+
+def maybe_update_missile_prereq(player: Player) -> None:
+    """
+    If the player reaches the air route prereqs (Aircraft Works + 3 helipads),
+    mark the missile unlock flag so they can immediately build launchers.
+    """
+    if player.missile_unlocked:
+        return
+    if missile_authorization_allowed(player):
+        player.missile_unlocked = True
 
 
 def compute_frontline_pressure(attacker: Player, defender: Player) -> Tuple[float, Dict[str, float]]:
@@ -681,14 +701,17 @@ def apply_frontline_pressure(state: GameState, p1_net: float, p2_net: float) -> 
             f"(progress reset)."
         )
 
-    # Reset pressure after a breakthrough to force a fresh buildup.
-    state.pressure_toward_p2 = 0.0
-    state.pressure_toward_p1 = 0.0
     check_victory(state)
     if state.winner:
         state.record(
-            f"{state.winner} reached the front-line limit ({state.frontline_ratio:.0f}%)."
+            f"{state.winner} reached the front-line limit ({state.frontline_ratio:.0f}%). "
+            f"Final pressure meters P1->P2 {state.pressure_toward_p2:.1f}, "
+            f"P2->P1 {state.pressure_toward_p1:.1f}."
         )
+    else:
+        # Reset pressure after a breakthrough to force a fresh buildup when game continues.
+        state.pressure_toward_p2 = 0.0
+        state.pressure_toward_p1 = 0.0
 
 
 def check_victory(state: GameState) -> None:
@@ -712,8 +735,8 @@ def buy_factory(
         raise ValueError("Quantity must be at least 1.")
 
     factory = factories[factory_id]
-    if factory.key == 10 and not (player.purchases.get(1, 0) > 0 and player.purchases.get(9, 0) > 0):
-        raise ValueError("Missile Corps Authorization requires owning IFV Factory and Tank Foundry.")
+    if factory.key == 10 and not missile_authorization_allowed(player):
+        raise ValueError("Missile Corps Authorization requires armor plants or Aircraft Works + 3 Helipads.")
     if factory.key == 11 and not player.missile_unlocked:
         raise ValueError("Buy Missile Corps Authorization before purchasing launchers.")
     if factory.key == 12 and player.purchases.get(4, 0) <= 0:
