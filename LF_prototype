@@ -1077,9 +1077,9 @@ class GameUI:
         height = int(self.canvas.cget("height"))
         ground_y = height - 50
         spawn_band = (40, ground_y - 20)
-        # Spawn proportional to production, capped for performance.
-        p1_spawn = clamp(int(self.state.player1.total_production / 60), 1, 6)
-        p2_spawn = clamp(int(self.state.player2.total_production / 60), 1, 6)
+        # Spawn proportional to production (excluding air defense) and logistics, capped for performance.
+        p1_spawn = self._spawn_count(self.state.player1)
+        p2_spawn = self._spawn_count(self.state.player2)
         for _ in range(p1_spawn):
             y = random.randint(*spawn_band)
             self.dots.append({"x": 36.0, "y": float(y), "dir": 1, "speed": random.uniform(0.6, 1.2), "side": "p1"})
@@ -1089,6 +1089,10 @@ class GameUI:
         # Trim to avoid runaway counts.
         if len(self.dots) > 400:
             self.dots = self.dots[-400:]
+
+    def _spawn_count(self, player: Player) -> int:
+        effective_prod = (player.vehicle_prod + player.arms_prod + player.aircraft_prod) * player.logistics_factor
+        return clamp(int(effective_prod / 40), 1, 8)
 
     def _resolve_dot_collisions(self) -> None:
         survivors: List[Dict[str, float]] = []
