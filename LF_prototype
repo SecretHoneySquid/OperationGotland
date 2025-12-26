@@ -45,6 +45,7 @@ INCOME_PER_TICK = 25.0
 SUPPLY_ZONE_BONUS = 50
 UNIT_BUILD_RATE = 0.12            # how many units per production point per tick
 COMBAT_SCALE = 0.02               # higher = deadlier exchanges per tick
+SORTIE_DURATION = 3               # ticks a sortie aircraft are away
 
 # Building system
 BUILD_TIMES = {
@@ -73,6 +74,15 @@ class Factory:
 
     def apply(self, player: "Player") -> None:
         self.apply_effect(player)
+
+
+@dataclass
+@dataclass
+class Sortie:
+    owner: str
+    target_attr: str
+    committed: float
+    remaining: int
 
 
 @dataclass
@@ -150,7 +160,7 @@ class Player:
         self.def_vehicle += self.defense_prod * UNIT_BUILD_RATE * factor * 0.35
         self.def_arms += self.defense_prod * UNIT_BUILD_RATE * factor * 0.25
         # Tanks scale with logistics and the heavier end of production (vehicles + arms)
-        self.tanks += ((self.vehicle_prod + self.arms_prod) / 2.0) * UNIT_BUILD_RATE * factor * 0.5
+        self.tanks += ((self.vehicle_prod + self.arms_prod) / 2.0) * UNIT_BUILD_RATE * factor * 0.35
 
     def apply_losses(self, losses: Dict[str, float]) -> None:
         for key, dmg in losses.items():
@@ -179,6 +189,7 @@ class GameState:
     history: List[str] = field(default_factory=list)
     ticks_elapsed: int = 0
     winner: Optional[str] = None
+    sorties: List[Sortie] = field(default_factory=list)
 
     def record(self, message: str) -> None:
         self.history.append(message)
@@ -308,6 +319,7 @@ def advance_tick(state: GameState) -> Tuple[float, float]:
     state.player1.earn_income()
     state.player2.earn_income()
     process_builds(state)
+    process_sorties(state)
     state.player1.produce_units()
     state.player2.produce_units()
 
@@ -344,6 +356,75 @@ def process_builds(state: GameState) -> None:
         player.build_queue = still_building
 
 
+def launch_sortie(state: GameState, player_key: str, size_key: str, target_key: str) -> str:
+    if state.winner:
+        raise ValueError("Game is over.")
+
+    player = state.player1 if player_key.lower() in ("1", "p1", "player1") else state.player2
+    size_map = {"small": 0.1, "sm": 0.1, "med": 0.25, "medium": 0.25, "large": 0.5, "lg": 0.5}
+    target_map = {
+        "vehicles": "vehicle_prod",
+        "arms": "arms_prod",
+        "air": "aircraft_prod",
+        "def": "defense_prod",
+        "logi": "logistics_health",
+        "logistics": "logistics_health",
+    }
+
+    if size_key.lower() not in size_map:
+        raise ValueError("Size must be small/med/large.")
+    if target_key.lower() not in target_map:
+        raise ValueError("Target must be one of: vehicles, arms, air, def, logi.")
+    if player.aircraft < 1.0:
+        raise ValueError(f"{player.name} has no aircraft to launch.")
+
+    frac = size_map[size_key.lower()]
+    committed = max(1.0, round(player.aircraft * frac, 1))
+    committed = min(committed, player.aircraft)
+    player.aircraft -= committed
+
+    target_attr = target_map[target_key.lower()]
+    state.sorties.append(Sortie(owner=player.name, target_attr=target_attr, committed=committed, remaining=SORTIE_DURATION))
+    state.record(f"{player.name} launched air sortie ({size_key}, {committed:.1f} aircraft) vs {target_key}.")
+    return f"{player.name} launched air sortie with {committed:.1f} aircraft targeting {target_key}."
+
+
+def process_sorties(state: GameState) -> None:
+    if state.winner or not state.sorties:
+        return
+    remaining: List[Sortie] = []
+    for sortie in state.sorties:
+        sortie.remaining -= 1
+        if sortie.remaining > 0:
+            remaining.append(sortie)
+            continue
+
+        attacker = state.player1 if sortie.owner == state.player1.name else state.player2
+        defender = state.player2 if attacker is state.player1 else state.player1
+
+        attack_strength = sortie.committed
+        defense_strength = defender.def_air * 0.8 + defender.aircraft * 0.6 + 5.0
+        success = attack_strength / (attack_strength + defense_strength + 1.0)
+        damage = success * 12.0
+
+        if sortie.target_attr == "logistics_health":
+            defender.logistics_health = clamp(defender.logistics_health - damage * 0.7, 1.0, 250.0)
+        else:
+            cur = getattr(defender, sortie.target_attr)
+            setattr(defender, sortie.target_attr, max(0.0, cur - damage))
+
+        loss_rate = (1.0 - success) * 0.6 + defender.def_air * 0.005
+        losses = min(sortie.committed, sortie.committed * loss_rate)
+        survivors = max(0.0, sortie.committed - losses)
+        attacker.aircraft += survivors
+
+        state.record(
+            f"Sortie resolved: {attacker.name} hit {defender.name}'s {sortie.target_attr} for {damage:.1f}, "
+            f"lost {losses:.1f} aircraft (returned {survivors:.1f})."
+        )
+    state.sorties = remaining
+
+
 def resolve_combat(state: GameState) -> None:
     """
     Exchange casualties between players based on unit matchup rules.
@@ -372,7 +453,7 @@ def casualties_from(attacker: Player, defender: Player) -> Dict[str, float]:
     # Effectiveness coefficients attacker_type -> defender_type
     eff: Dict[str, Dict[str, float]] = {
         "arms": {"vehicles": 0.6, "aircraft": 0.1},
-        "vehicles": {"arms": 0.8, "vehicles": 0.3},
+        "vehicles": {"arms": 0.7, "vehicles": 0.25},
         "tanks": {"vehicles": 0.8, "tanks": 0.5, "def_vehicle": 0.6, "def_arms": 0.4},
         "aircraft": {
             "tanks": 0.9,
@@ -422,7 +503,7 @@ def unit_pressure_advantage(p1: Player, p2: Player) -> float:
     def power(p: Player) -> float:
         return (
             p.arms * 0.8
-            + p.vehicles * 1.0
+            + p.vehicles * 0.85
             + p.tanks * 1.3
             + p.aircraft * 1.4
             + p.def_arms * 0.5
@@ -478,6 +559,8 @@ def show_status(state: GameState) -> str:
         describe_player(state.player1),
         describe_player(state.player2),
     ]
+    if state.sorties:
+        lines.append(f"Active sorties: {len(state.sorties)} (aircraft away from frontline until they resolve)")
     if state.winner:
         lines.append(f"🏁 {state.winner} controls the front line. Game over.")
     return "\n".join(lines)
@@ -486,9 +569,10 @@ def show_status(state: GameState) -> str:
 def print_help() -> str:
     return (
         "Commands:\n"
-        "  status                  -> show both players and the front line\n"
+        "  status | s              -> show both players and the front line\n"
         "  store                   -> list factories and effects\n"
         "  buy <p1|p2> <id> [n|max]-> queue factory builds (single, n copies, or max affordable)\n"
+        "  a <p1|p2> <size> <tgt>  -> launch air sortie (size: small/med/large, tgt: vehicles/arms/air/def/logi)\n"
         "  tick [n]                -> advance the simulation by n ticks (default 1)\n"
         "  log                     -> show recent events\n"
         "  help                    -> show this message\n"
@@ -518,7 +602,7 @@ def interactive_loop(state: GameState, factories: Dict[int, Factory]) -> None:
                 break
             if cmd == "help":
                 print(print_help())
-            elif cmd == "status":
+            elif cmd in ("status", "s"):
                 print(show_status(state))
             elif cmd == "store":
                 print(describe_store(factories))
@@ -545,6 +629,18 @@ def interactive_loop(state: GameState, factories: Dict[int, Factory]) -> None:
                         quantity = int(parts[3])
                 message = buy_factory(state, parts[1], int(parts[2]), factories, quantity)
                 print(message)
+            elif cmd == "a":
+                if state.winner:
+                    print(f"Game is over. {state.winner} already controls the front line.")
+                    continue
+                if len(parts) != 4:
+                    print("Usage: a <p1|p2> <small|med|large> <vehicles|arms|air|def|logi>")
+                    continue
+                try:
+                    message = launch_sortie(state, parts[1], parts[2], parts[3])
+                    print(message)
+                except ValueError as exc:
+                    print(f"Error: {exc}")
             elif cmd == "tick":
                 if state.winner:
                     print(f"Game is over. {state.winner} already controls the front line.")
