@@ -23,11 +23,39 @@ def default_blueprints() -> Dict[str, StructureBlueprint]:
     """
     blueprints: List[StructureBlueprint] = [
         StructureBlueprint(
-            key="factory",
-            name="Factory Complex",
-            cost=90,
-            description="Adds production throughput for all unit classes.",
-            tags=("factory", "industry"),
+            key="infantry_factory",
+            name="Infantry Works",
+            cost=70,
+            description="Boosts infantry throughput and upgrades.",
+            tags=("factory", "infantry"),
+        ),
+        StructureBlueprint(
+            key="armor_factory",
+            name="Armor Yard",
+            cost=95,
+            description="Boosts IFV/tank throughput and upgrades.",
+            tags=("factory", "armor"),
+        ),
+        StructureBlueprint(
+            key="air_factory",
+            name="Airframe Plant",
+            cost=120,
+            description="Boosts aircraft throughput and upgrades.",
+            tags=("factory", "air"),
+        ),
+        StructureBlueprint(
+            key="heli_factory",
+            name="Rotary Wing Depot",
+            cost=105,
+            description="Boosts helicopter throughput and upgrades.",
+            tags=("factory", "heli"),
+        ),
+        StructureBlueprint(
+            key="defense_factory",
+            name="Defense Forge",
+            cost=110,
+            description="Boosts defense throughput and range upgrades.",
+            tags=("factory", "defense"),
         ),
         StructureBlueprint(
             key="income",

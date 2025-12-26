@@ -33,10 +33,11 @@ def _render_player(player, prefix: str) -> str:
     return (
         f"{prefix} {player.name}: credits {player.credits}, logi {player.logistics_health:.1f}, "
         f"industry {player.industry_health:.1f}, defense {player.defense_health:.1f} | "
-        f"air {player.air_posture} | prod -> veh {prod.vehicles:.1f}, arms {prod.arms:.1f}, "
-        f"air {prod.aircraft:.1f}, def {prod.defense:.1f} | "
+        f"air {player.air_posture} (stealth {player.air_stealth_level}) | "
+        f"prod -> veh {prod.vehicles:.1f}, arms {prod.arms:.1f}, air {prod.aircraft:.1f}, "
+        f"rot {prod.rotary:.1f}, def {prod.defense:.1f} | "
         f"units inf {units.infantry:.1f}, ifv {units.ifv:.1f}, tank {units.tank:.1f}, "
-        f"air {units.aircraft:.1f} | "
+        f"heli {units.helicopter:.1f}, air {units.aircraft:.1f} | "
         f"def {units.def_arms:.1f}/{units.def_vehicle:.1f}/{units.def_air:.1f} | "
         f"structures {sum(player.structures.values())}"
     )

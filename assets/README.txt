@@ -23,6 +23,11 @@ assets/
       tier_2.bam
       tier_3.bam
       tier_4.bam
+    heli/
+      tier_1.bam
+      tier_2.bam
+      tier_3.bam
+      tier_4.bam
     defense/
       arms_tier_1.bam
       arms_tier_2.bam

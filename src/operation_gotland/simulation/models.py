@@ -14,20 +14,22 @@ class ProductionProfile:
     arms: float = 25.0
     aircraft: float = 25.0
     defense: float = 25.0
+    rotary: float = 0.0
 
     def total_weight(self) -> float:
-        return max(0.0, self.vehicles + self.arms + self.aircraft + self.defense)
+        return max(0.0, self.vehicles + self.arms + self.aircraft + self.defense + self.rotary)
 
     def normalized(self) -> "ProductionProfile":
         total = self.total_weight()
         if total <= 0:
-            return ProductionProfile(vehicles=25.0, arms=25.0, aircraft=25.0, defense=25.0)
+            return ProductionProfile(vehicles=25.0, arms=25.0, aircraft=25.0, defense=25.0, rotary=0.0)
         factor = 100.0 / total
         return ProductionProfile(
             vehicles=self.vehicles * factor,
             arms=self.arms * factor,
             aircraft=self.aircraft * factor,
             defense=self.defense * factor,
+            rotary=self.rotary * factor,
         )
 
 
@@ -36,6 +38,7 @@ class UnitPool:
     infantry: float = 0.0
     ifv: float = 0.0
     tank: float = 0.0
+    helicopter: float = 0.0
     aircraft: float = 0.0
     def_arms: float = 0.0
     def_vehicle: float = 0.0
@@ -70,12 +73,30 @@ class PlayerState:
     build_queue: List[QueuedStructure] = field(default_factory=list)
     operations: List[ActiveOperation] = field(default_factory=list)
     air_posture: str = "ISR"
+    air_stealth_level: int = 0
+    defense_range_tier: int = 0
+    factory_tiers: Dict[str, int] = field(
+        default_factory=lambda: {"infantry": 0, "armor": 0, "air": 0, "heli": 0, "defense": 0}
+    )
+    unit_hp: Dict[str, float] = field(
+        default_factory=lambda: {
+            "infantry": 0.0,
+            "ifv": 0.0,
+            "tank": 0.0,
+            "helicopter": 0.0,
+            "aircraft": 0.0,
+            "def_arms": 0.0,
+            "def_vehicle": 0.0,
+            "def_air": 0.0,
+        }
+    )
     unit_tiers: Dict[str, int] = field(
         default_factory=lambda: {
             "infantry": 0,
             "ifv": 0,
             "tank": 0,
             "aircraft": 0,
+            "helicopter": 0,
             "def_arms": 0,
             "def_vehicle": 0,
             "def_air": 0,
@@ -83,7 +104,10 @@ class PlayerState:
     )
 
     def build_capacity(self) -> int:
-        factories = self.structures.get("factory", 0)
+        factories = sum(
+            self.structures.get(key, 0)
+            for key in ("infantry_factory", "armor_factory", "air_factory", "heli_factory", "defense_factory")
+        )
         return max(1, min(9, 2 + factories))
 
     def logistics_factor(self) -> float:

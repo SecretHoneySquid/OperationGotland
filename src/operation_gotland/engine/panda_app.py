@@ -30,8 +30,16 @@ class CncPandaApplication:
         self._frontline_node: Optional["NodePath"] = None
         self._objective_nodes: List["NodePath"] = []
         self._unit_markers: Dict[str, Dict[str, List["NodePath"]]] = {}
+        self._structure_nodes: Dict[str, Dict[str, List["NodePath"]]] = {}
         self._sorties: List[Sortie] = []
         self._ui_text: Optional["OnscreenText"] = None
+        self._info_text: Optional["OnscreenText"] = None
+        self._upgrade_button: Optional["DirectButton"] = None
+        self._stealth_button: Optional["DirectButton"] = None
+        self._selected_asset: Optional[Dict[str, str]] = None
+        self._picker: Optional["CollisionTraverser"] = None
+        self._picker_queue: Optional["CollisionHandlerQueue"] = None
+        self._picker_ray: Optional["CollisionRay"] = None
         self._key_state: Dict[str, bool] = {"left": False, "right": False, "up": False, "down": False}
         self._camera_center = None
         self._camera_height = 260.0
@@ -40,6 +48,8 @@ class CncPandaApplication:
         self._map_width = 700.0
         self._tick_accumulator = 0.0
         self._tick_interval = 0.4
+        self._mouse_dragging = False
+        self._last_mouse_pos = None
 
     def boot(self) -> None:
         from direct.showbase.ShowBase import ShowBase  # type: ignore
@@ -58,14 +68,16 @@ class CncPandaApplication:
 
     def _build_scene(self) -> None:
         assert self._engine is not None
-        from direct.gui.DirectGui import DirectFrame, OnscreenText  # type: ignore
+        from direct.gui.DirectGui import DirectButton, DirectFrame, OnscreenText  # type: ignore
         from panda3d.core import (  # type: ignore
             CardMaker,
+            CollisionHandlerQueue,
+            CollisionNode,
+            CollisionRay,
+            CollisionTraverser,
             LPoint3f,
-            LVector3f,
             NodePath,
             TextNode,
-            Vec4,
         )
 
         render = self._engine.render
@@ -107,6 +119,39 @@ class CncPandaApplication:
             align=TextNode.ALeft,
             parent=base.aspect2d,
         )
+        self._info_text = OnscreenText(
+            text="",
+            pos=(0.62, 0.75),
+            scale=0.04,
+            fg=(0.9, 0.92, 0.95, 1.0),
+            align=TextNode.ALeft,
+            parent=base.aspect2d,
+            mayChange=True,
+        )
+        self._upgrade_button = DirectButton(
+            text="Upgrade",
+            scale=0.05,
+            pos=(0.7, 0, 0.45),
+            command=self._handle_upgrade_click,
+            parent=base.aspect2d,
+        )
+        self._upgrade_button.hide()
+        self._stealth_button = DirectButton(
+            text="Stealth",
+            scale=0.05,
+            pos=(0.7, 0, 0.35),
+            command=self._handle_stealth_click,
+            parent=base.aspect2d,
+        )
+        self._stealth_button.hide()
+
+        self._picker = CollisionTraverser()
+        self._picker_queue = CollisionHandlerQueue()
+        self._picker_ray = CollisionRay()
+        picker_node = CollisionNode("mouseRay")
+        picker_node.addSolid(self._picker_ray)
+        picker_np = base.camera.attachNewNode(picker_node)
+        self._picker.addCollider(picker_np, self._picker_queue)
 
         self._setup_controls()
 
@@ -143,8 +188,6 @@ class CncPandaApplication:
         return np
 
     def _build_bases(self) -> None:
-        from panda3d.core import NodePath  # type: ignore
-
         assert self._world is not None
         p1_base = self._world.attachNewNode("base_p1")
         p2_base = self._world.attachNewNode("base_p2")
@@ -159,6 +202,36 @@ class CncPandaApplication:
 
         self._spawn_runway(p1_base, (40, -70, 0))
         self._spawn_runway(p2_base, (-40, 70, 0))
+
+        structure_slots = [
+            ("infantry_factory", (70, -20, 0)),
+            ("armor_factory", (70, 20, 0)),
+            ("air_factory", (40, -40, 0)),
+            ("heli_factory", (40, 40, 0)),
+            ("defense_factory", (10, 0, 0)),
+            ("income", (-20, -40, 0)),
+            ("logistics_hub", (-20, 40, 0)),
+            ("def_arms", (-50, -20, 0)),
+            ("def_vehicle", (-50, 20, 0)),
+            ("def_air", (-80, 0, 0)),
+        ]
+        self._structure_nodes = {"p1": {}, "p2": {}}
+        for side, base, color in (
+            ("p1", p1_base, (0.2, 0.55, 0.9, 1.0)),
+            ("p2", p2_base, (0.9, 0.4, 0.2, 1.0)),
+        ):
+            for key, pos in structure_slots:
+                nodes: List["NodePath"] = []
+                for idx in range(3):
+                    node = base.attachNewNode(f"{side}_{key}_{idx}")
+                    node.setTag("asset_type", "structure")
+                    node.setTag("asset_key", key)
+                    node.setTag("asset_side", side)
+                    node.setTag("asset_index", str(idx))
+                    self._spawn_box(node, (0, 0, 0), (12, 12, 12), color, collidable=True)
+                    node.setPos(pos[0] + idx * 16, pos[1], pos[2])
+                    nodes.append(node)
+                self._structure_nodes[side].setdefault(key, []).extend(nodes)
 
     def _spawn_runway(self, parent: "NodePath", pos: Tuple[float, float, float]) -> None:
         from panda3d.core import CardMaker  # type: ignore
@@ -176,8 +249,19 @@ class CncPandaApplication:
         pos: Tuple[float, float, float],
         size: Tuple[float, float, float],
         color: Tuple[float, float, float, float],
+        collidable: bool = False,
     ) -> None:
-        from panda3d.core import Geom, GeomNode, GeomTriangles, GeomVertexData, GeomVertexFormat, GeomVertexWriter
+        from panda3d.core import (  # type: ignore
+            CollisionBox,
+            CollisionNode,
+            Geom,
+            GeomNode,
+            GeomTriangles,
+            GeomVertexData,
+            GeomVertexFormat,
+            GeomVertexWriter,
+            LPoint3f,
+        )
 
         fmt = GeomVertexFormat.getV3n3c4()
         vdata = GeomVertexData("box", fmt, Geom.UHStatic)
@@ -216,6 +300,14 @@ class CncPandaApplication:
         node.addGeom(geom)
         np = parent.attachNewNode(node)
         np.setPos(*pos)
+        if collidable:
+            cnode = CollisionNode("box-collider")
+            cnode.addSolid(CollisionBox(LPoint3f(0, 0, 0), sx / 2, sy / 2, hz))
+            collider = np.attachNewNode(cnode)
+            collider.setTag("asset_type", parent.getTag("asset_type") or "")
+            collider.setTag("asset_key", parent.getTag("asset_key") or "")
+            collider.setTag("asset_side", parent.getTag("asset_side") or "")
+            collider.setTag("asset_index", parent.getTag("asset_index") or "")
 
     def _build_objectives(self) -> None:
         from panda3d.core import NodePath  # type: ignore
@@ -230,7 +322,7 @@ class CncPandaApplication:
     def _build_unit_markers(self) -> None:
         assert self._world is not None
         self._unit_markers = {"p1": {}, "p2": {}}
-        classes = ("infantry", "ifv", "tank", "aircraft", "def_arms", "def_vehicle", "def_air")
+        classes = ("infantry", "ifv", "tank", "helicopter", "aircraft", "def_arms", "def_vehicle", "def_air")
         for side in ("p1", "p2"):
             for unit in classes:
                 nodes: List["NodePath"] = []
@@ -288,6 +380,9 @@ class CncPandaApplication:
         base.accept("d-up", self._set_key, ["right", False])
         base.accept("wheel_up", self._adjust_zoom, [1])
         base.accept("wheel_down", self._adjust_zoom, [-1])
+        base.accept("mouse1", self._handle_click)
+        base.accept("mouse3", self._start_drag)
+        base.accept("mouse3-up", self._stop_drag)
 
     def _set_key(self, key: str, value: bool) -> None:
         self._key_state[key] = value
@@ -314,6 +409,7 @@ class CncPandaApplication:
         self._frontline_node.setX(front_x)
 
         self._update_objectives()
+        self._update_structures()
         self._update_unit_markers()
         self._update_sorties()
         self._update_ui()
@@ -380,12 +476,16 @@ class CncPandaApplication:
             f"Escalation {state.escalation:.1f}"
         )
         self._ui_text.setText(text)
+        if self._info_text is not None:
+            self._info_text.setText(self._selection_text())
+        self._update_buttons()
 
     def _update_camera(self, task: "Task") -> int:
         if not self._engine or self._camera_center is None:
             return task.cont
         dt = self._engine.clock.dt
         speed = 240 * dt
+        self._update_drag()
         if self._key_state["left"]:
             self._camera_center.x -= speed
         if self._key_state["right"]:
@@ -404,6 +504,145 @@ class CncPandaApplication:
         cam.setHpr(0, self._camera_pitch, 0)
         return task.cont
 
+    def _update_structures(self) -> None:
+        for side_key, player in (("p1", self.runtime.state.player1), ("p2", self.runtime.state.player2)):
+            for key, nodes in self._structure_nodes.get(side_key, {}).items():
+                built = player.structures.get(key, 0)
+                for idx, node in enumerate(nodes):
+                    if idx < built:
+                        node.setColorScale(1, 1, 1, 1)
+                        node.show()
+                    else:
+                        node.setColorScale(0.4, 0.4, 0.4, 0.6)
+                        node.show()
+
+    def _handle_click(self) -> None:
+        if not self._engine or not self._picker or not self._picker_queue or not self._picker_ray:
+            return
+        if not self._engine.mouseWatcherNode.hasMouse():
+            return
+        mouse = self._engine.mouseWatcherNode.getMouse()
+        self._picker_ray.setFromLens(self._engine.camNode, mouse.getX(), mouse.getY())
+        self._picker.traverse(self._engine.render)
+        if self._picker_queue.getNumEntries() == 0:
+            self._selected_asset = None
+            return
+        self._picker_queue.sortEntries()
+        hit = self._picker_queue.getEntry(0)
+        node = hit.getIntoNodePath()
+        asset_node = node.findNetTag("asset_type")
+        if asset_node.isEmpty():
+            self._selected_asset = None
+            return
+        asset_key = asset_node.getTag("asset_key")
+        asset_side = asset_node.getTag("asset_side")
+        asset_index = asset_node.getTag("asset_index")
+        self._selected_asset = {"key": asset_key, "side": asset_side, "index": asset_index}
+        self._attempt_build(asset_key, asset_side, int(asset_index))
+
+    def _attempt_build(self, asset_key: str, side: str, index: int) -> None:
+        player = self.runtime.state.player1 if side == "p1" else self.runtime.state.player2
+        if player.structures.get(asset_key, 0) > index:
+            return
+        try:
+            self.runtime.queue_structure(side, asset_key, 1)
+        except ValueError:
+            return
+
+    def _handle_upgrade_click(self) -> None:
+        if not self._selected_asset:
+            return
+        key = self._selected_asset["key"]
+        side = self._selected_asset["side"]
+        factory_key = self._factory_key_from_structure(key)
+        if not factory_key:
+            return
+        try:
+            self.runtime.upgrade_factory(side, factory_key)
+        except ValueError:
+            return
+
+    def _handle_stealth_click(self) -> None:
+        if not self._selected_asset:
+            return
+        key = self._selected_asset["key"]
+        side = self._selected_asset["side"]
+        if key != "air_factory":
+            return
+        try:
+            self.runtime.upgrade_stealth(side)
+        except ValueError:
+            return
+
+    def _selection_text(self) -> str:
+        if not self._selected_asset:
+            return "Select a structure to view upgrades."
+        key = self._selected_asset["key"]
+        side = self._selected_asset["side"]
+        player = self.runtime.state.player1 if side == "p1" else self.runtime.state.player2
+        lines = [f"{player.name} - {key}"]
+        if key.endswith("_factory"):
+            factory_key = self._factory_key_from_structure(key)
+            tier = player.factory_tiers.get(factory_key, 0) + 1
+            lines.append(f"Factory tier: {tier}")
+        if key == "air_factory":
+            lines.append(f"Stealth tier: {player.air_stealth_level + 1}")
+        if key == "defense_factory":
+            lines.append(f"Defense range: {player.defense_range_tier + 1}")
+        return "\n".join(lines)
+
+    def _update_buttons(self) -> None:
+        if not self._upgrade_button or not self._stealth_button:
+            return
+        if not self._selected_asset:
+            self._upgrade_button.hide()
+            self._stealth_button.hide()
+            return
+        key = self._selected_asset["key"]
+        if key.endswith("_factory"):
+            self._upgrade_button.show()
+        else:
+            self._upgrade_button.hide()
+        if key == "air_factory":
+            self._stealth_button.show()
+        else:
+            self._stealth_button.hide()
+
+    def _factory_key_from_structure(self, structure_key: str) -> Optional[str]:
+        mapping = {
+            "infantry_factory": "infantry",
+            "armor_factory": "armor",
+            "air_factory": "air",
+            "heli_factory": "heli",
+            "defense_factory": "defense",
+        }
+        return mapping.get(structure_key)
+
+    def _start_drag(self) -> None:
+        if not self._engine or not self._engine.mouseWatcherNode.hasMouse():
+            return
+        self._mouse_dragging = True
+        self._last_mouse_pos = self._engine.mouseWatcherNode.getMouse()
+
+    def _stop_drag(self) -> None:
+        self._mouse_dragging = False
+        self._last_mouse_pos = None
+
+    def _update_drag(self) -> None:
+        if not self._mouse_dragging or not self._engine or self._camera_center is None:
+            return
+        if not self._engine.mouseWatcherNode.hasMouse():
+            return
+        current = self._engine.mouseWatcherNode.getMouse()
+        if self._last_mouse_pos is None:
+            self._last_mouse_pos = current
+            return
+        dx = current.getX() - self._last_mouse_pos.getX()
+        dy = current.getY() - self._last_mouse_pos.getY()
+        self._camera_center.x -= dx * 260
+        self._camera_center.y -= dy * 260
+        self._last_mouse_pos = current
+
     def _unit_color(self, side: str, unit: str) -> Tuple[float, float, float, float]:
         if side == "p1":
             base = (0.2, 0.55, 0.9, 1.0)
@@ -411,6 +650,8 @@ class CncPandaApplication:
             base = (0.9, 0.4, 0.2, 1.0)
         if unit.startswith("def_"):
             return (base[0] * 0.7, base[1] * 0.7, base[2] * 0.7, 1.0)
+        if unit == "helicopter":
+            return (0.6, 0.85, 0.7, 1.0)
         if unit == "aircraft":
             return (0.9, 0.9, 0.95, 1.0)
         return base

@@ -88,6 +88,43 @@ class SimulationRuntime:
         )
         self.state.record(f"{player.name} launched {operation.name}.")
 
+    def upgrade_factory(self, player_key: str, factory_key: str) -> None:
+        player = self._player(player_key)
+        if factory_key not in player.factory_tiers:
+            raise ValueError(f"Unknown factory '{factory_key}'.")
+        if player.structures.get(f"{factory_key}_factory", 0) <= 0:
+            raise ValueError(f"{player.name} has no {factory_key} factory.")
+        tier = player.factory_tiers[factory_key]
+        costs = self.settings.upgrades.factory_upgrade_costs
+        if tier >= len(costs):
+            raise ValueError("Factory already at max tier.")
+        cost = costs[tier]
+        if player.credits < cost:
+            raise ValueError(f"{player.name} needs {cost} credits for upgrade.")
+        player.credits -= cost
+        player.factory_tiers[factory_key] += 1
+        unit_keys = self._factory_unit_keys(factory_key)
+        for unit_key in unit_keys:
+            player.unit_tiers[unit_key] = min(player.factory_tiers[factory_key], 3)
+        if factory_key == "defense":
+            player.defense_range_tier = min(player.factory_tiers[factory_key], 2)
+        self.state.record(f"{player.name} upgraded {factory_key} factory to tier {tier + 2}.")
+
+    def upgrade_stealth(self, player_key: str) -> None:
+        player = self._player(player_key)
+        if player.structures.get("air_factory", 0) <= 0:
+            raise ValueError(f"{player.name} has no air factory.")
+        tier = player.air_stealth_level
+        costs = self.settings.upgrades.stealth_upgrade_costs
+        if tier >= len(costs):
+            raise ValueError("Stealth already maxed.")
+        cost = costs[tier]
+        if player.credits < cost:
+            raise ValueError(f"{player.name} needs {cost} credits for stealth.")
+        player.credits -= cost
+        player.air_stealth_level += 1
+        self.state.record(f"{player.name} upgraded aircraft stealth to tier {player.air_stealth_level + 1}.")
+
     def tick(self, count: int = 1) -> GameState:
         for _ in range(max(1, count)):
             self._step_once()
@@ -102,6 +139,7 @@ class SimulationRuntime:
         self._apply_production()
         air_mods = self._apply_air_postures()
         self._process_operations()
+        self._resolve_combat()
         net_pressure = self._update_frontline(air_mods)
         self._update_escalation(net_pressure, air_mods)
         self._apply_repair()
@@ -134,31 +172,53 @@ class SimulationRuntime:
         settings = self.settings
         for player in (self.state.player1, self.state.player2):
             profile = player.production.normalized()
-            factories = player.structures.get("factory", 0)
-            total_output = settings.production.base_output + factories * settings.production.factory_output
+            infantry_factories = player.structures.get("infantry_factory", 0)
+            armor_factories = player.structures.get("armor_factory", 0)
+            air_factories = player.structures.get("air_factory", 0)
+            heli_factories = player.structures.get("heli_factory", 0)
+            defense_factories = player.structures.get("defense_factory", 0)
+            total_output = settings.production.base_output
             total_output *= player.logistics_factor() * (player.industry_health / 100.0)
-            arms_output = total_output * (profile.arms / 100.0)
-            vehicles_output = total_output * (profile.vehicles / 100.0)
-            air_output = total_output * (profile.aircraft / 100.0)
-            defense_output = total_output * (profile.defense / 100.0)
+            arms_output = total_output * (profile.arms / 100.0) + infantry_factories * settings.production.factory_output
+            vehicles_output = total_output * (profile.vehicles / 100.0) + armor_factories * settings.production.factory_output
+            air_output = total_output * (profile.aircraft / 100.0) + air_factories * settings.production.factory_output
+            rotary_output = total_output * (profile.rotary / 100.0) + heli_factories * settings.production.factory_output
+            defense_output = total_output * (profile.defense / 100.0) + defense_factories * settings.production.factory_output
 
             infantry_def = settings.units["infantry"]
-            player.units.infantry += (arms_output * infantry_def.build_rate) / infantry_def.cost
+            infantry_added = (arms_output * infantry_def.build_rate) / infantry_def.cost
+            self._add_units(player, "infantry", infantry_added)
 
             ifv_share, tank_share = settings.production.armor_split
             ifv_def = settings.units["ifv"]
             tank_def = settings.units["tank"]
-            player.units.ifv += (vehicles_output * ifv_share * ifv_def.build_rate) / ifv_def.cost
-            player.units.tank += (vehicles_output * tank_share * tank_def.build_rate) / tank_def.cost
+            ifv_added = (vehicles_output * ifv_share * ifv_def.build_rate) / ifv_def.cost
+            tank_added = (vehicles_output * tank_share * tank_def.build_rate) / tank_def.cost
+            self._add_units(player, "ifv", ifv_added)
+            self._add_units(player, "tank", tank_added)
 
             aircraft_def = settings.units["aircraft"]
-            player.units.aircraft += (air_output * aircraft_def.build_rate) / aircraft_def.cost
+            air_added = (air_output * aircraft_def.build_rate) / aircraft_def.cost
+            self._add_units(player, "aircraft", air_added)
+
+            heli_def = settings.units["helicopter"]
+            heli_added = (rotary_output * heli_def.build_rate) / heli_def.cost
+            self._add_units(player, "helicopter", heli_added)
 
             def_arms, def_vehicle, def_air = settings.production.defense_split
             defense_rate = settings.production.defense_build_rate
-            player.units.def_arms += defense_output * def_arms * defense_rate
-            player.units.def_vehicle += defense_output * def_vehicle * defense_rate
-            player.units.def_air += defense_output * def_air * defense_rate
+            self._add_units(
+                player, "def_arms", defense_output * def_arms * defense_rate, hp_override=self._defense_hp("def_arms")
+            )
+            self._add_units(
+                player,
+                "def_vehicle",
+                defense_output * def_vehicle * defense_rate,
+                hp_override=self._defense_hp("def_vehicle"),
+            )
+            self._add_units(
+                player, "def_air", defense_output * def_air * defense_rate, hp_override=self._defense_hp("def_air")
+            )
 
     def _apply_air_postures(self) -> Dict[str, AirPostureDefinition]:
         modifiers: Dict[str, AirPostureDefinition] = {}
@@ -260,6 +320,119 @@ class SimulationRuntime:
             defenses[key] = raw
         return defenses
 
+    def _resolve_combat(self) -> None:
+        for attacker, defender in ((self.state.player1, self.state.player2), (self.state.player2, self.state.player1)):
+            self._apply_unit_damage(attacker, defender)
+            self._apply_air_defense(attacker, defender)
+        for player in (self.state.player1, self.state.player2):
+            self._recalculate_counts(player)
+
+    def _apply_unit_damage(self, attacker: PlayerState, defender: PlayerState) -> None:
+        base = self.settings.combat.base_damage_scale
+        for unit_key in ("infantry", "ifv", "tank", "helicopter", "aircraft"):
+            unit_def = self.settings.units[unit_key]
+            count = getattr(attacker.units, unit_key)
+            if count <= 0:
+                continue
+            raw_damage = count * unit_def.damage * base * attacker.logistics_factor()
+            targets = self._target_weights(unit_key)
+            for target_key, weight in targets.items():
+                self._deal_damage(attacker, defender, unit_def, target_key, raw_damage * weight)
+
+            if unit_key == "aircraft":
+                air_targets = {"aircraft": 0.6, "helicopter": 0.4}
+                for target_key, weight in air_targets.items():
+                    self._deal_damage(attacker, defender, unit_def, target_key, raw_damage * 0.5 * weight)
+
+    def _apply_air_defense(self, attacker: PlayerState, defender: PlayerState) -> None:
+        defense_units = defender.units.def_air + defender.structures.get("def_air", 0)
+        if defense_units <= 0:
+            return
+        range_band = 1 + defender.defense_range_tier
+        base = self.settings.combat.base_damage_scale
+        strength = self.settings.defenses["def_air"].strength
+        raw_damage = defense_units * strength * base
+        for target_key in ("aircraft", "helicopter"):
+            target_def = self.settings.units[target_key]
+            multiplier = 1.0 if range_band >= target_def.range_band else self.settings.combat.underrange_penalty
+            if target_key == "aircraft":
+                multiplier *= self._stealth_evasion(attacker)
+            self._apply_damage(defender=attacker, target_key=target_key, damage=raw_damage * multiplier)
+
+    def _deal_damage(
+        self,
+        attacker: PlayerState,
+        defender: PlayerState,
+        attacker_def,
+        target_key: str,
+        damage: float,
+    ) -> None:
+        target_def = self.settings.units.get(target_key)
+        if not target_def:
+            return
+        multiplier = self._range_multiplier(attacker_def.range_band, target_def.range_band)
+        if target_key == "aircraft":
+            multiplier *= self._stealth_evasion(defender)
+        self._apply_damage(defender=defender, target_key=target_key, damage=damage * multiplier)
+
+    def _apply_damage(self, defender: PlayerState, target_key: str, damage: float) -> None:
+        if damage <= 0:
+            return
+        defender.unit_hp[target_key] = max(0.0, defender.unit_hp.get(target_key, 0.0) - damage)
+
+    def _add_units(self, player: PlayerState, unit_key: str, amount: float, hp_override: Optional[float] = None) -> None:
+        if amount <= 0:
+            return
+        hp = hp_override
+        if hp is None:
+            hp = self.settings.units[unit_key].hp
+        player.unit_hp[unit_key] = player.unit_hp.get(unit_key, 0.0) + amount * hp
+        self._sync_count(player, unit_key, hp)
+
+    def _sync_count(self, player: PlayerState, unit_key: str, hp_per_unit: float) -> None:
+        if not hasattr(player.units, unit_key):
+            return
+        setattr(player.units, unit_key, player.unit_hp.get(unit_key, 0.0) / max(1.0, hp_per_unit))
+
+    def _recalculate_counts(self, player: PlayerState) -> None:
+        for unit_key, unit_def in self.settings.units.items():
+            self._sync_count(player, unit_key, unit_def.hp)
+        for unit_key in ("def_arms", "def_vehicle", "def_air"):
+            hp_per_unit = self._defense_hp(unit_key)
+            self._sync_count(player, unit_key, hp_per_unit)
+
+    def _defense_hp(self, unit_key: str) -> float:
+        if unit_key == "def_arms":
+            return 8.0
+        if unit_key == "def_vehicle":
+            return 10.0
+        return 12.0
+
+    def _target_weights(self, unit_key: str) -> Dict[str, float]:
+        if unit_key == "infantry":
+            return {"infantry": 0.6, "ifv": 0.4}
+        if unit_key == "ifv":
+            return {"infantry": 0.3, "ifv": 0.3, "tank": 0.4}
+        if unit_key == "tank":
+            return {"ifv": 0.4, "tank": 0.6}
+        if unit_key == "helicopter":
+            return {"ifv": 0.4, "tank": 0.6}
+        if unit_key == "aircraft":
+            return {"infantry": 0.3, "ifv": 0.35, "tank": 0.35}
+        return {}
+
+    def _range_multiplier(self, attacker_range: int, target_range: int) -> float:
+        if attacker_range > target_range:
+            return self.settings.combat.outrange_bonus
+        if attacker_range < target_range:
+            return self.settings.combat.underrange_penalty
+        return 1.0
+
+    def _stealth_evasion(self, defender: PlayerState) -> float:
+        evasion = defender.air_stealth_level * self.settings.combat.stealth_evasion_per_tier
+        evasion = min(self.settings.combat.max_stealth_evasion, evasion)
+        return max(0.2, 1.0 - evasion)
+
     def _update_escalation(self, net_pressure: float, air_mods: Dict[str, AirPostureDefinition]) -> None:
         air_intensity = 0.0
         if air_mods.get("p1", self.settings.air_postures["ISR"]).key != "ISR":
@@ -323,6 +496,16 @@ class SimulationRuntime:
         if normalized in {"p1", "1", "player1"}:
             return self.state.player1
         return self.state.player2
+
+    def _factory_unit_keys(self, factory_key: str) -> Tuple[str, ...]:
+        mapping = {
+            "infantry": ("infantry",),
+            "armor": ("ifv", "tank"),
+            "air": ("aircraft",),
+            "heli": ("helicopter",),
+            "defense": ("def_arms", "def_vehicle", "def_air"),
+        }
+        return mapping.get(factory_key, tuple())
 
     def _current_phase(self) -> int:
         t1, t2 = self.settings.escalation.phase_thresholds
