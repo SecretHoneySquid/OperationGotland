@@ -70,6 +70,17 @@ class PlayerState:
     build_queue: List[QueuedStructure] = field(default_factory=list)
     operations: List[ActiveOperation] = field(default_factory=list)
     air_posture: str = "ISR"
+    unit_tiers: Dict[str, int] = field(
+        default_factory=lambda: {
+            "infantry": 0,
+            "ifv": 0,
+            "tank": 0,
+            "aircraft": 0,
+            "def_arms": 0,
+            "def_vehicle": 0,
+            "def_air": 0,
+        }
+    )
 
     def build_capacity(self) -> int:
         factories = self.structures.get("factory", 0)

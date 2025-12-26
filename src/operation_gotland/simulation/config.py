@@ -53,6 +53,12 @@ class DefenseDefinition:
 
 
 @dataclass(frozen=True)
+class TierDefinition:
+    name: str
+    asset: str
+
+
+@dataclass(frozen=True)
 class AirPostureDefinition:
     key: str
     cost_per_tick: int
@@ -111,6 +117,58 @@ def _default_defenses() -> Dict[str, DefenseDefinition]:
         "def_arms": DefenseDefinition("def_arms", strength=1.2),
         "def_vehicle": DefenseDefinition("def_vehicle", strength=1.6),
         "def_air": DefenseDefinition("def_air", strength=1.9),
+    }
+
+
+def _default_unit_tiers() -> Dict[str, Tuple[TierDefinition, ...]]:
+    return {
+        "infantry": (
+            TierDefinition("M4A1 Rifle Team", "assets/models/infantry/tier_1.bam"),
+            TierDefinition("M4A1 SOPMOD Team", "assets/models/infantry/tier_2.bam"),
+            TierDefinition("M27 IAR Squad", "assets/models/infantry/tier_3.bam"),
+            TierDefinition("XM7 NGSW Squad", "assets/models/infantry/tier_4.bam"),
+        ),
+        "ifv": (
+            TierDefinition("M2 Bradley", "assets/models/ifv/tier_1.bam"),
+            TierDefinition("M2A3 Bradley", "assets/models/ifv/tier_2.bam"),
+            TierDefinition("M1126 Stryker", "assets/models/ifv/tier_3.bam"),
+            TierDefinition("AMPV", "assets/models/ifv/tier_4.bam"),
+        ),
+        "tank": (
+            TierDefinition("M1A1 Abrams", "assets/models/tank/tier_1.bam"),
+            TierDefinition("M1A2 SEP v2", "assets/models/tank/tier_2.bam"),
+            TierDefinition("M1A2 SEP v3", "assets/models/tank/tier_3.bam"),
+            TierDefinition("M1A2 SEP v4", "assets/models/tank/tier_4.bam"),
+        ),
+        "aircraft": (
+            TierDefinition("F-14 Tomcat", "assets/models/aircraft/tier_1.bam"),
+            TierDefinition("F-16 Fighting Falcon", "assets/models/aircraft/tier_2.bam"),
+            TierDefinition("F-35 Lightning II", "assets/models/aircraft/tier_3.bam"),
+            TierDefinition("F-22 Raptor", "assets/models/aircraft/tier_4.bam"),
+        ),
+    }
+
+
+def _default_defense_tiers() -> Dict[str, Tuple[TierDefinition, ...]]:
+    return {
+        "def_arms": (
+            TierDefinition("M240B Line", "assets/models/defense/arms_tier_1.bam"),
+            TierDefinition("Mk 19 Grid", "assets/models/defense/arms_tier_2.bam"),
+            TierDefinition("M2HB Emplacements", "assets/models/defense/arms_tier_3.bam"),
+            TierDefinition("XM914 Arrays", "assets/models/defense/arms_tier_4.bam"),
+        ),
+        "def_vehicle": (
+            TierDefinition("M220 TOW Line", "assets/models/defense/vehicle_tier_1.bam"),
+            TierDefinition("Javelin Nests", "assets/models/defense/vehicle_tier_2.bam"),
+            TierDefinition("M1134 ATGM Grid", "assets/models/defense/vehicle_tier_3.bam"),
+            TierDefinition("M1299 Overwatch", "assets/models/defense/vehicle_tier_4.bam"),
+        ),
+        "def_air": (
+            TierDefinition("Avenger SHORAD", "assets/models/defense/air_tier_1.bam"),
+            TierDefinition("NASAMS Battery", "assets/models/defense/air_tier_2.bam"),
+            TierDefinition("Patriot Battery", "assets/models/defense/air_tier_3.bam"),
+            TierDefinition("THAAD Battery", "assets/models/defense/air_tier_4.bam"),
+        ),
     }
 
 
@@ -177,3 +235,5 @@ class SimulationSettings:
     air_postures: Dict[str, AirPostureDefinition] = field(default_factory=_default_air_postures)
     operations: Dict[str, OperationDefinition] = field(default_factory=_default_operations)
     objectives: Tuple[ObjectiveDefinition, ...] = field(default_factory=_default_objectives)
+    unit_tiers: Dict[str, Tuple[TierDefinition, ...]] = field(default_factory=_default_unit_tiers)
+    defense_tiers: Dict[str, Tuple[TierDefinition, ...]] = field(default_factory=_default_defense_tiers)
