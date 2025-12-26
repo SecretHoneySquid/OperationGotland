@@ -46,6 +46,18 @@ SUPPLY_ZONE_BONUS = 50
 UNIT_BUILD_RATE = 0.12            # how many units per production point per tick
 COMBAT_SCALE = 0.02               # higher = deadlier exchanges per tick
 
+# Building system
+BUILD_TIMES = {
+    1: 2,
+    2: 3,
+    3: 2,
+    4: 3,
+    5: 2,
+    6: 2,
+    7: 1,
+    8: 1,
+}
+
 
 def clamp(value: float, lo: float, hi: float) -> float:
     return max(lo, min(hi, value))
@@ -61,6 +73,12 @@ class Factory:
 
     def apply(self, player: "Player") -> None:
         self.apply_effect(player)
+
+
+@dataclass
+class BuildOrder:
+    factory: Factory
+    remaining: int
 
 
 @dataclass
@@ -82,10 +100,18 @@ class Player:
     def_arms: float = 0.0
     def_vehicle: float = 0.0
     def_air: float = 0.0
+    build_queue: List[BuildOrder] = field(default_factory=list)
 
     def __post_init__(self) -> None:
-        for key in range(1, 7):
+        for key in range(1, 9):
             self.purchases.setdefault(key, 0)
+
+    @property
+    def logistics_factor(self) -> float:
+        """
+        Dampened effect: 60% baseline + 40% scaled by logistics health.
+        """
+        return 0.6 + 0.4 * (self.logistics_health / 100.0)
 
     @property
     def production_components(self) -> Dict[str, float]:
@@ -99,7 +125,7 @@ class Player:
     @property
     def total_production(self) -> float:
         subtotal = sum(self.production_components.values())
-        return round(subtotal * (self.logistics_health / 100.0), 2)
+        return round(subtotal * self.logistics_factor, 2)
 
     def income_this_tick(self) -> int:
         earned = INCOME_PER_TICK * (self.logistics_health / 100.0)
@@ -116,7 +142,7 @@ class Player:
         """
         Convert production into unit stocks each tick.
         """
-        factor = self.logistics_health / 100.0
+        factor = self.logistics_factor
         self.vehicles += self.vehicle_prod * UNIT_BUILD_RATE * factor
         self.arms += self.arms_prod * UNIT_BUILD_RATE * factor
         self.aircraft += self.aircraft_prod * UNIT_BUILD_RATE * factor
@@ -131,6 +157,18 @@ class Player:
             if not hasattr(self, key):
                 continue
             setattr(self, key, max(0.0, getattr(self, key) - dmg))
+
+    def build_capacity(self) -> int:
+        """
+        Building slots scale with logistics. Minimum 1, max 5.
+        """
+        return clamp(int(self.logistics_health // 30) + 1, 1, 5)
+
+    def queue_build(self, factory: Factory) -> None:
+        if len(self.build_queue) >= self.build_capacity():
+            raise ValueError(f"{self.name} build queue full (cap {self.build_capacity()}).")
+        build_time = BUILD_TIMES.get(factory.key, 2)
+        self.build_queue.append(BuildOrder(factory, build_time))
 
 
 @dataclass
@@ -199,6 +237,20 @@ def make_factories() -> Dict[int, Factory]:
             description=f"Generates +{SUPPLY_ZONE_BONUS} credits every 5th tick.",
             apply_effect=lambda p: setattr(p, "supply_zones", p.supply_zones + 1),
         ),
+        7: Factory(
+            key=7,
+            name="Infantry Defense Network",
+            cost=70,
+            description="Deploys infantry defenses (immediate +30 def_arms units).",
+            apply_effect=lambda p: setattr(p, "def_arms", p.def_arms + 30),
+        ),
+        8: Factory(
+            key=8,
+            name="Vehicle Defense Network",
+            cost=80,
+            description="Deploys vehicle defenses (immediate +30 def_vehicle units).",
+            apply_effect=lambda p: setattr(p, "def_vehicle", p.def_vehicle + 30),
+        ),
     }
 
 
@@ -212,6 +264,8 @@ def describe_player(player: Player) -> str:
         f"Arms {player.arms:.1f}, IFVs {player.vehicles:.1f}, Tanks {player.tanks:.1f}, "
         f"Aircraft {player.aircraft:.1f}, Def(arms/veh/air) "
         f"{player.def_arms:.1f}/{player.def_vehicle:.1f}/{player.def_air:.1f}",
+        f"  Build Queue (cap {player.build_capacity()}): "
+        + (", ".join(f"{bo.factory.name} ({bo.remaining}t)" for bo in player.build_queue) or "empty"),
         "  Purchases: " + ", ".join(f"F{key} x{count}" for key, count in sorted(player.purchases.items())),
     ]
     return "\n".join(parts)
@@ -253,6 +307,7 @@ def advance_tick(state: GameState) -> Tuple[float, float]:
 
     state.player1.earn_income()
     state.player2.earn_income()
+    process_builds(state)
     state.player1.produce_units()
     state.player2.produce_units()
 
@@ -269,6 +324,24 @@ def advance_tick(state: GameState) -> Tuple[float, float]:
         f"Tick: P1 prod {p1_prod:.2f} vs P2 {p2_prod:.2f} -> frontline shift {delta:+.2f} to {state.frontline_ratio:.2f}%"
     )
     return p1_prod, p2_prod
+
+
+def process_builds(state: GameState) -> None:
+    """
+    Progress build queues and deliver completed factories.
+    """
+    for player in (state.player1, state.player2):
+        if not player.build_queue:
+            continue
+        still_building: List[BuildOrder] = []
+        for order in player.build_queue:
+            order.remaining -= 1
+            if order.remaining <= 0:
+                player.apply_factory(order.factory)
+                state.record(f"{player.name} completed {order.factory.name}.")
+            else:
+                still_building.append(order)
+        player.build_queue = still_building
 
 
 def resolve_combat(state: GameState) -> None:
@@ -303,7 +376,7 @@ def casualties_from(attacker: Player, defender: Player) -> Dict[str, float]:
         "tanks": {"vehicles": 0.8, "tanks": 0.5, "def_vehicle": 0.6, "def_arms": 0.4},
         "aircraft": {
             "tanks": 0.9,
-            "vehicles": 0.7,
+            "vehicles": 1.0,
             "aircraft": 0.6,
             "def_air": 0.4,
             "def_vehicle": 0.35,
@@ -389,12 +462,14 @@ def buy_factory(
             f"{player.name} lacks credits ({player.credits}) for {quantity}x {factory.name} (cost {total_cost})."
         )
 
-    player.credits -= total_cost
+    # Queue builds respecting capacity
     for _ in range(quantity):
-        player.apply_factory(factory)
+        player.queue_build(factory)
+    player.credits -= total_cost
+
     plural = "factory" if quantity == 1 else "factories"
-    state.record(f"{player.name} bought {quantity} {factory.name} {plural} for {total_cost} credits.")
-    return f"{player.name} bought {quantity}x {factory.name}. Remaining credits: {player.credits}"
+    state.record(f"{player.name} queued {quantity} {factory.name} {plural} (build) for {total_cost} credits.")
+    return f"{player.name} queued {quantity}x {factory.name}. Remaining credits: {player.credits}"
 
 
 def show_status(state: GameState) -> str:
@@ -413,7 +488,7 @@ def print_help() -> str:
         "Commands:\n"
         "  status                  -> show both players and the front line\n"
         "  store                   -> list factories and effects\n"
-        "  buy <p1|p2> <id> [n|max]-> purchase factories (single, n copies, or max affordable)\n"
+        "  buy <p1|p2> <id> [n|max]-> queue factory builds (single, n copies, or max affordable)\n"
         "  tick [n]                -> advance the simulation by n ticks (default 1)\n"
         "  log                     -> show recent events\n"
         "  help                    -> show this message\n"
