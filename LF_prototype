@@ -376,10 +376,10 @@ def casualties_from(attacker: Player, defender: Player) -> Dict[str, float]:
         "tanks": {"vehicles": 0.8, "tanks": 0.5, "def_vehicle": 0.6, "def_arms": 0.4},
         "aircraft": {
             "tanks": 0.9,
-            "vehicles": 1.0,
+            "vehicles": 1.35,  # buff vs IFVs/vehicles
             "aircraft": 0.6,
             "def_air": 0.4,
-            "def_vehicle": 0.35,
+            "def_vehicle": 0.5,  # more threat to vehicle defenses
             "def_arms": 0.35,
             "arms": 0.25,
         },
