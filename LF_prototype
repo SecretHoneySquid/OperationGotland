@@ -48,6 +48,7 @@ BASE_CREDITS = 120
 INCOME_PER_TICK = 25.0
 SUPPLY_ZONE_BONUS = 50
 UNIT_BUILD_RATE = 0.12            # how many units per production point per tick
+AIR_UNIT_BUILD_RATE = 0.06        # aircraft build slower but hit harder
 COMBAT_SCALE = 0.04               # higher = deadlier exchanges per tick
 SORTIE_DURATION = 3               # ticks a sortie aircraft are away
 
@@ -166,7 +167,7 @@ class Player:
         factor = self.logistics_factor
         self.vehicles += self.vehicle_prod * UNIT_BUILD_RATE * factor
         self.arms += self.arms_prod * UNIT_BUILD_RATE * factor
-        self.aircraft += self.aircraft_prod * UNIT_BUILD_RATE * factor
+        self.aircraft += self.aircraft_prod * AIR_UNIT_BUILD_RATE * factor
         self.def_air += self.defense_prod * UNIT_BUILD_RATE * factor * 0.4
         self.def_vehicle += self.defense_prod * UNIT_BUILD_RATE * factor * 0.35
         self.def_arms += self.defense_prod * UNIT_BUILD_RATE * factor * 0.25
@@ -351,6 +352,11 @@ def advance_tick(state: GameState) -> Tuple[float, float]:
     state.player2.earn_income()
     process_builds(state)
     process_sorties(state)
+    if state.ticks_elapsed % 5 == 0:
+        for player in (state.player1, state.player2):
+            if player.helipads > 0:
+                player.helicopters += player.helipads * 1
+                state.record(f"{player.name} received {player.helipads} reinforcement helicopters (helipad drip).")
     state.player1.produce_units()
     state.player2.produce_units()
 
@@ -501,14 +507,14 @@ def casualties_from(attacker: Player, defender: Player) -> Dict[str, float]:
         "vehicles": {"arms": 0.7, "vehicles": 0.25},
         "tanks": {"vehicles": 0.8, "tanks": 0.5, "def_vehicle": 0.6, "def_arms": 0.4},
         "aircraft": {
-            "tanks": 0.9,
-            "vehicles": 1.9,  # further buff vs IFVs/vehicles
-            "aircraft": 0.6,
-            "def_air": 0.4,
-            "def_vehicle": 0.5,  # more threat to vehicle defenses
-            "def_arms": 0.35,
+            "tanks": 1.05,
+            "vehicles": 2.1,  # stronger vs IFVs/vehicles
+            "aircraft": 0.7,
+            "def_air": 0.3,
+            "def_vehicle": 0.35,  # harder to crack defenses head-on
+            "def_arms": 0.25,
             "arms": 0.25,
-            "missiles": 0.8,
+            "missiles": 0.7,
         },
         "helicopters": {
             "arms": 1.0,
@@ -520,16 +526,16 @@ def casualties_from(attacker: Player, defender: Player) -> Dict[str, float]:
             "missiles": 0.4,
         },
         "missiles": {
-            "def_air": 0.5,
-            "def_vehicle": 0.6,
-            "def_arms": 0.4,
+            "def_air": 0.45,
+            "def_vehicle": 0.5,
+            "def_arms": 0.35,
             "vehicles": 0.25,
             "arms": 0.2,
             "helicopters": 0.2,
         },
-        "def_arms": {"arms": 0.7},
-        "def_vehicle": {"vehicles": 0.7, "helicopters": 0.3},
-        "def_air": {"aircraft": 1.0, "helicopters": 0.9, "missiles": 0.6},
+        "def_arms": {"arms": 0.9},
+        "def_vehicle": {"vehicles": 0.95, "helicopters": 0.35},
+        "def_air": {"aircraft": 1.2, "helicopters": 1.0, "missiles": 0.7},
     }
 
     attacker_counts = {
