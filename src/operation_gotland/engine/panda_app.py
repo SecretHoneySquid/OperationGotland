@@ -131,7 +131,7 @@ class CncPandaApplication:
         return NodePath(lines.create())
 
     def _build_frontline_band(self, color: Tuple[float, float, float, float]) -> "NodePath":
-        from panda3d.core import CardMaker  # type: ignore
+        from panda3d.core import CardMaker, NodePath  # type: ignore
 
         band = CardMaker("frontline")
         band.setFrame(-2.0, 2.0, -self._map_width / 2, self._map_width / 2)
