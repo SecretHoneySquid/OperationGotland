@@ -33,6 +33,7 @@ class CncPandaApplication:
         self._objective_nodes: List["NodePath"] = []
         self._unit_markers: Dict[str, Dict[str, List["NodePath"]]] = {}
         self._structure_nodes: Dict[str, Dict[str, List["NodePath"]]] = {}
+        self._structure_labels: Dict[str, Dict[str, List["OnscreenText"]]] = {}
         self._sorties: List[Sortie] = []
         self._ui_text: Optional["OnscreenText"] = None
         self._info_text: Optional["OnscreenText"] = None
@@ -42,6 +43,30 @@ class CncPandaApplication:
         self._side_button: Optional["DirectButton"] = None
         self._build_side: str = "p1"
         self._selected_asset: Optional[Dict[str, str]] = None
+        self._factory_names = {
+            "infantry_factory": "Infantry",
+            "armor_factory": "Armor",
+            "air_factory": "Air",
+            "heli_factory": "Heli",
+            "defense_factory": "Defense",
+            "income": "Income",
+            "logistics_hub": "Logistics",
+            "def_arms": "AA-Inf",
+            "def_vehicle": "AA-Arm",
+            "def_air": "AA-Air",
+        }
+        self._factory_colors = {
+            "infantry_factory": (0.25, 0.55, 0.3, 1.0),
+            "armor_factory": (0.25, 0.35, 0.6, 1.0),
+            "air_factory": (0.6, 0.6, 0.2, 1.0),
+            "heli_factory": (0.4, 0.6, 0.4, 1.0),
+            "defense_factory": (0.6, 0.3, 0.3, 1.0),
+            "income": (0.35, 0.35, 0.35, 1.0),
+            "logistics_hub": (0.3, 0.45, 0.45, 1.0),
+            "def_arms": (0.4, 0.35, 0.2, 1.0),
+            "def_vehicle": (0.4, 0.25, 0.35, 1.0),
+            "def_air": (0.2, 0.35, 0.45, 1.0),
+        }
         self._picker: Optional["CollisionTraverser"] = None
         self._picker_queue: Optional["CollisionHandlerQueue"] = None
         self._picker_ray: Optional["CollisionRay"] = None
@@ -52,7 +77,7 @@ class CncPandaApplication:
         self._map_length = 2000.0
         self._map_width = 700.0
         self._tick_accumulator = 0.0
-        self._tick_interval = 0.4
+        self._tick_interval = 1.0
         self._mouse_dragging = False
         self._last_mouse_pos = None
         self._ui_right_start = 0.0
@@ -263,23 +288,30 @@ class CncPandaApplication:
             ("def_air", (-80, 0, 0)),
         ]
         self._structure_nodes = {"p1": {}, "p2": {}}
-        for side, base, color in (
+        self._structure_labels = {"p1": {}, "p2": {}}
+        for side, base, side_color in (
             ("p1", p1_base, (0.2, 0.55, 0.9, 1.0)),
             ("p2", p2_base, (0.9, 0.4, 0.2, 1.0)),
         ):
             for key, pos in structure_slots:
                 nodes: List["NodePath"] = []
+                labels: List["OnscreenText"] = []
+                color = self._factory_colors.get(key, side_color)
+                label_text = self._factory_names.get(key, key)
                 for idx in range(3):
                     node = base.attachNewNode(f"{side}_{key}_{idx}")
                     node.setTag("asset_type", "structure")
                     node.setTag("asset_key", key)
                     node.setTag("asset_side", side)
                     node.setTag("asset_index", str(idx))
-                    self._spawn_pad(node, (0, 0, 0), 18, (0.08, 0.1, 0.12, 1.0))
-                    self._spawn_box(node, (0, 0, 0), (24, 24, 16), color, collidable=True)
+                    self._spawn_pad(node, (0, 0, 0), 20, (0.08, 0.1, 0.12, 1.0))
+                    self._spawn_box(node, (0, 0, 0), (28, 28, 18), color, collidable=True)
                     node.setPos(pos[0] + idx * 28, pos[1], pos[2])
                     nodes.append(node)
+                    label = self._spawn_label(node, label_text)
+                    labels.append(label)
                 self._structure_nodes[side].setdefault(key, []).extend(nodes)
+                self._structure_labels[side].setdefault(key, []).extend(labels)
 
     def _spawn_runway(self, parent: "NodePath", pos: Tuple[float, float, float]) -> None:
         from panda3d.core import CardMaker  # type: ignore
@@ -300,6 +332,22 @@ class CncPandaApplication:
         pad_np.setPos(*pos)
         pad_np.setP(-90)
         pad_np.setColor(*color)
+
+    def _spawn_label(self, parent: "NodePath", text: str) -> "OnscreenText":
+        from direct.gui.DirectGui import OnscreenText  # type: ignore
+        from panda3d.core import TextNode  # type: ignore
+
+        label = OnscreenText(
+            text=text,
+            pos=(0, 0),
+            scale=12,
+            fg=(0.85, 0.88, 0.92, 1.0),
+            align=TextNode.ACenter,
+            parent=parent,
+            mayChange=True,
+        )
+        label.setZ(22)
+        return label
 
     def _spawn_box(
         self,
@@ -584,6 +632,12 @@ class CncPandaApplication:
                     else:
                         node.setColorScale(0.4, 0.4, 0.4, 0.6)
                         node.show()
+                labels = self._structure_labels.get(side_key, {}).get(key, [])
+                for idx, label in enumerate(labels):
+                    if idx < built:
+                        label.setColor(0.95, 0.95, 1.0, 1.0)
+                    else:
+                        label.setColor(0.5, 0.5, 0.5, 1.0)
         self._highlight_selection()
 
     def _handle_click(self) -> None:
@@ -617,6 +671,7 @@ class CncPandaApplication:
             return
         try:
             self.runtime.queue_structure(side, asset_key, 1)
+            self._pulse_build_slot(side, asset_key, index)
         except ValueError:
             return
 
@@ -726,6 +781,7 @@ class CncPandaApplication:
     def _handle_build_button(self, key: str) -> None:
         try:
             self.runtime.queue_structure(self._build_side, key, 1)
+            self._pulse_next_slot(self._build_side, key)
         except ValueError:
             return
 
@@ -733,6 +789,16 @@ class CncPandaApplication:
         self._build_side = "p2" if self._build_side == "p1" else "p1"
         if self._side_button:
             self._side_button["text"] = f"Side: {self._build_side.upper()}"
+
+    def _pulse_next_slot(self, side: str, key: str) -> None:
+        player = self.runtime.state.player1 if side == "p1" else self.runtime.state.player2
+        current = player.structures.get(key, 0)
+        self._pulse_build_slot(side, key, current)
+
+    def _pulse_build_slot(self, side: str, key: str, index: int) -> None:
+        nodes = self._structure_nodes.get(side, {}).get(key, [])
+        if 0 <= index < len(nodes):
+            nodes[index].setColorScale(1.4, 1.4, 1.4, 1.0)
 
     def _start_drag(self) -> None:
         if not self._engine or not self._engine.mouseWatcherNode.hasMouse():
