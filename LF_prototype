@@ -507,22 +507,23 @@ def casualties_from(attacker: Player, defender: Player) -> Dict[str, float]:
         "vehicles": {"arms": 0.7, "vehicles": 0.25},
         "tanks": {"vehicles": 0.8, "tanks": 0.5, "def_vehicle": 0.6, "def_arms": 0.4},
         "aircraft": {
-            "tanks": 1.05,
-            "vehicles": 2.1,  # stronger vs IFVs/vehicles
+            "tanks": 1.25,
+            "vehicles": 2.4,  # strong vs IFVs/vehicles
             "aircraft": 0.7,
-            "def_air": 0.3,
-            "def_vehicle": 0.35,  # harder to crack defenses head-on
+            "def_air": 0.35,
+            "def_vehicle": 0.38,  # still slowed by defenses
             "def_arms": 0.25,
             "arms": 0.25,
             "missiles": 0.7,
         },
         "helicopters": {
             "arms": 1.0,
-            "vehicles": 1.2,
+            "vehicles": 1.4,
+            "tanks": 0.9,
             "helicopters": 0.6,
             "aircraft": 0.2,
-            "def_air": 0.5,
-            "def_vehicle": 0.3,
+            "def_air": 0.55,
+            "def_vehicle": 0.35,
             "missiles": 0.4,
         },
         "missiles": {
