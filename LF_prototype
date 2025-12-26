@@ -49,6 +49,7 @@ INCOME_PER_TICK = 25.0
 SUPPLY_ZONE_BONUS = 50
 UNIT_BUILD_RATE = 0.12            # how many units per production point per tick
 AIR_UNIT_BUILD_RATE = 0.06        # aircraft build slower but hit harder
+BUILD_QUEUE_MAX = 9
 COMBAT_SCALE = 0.04               # higher = deadlier exchanges per tick
 SORTIE_DURATION = 3               # ticks a sortie aircraft are away
 
@@ -191,8 +192,8 @@ class Player:
         return clamp(2 + self.workshops, 1, 9)
 
     def queue_build(self, factory: Factory) -> None:
-        if len(self.build_queue) >= self.build_capacity():
-            raise ValueError(f"{self.name} build queue full (cap {self.build_capacity()}).")
+        if len(self.build_queue) >= BUILD_QUEUE_MAX:
+            raise ValueError(f"{self.name} purchase queue full (max {BUILD_QUEUE_MAX}).")
         build_time = BUILD_TIMES.get(factory.key, 2)
         if len(self.build_queue) >= 9:
             raise ValueError(f"{self.name} purchase queue full (max 9).")
@@ -330,7 +331,7 @@ def describe_player(player: Player) -> str:
         f"Arms {player.arms:.1f}, IFVs {player.vehicles:.1f}, Tanks {player.tanks:.1f}, "
         f"Aircraft {player.aircraft:.1f}, Helicopters {player.helicopters:.1f}, Missiles {player.missile_launchers:.1f}, "
         f"Ground Def (arms/veh) {player.def_arms:.1f}/{player.def_vehicle:.1f}, Air Def {player.def_air:.1f}",
-        f"  Build Queue (cap {player.build_capacity()}): "
+        f"  Build Queue (processing {player.build_capacity()} | queue {len(player.build_queue)}/{BUILD_QUEUE_MAX}): "
         + (", ".join(f"{bo.factory.name} ({bo.remaining}t)" for bo in player.build_queue) or "empty"),
         "  Purchases: " + ", ".join(f"F{key} x{count}" for key, count in sorted(player.purchases.items())),
     ]
