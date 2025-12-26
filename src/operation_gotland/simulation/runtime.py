@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from typing import Dict, Optional, Tuple
 
 from .config import AirPostureDefinition, SimulationSettings
-from .models import ActiveOperation, FrontlineState, GameState, ObjectiveState, PlayerState, QueuedStructure
+from .models import ActiveOperation, FrontlineState, GameState, ObjectiveState, PlayerState, ProductionOutput, QueuedStructure
 from .store import StructureBlueprint
 
 
@@ -184,6 +184,15 @@ class SimulationRuntime:
             rotary_output = total_output * (profile.rotary / 100.0) + heli_factories * settings.production.factory_output
             defense_output = total_output * (profile.defense / 100.0) + defense_factories * settings.production.factory_output
 
+            player.last_output = ProductionOutput(
+                arms=arms_output,
+                vehicles=vehicles_output,
+                aircraft=air_output,
+                rotary=rotary_output,
+                defense=defense_output,
+                total=total_output,
+            )
+
             infantry_def = settings.units["infantry"]
             infantry_added = (arms_output * infantry_def.build_rate) / infantry_def.cost
             self._add_units(player, "infantry", infantry_added)
@@ -320,14 +329,17 @@ class SimulationRuntime:
         return defenses
 
     def _resolve_combat(self) -> None:
+        total_damage = 0.0
         for attacker, defender in ((self.state.player1, self.state.player2), (self.state.player2, self.state.player1)):
-            self._apply_unit_damage(attacker, defender)
-            self._apply_air_defense(attacker, defender)
+            total_damage += self._apply_unit_damage(attacker, defender)
+            total_damage += self._apply_air_defense(attacker, defender)
         for player in (self.state.player1, self.state.player2):
             self._recalculate_counts(player)
+        self.state.combat_intensity = total_damage
 
-    def _apply_unit_damage(self, attacker: PlayerState, defender: PlayerState) -> None:
+    def _apply_unit_damage(self, attacker: PlayerState, defender: PlayerState) -> float:
         base = self.settings.combat.base_damage_scale
+        total_damage = 0.0
         for unit_key in ("infantry", "ifv", "tank", "helicopter", "aircraft"):
             unit_def = self.settings.units[unit_key]
             count = getattr(attacker.units, unit_key)
@@ -336,27 +348,30 @@ class SimulationRuntime:
             raw_damage = count * unit_def.damage * base * attacker.logistics_factor()
             targets = self._target_weights(unit_key)
             for target_key, weight in targets.items():
-                self._deal_damage(attacker, defender, unit_def, target_key, raw_damage * weight)
+                total_damage += self._deal_damage(attacker, defender, unit_def, target_key, raw_damage * weight)
 
             if unit_key == "aircraft":
                 air_targets = {"aircraft": 0.6, "helicopter": 0.4}
                 for target_key, weight in air_targets.items():
-                    self._deal_damage(attacker, defender, unit_def, target_key, raw_damage * 0.5 * weight)
+                    total_damage += self._deal_damage(attacker, defender, unit_def, target_key, raw_damage * 0.5 * weight)
+        return total_damage
 
-    def _apply_air_defense(self, attacker: PlayerState, defender: PlayerState) -> None:
+    def _apply_air_defense(self, attacker: PlayerState, defender: PlayerState) -> float:
         defense_units = defender.units.def_air + defender.structures.get("def_air", 0)
         if defense_units <= 0:
-            return
+            return 0.0
         range_band = 1 + defender.defense_range_tier
         base = self.settings.combat.base_damage_scale
         strength = self.settings.defenses["def_air"].strength
         raw_damage = defense_units * strength * base
+        total_damage = 0.0
         for target_key in ("aircraft", "helicopter"):
             target_def = self.settings.units[target_key]
             multiplier = 1.0 if range_band >= target_def.range_band else self.settings.combat.underrange_penalty
             if target_key == "aircraft":
                 multiplier *= self._stealth_evasion(attacker)
-            self._apply_damage(defender=attacker, target_key=target_key, damage=raw_damage * multiplier)
+            total_damage += self._apply_damage(defender=attacker, target_key=target_key, damage=raw_damage * multiplier)
+        return total_damage
 
     def _deal_damage(
         self,
@@ -365,19 +380,22 @@ class SimulationRuntime:
         attacker_def,
         target_key: str,
         damage: float,
-    ) -> None:
+    ) -> float:
         target_def = self.settings.units.get(target_key)
         if not target_def:
-            return
+            return 0.0
         multiplier = self._range_multiplier(attacker_def.range_band, target_def.range_band)
         if target_key == "aircraft":
             multiplier *= self._stealth_evasion(defender)
-        self._apply_damage(defender=defender, target_key=target_key, damage=damage * multiplier)
+        return self._apply_damage(defender=defender, target_key=target_key, damage=damage * multiplier)
 
-    def _apply_damage(self, defender: PlayerState, target_key: str, damage: float) -> None:
+    def _apply_damage(self, defender: PlayerState, target_key: str, damage: float) -> float:
         if damage <= 0:
-            return
-        defender.unit_hp[target_key] = max(0.0, defender.unit_hp.get(target_key, 0.0) - damage)
+            return 0.0
+        before = defender.unit_hp.get(target_key, 0.0)
+        after = max(0.0, before - damage)
+        defender.unit_hp[target_key] = after
+        return before - after
 
     def _add_units(self, player: PlayerState, unit_key: str, amount: float, hp_override: Optional[float] = None) -> None:
         if amount <= 0:

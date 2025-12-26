@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import math
+import random
 from typing import Dict, List, Optional, Tuple
 
 from operation_gotland.simulation.runtime import SimulationRuntime
@@ -14,6 +16,43 @@ class Sortie:
     side: str
     progress: float
     speed: float
+
+
+@dataclass
+class Tracer:
+    node: "NodePath"
+    start: "LPoint3f"
+    end: "LPoint3f"
+    age: float
+    duration: float
+    color: Tuple[float, float, float, float]
+
+
+@dataclass
+class Explosion:
+    node: "NodePath"
+    age: float
+    duration: float
+    max_scale: float
+
+
+@dataclass
+class Convoy:
+    node: "NodePath"
+    side: str
+    kind: str
+    progress: float
+    speed: float
+    slot: int
+
+
+@dataclass
+class Missile:
+    node: "NodePath"
+    start: "LPoint3f"
+    end: "LPoint3f"
+    age: float
+    duration: float
 
 
 class CncPandaApplication:
@@ -30,17 +69,30 @@ class CncPandaApplication:
         self._frontline_zone_p1: Optional["NodePath"] = None
         self._frontline_zone_p2: Optional["NodePath"] = None
         self._frontline_center: Optional["NodePath"] = None
+        self._battle_lane: Optional["NodePath"] = None
         self._objective_nodes: List["NodePath"] = []
         self._unit_markers: Dict[str, Dict[str, List["NodePath"]]] = {}
         self._structure_nodes: Dict[str, Dict[str, List["NodePath"]]] = {}
         self._structure_labels: Dict[str, Dict[str, List["OnscreenText"]]] = {}
         self._sorties: List[Sortie] = []
+        self._convoys: List[Convoy] = []
+        self._tracers: List[Tracer] = []
+        self._explosions: List[Explosion] = []
+        self._missiles: List[Missile] = []
+        self._smoke_nodes: List["NodePath"] = []
+        self._unit_offsets: Dict[str, Dict[str, List[Tuple[float, float]]]] = {}
+        self._base_positions: Dict[str, "LPoint3f"] = {}
+        self._rng = random.Random(42)
         self._ui_text: Optional["OnscreenText"] = None
         self._info_text: Optional["OnscreenText"] = None
         self._upgrade_button: Optional["DirectButton"] = None
         self._stealth_button: Optional["DirectButton"] = None
         self._build_buttons: List["DirectButton"] = []
         self._side_button: Optional["DirectButton"] = None
+        self._op_buttons: List["DirectButton"] = []
+        self._air_buttons: List["DirectButton"] = []
+        self._prod_text_p1: Optional["OnscreenText"] = None
+        self._prod_text_p2: Optional["OnscreenText"] = None
         self._build_side: str = "p1"
         self._selected_asset: Optional[Dict[str, str]] = None
         self._factory_names = {
@@ -73,7 +125,7 @@ class CncPandaApplication:
         self._key_state: Dict[str, bool] = {"left": False, "right": False, "up": False, "down": False}
         self._camera_center = None
         self._camera_height = 260.0
-        self._camera_pitch = -42.0
+        self._camera_pitch = -45.0
         self._map_length = 2000.0
         self._map_width = 700.0
         self._tick_accumulator = 0.0
@@ -82,6 +134,9 @@ class CncPandaApplication:
         self._last_mouse_pos = None
         self._ui_right_start = 0.0
         self._ui_bottom_end = 0.0
+        self._tracer_timer = 0.0
+        self._explosion_timer = 0.0
+        self._missile_timer = 0.0
 
     def boot(self) -> None:
         from direct.showbase.ShowBase import ShowBase  # type: ignore
@@ -134,10 +189,10 @@ class CncPandaApplication:
         grid.reparentTo(self._world)
         grid.setZ(0.1)
 
-        battle_lane = self._build_frontline_band(color=(0.08, 0.1, 0.11, 0.6), width=220.0)
-        battle_lane.setX(0)
-        battle_lane.setZ(0.05)
-        battle_lane.reparentTo(self._world)
+        self._battle_lane = self._build_frontline_band(color=(0.08, 0.1, 0.11, 0.6), width=260.0)
+        self._battle_lane.setX(0)
+        self._battle_lane.setZ(0.05)
+        self._battle_lane.reparentTo(self._world)
 
         self._frontline_zone_p2 = self._build_frontline_band(color=(0.7, 0.2, 0.15, 0.18))
         self._frontline_zone_p2.reparentTo(self._world)
@@ -146,15 +201,18 @@ class CncPandaApplication:
         self._frontline_center = self._build_frontline_band(color=(0.9, 0.9, 0.9, 0.4), width=12.0)
         self._frontline_center.reparentTo(self._world)
 
+        self._build_smoke()
+
         self._build_bases()
         self._build_objectives()
         self._build_unit_markers()
         self._build_sorties()
+        self._build_convoys()
         self._build_ui_panels()
 
         self._ui_text = OnscreenText(
             text="",
-            pos=(-1.28, -0.86),
+            pos=(-1.28, 0.88),
             scale=0.042,
             fg=(0.9, 0.92, 0.95, 1.0),
             align=TextNode.ALeft,
@@ -162,8 +220,8 @@ class CncPandaApplication:
         )
         self._info_text = OnscreenText(
             text="",
-            pos=(self._ui_right_start + 0.06, 0.72),
-            scale=0.038,
+            pos=(self._ui_right_start + 0.06, 0.74),
+            scale=0.036,
             fg=(0.9, 0.92, 0.95, 1.0),
             align=TextNode.ALeft,
             parent=base.aspect2d,
@@ -171,32 +229,32 @@ class CncPandaApplication:
         )
         OnscreenText(
             text="P1 WEST",
-            pos=(-1.28, 0.92),
-            scale=0.05,
-            fg=(0.4, 0.7, 0.95, 1.0),
+            pos=(-1.28, 0.96),
+            scale=0.055,
+            fg=(0.45, 0.75, 0.95, 1.0),
             align=TextNode.ALeft,
             parent=base.aspect2d,
         )
         OnscreenText(
             text="P2 EAST",
-            pos=(0.6, 0.92),
-            scale=0.05,
-            fg=(0.95, 0.6, 0.35, 1.0),
+            pos=(0.7, 0.96),
+            scale=0.055,
+            fg=(0.95, 0.65, 0.35, 1.0),
             align=TextNode.ALeft,
             parent=base.aspect2d,
         )
         self._upgrade_button = DirectButton(
             text="Upgrade Tech",
-            scale=0.052,
-            pos=(self._ui_right_start + 0.2, 0, 0.26),
+            scale=0.05,
+            pos=(self._ui_right_start + 0.2, 0, 0.3),
             command=self._handle_upgrade_click,
             parent=base.aspect2d,
         )
         self._upgrade_button.hide()
         self._stealth_button = DirectButton(
             text="Upgrade Stealth",
-            scale=0.052,
-            pos=(self._ui_right_start + 0.2, 0, 0.14),
+            scale=0.05,
+            pos=(self._ui_right_start + 0.2, 0, 0.2),
             command=self._handle_stealth_click,
             parent=base.aspect2d,
         )
@@ -204,8 +262,8 @@ class CncPandaApplication:
 
         build_label = DirectLabel(
             text="Build",
-            scale=0.055,
-            pos=(self._ui_right_start + 0.12, 0, 0.0),
+            scale=0.052,
+            pos=(self._ui_right_start + 0.12, 0, 0.04),
             text_fg=(0.9, 0.92, 0.95, 1.0),
             frameColor=(0, 0, 0, 0),
             parent=base.aspect2d,
@@ -213,7 +271,7 @@ class CncPandaApplication:
         self._side_button = DirectButton(
             text=f"Side: {self._build_side.upper()}",
             scale=0.042,
-            pos=(self._ui_right_start + 0.2, 0, -0.08),
+            pos=(self._ui_right_start + 0.2, 0, -0.06),
             command=self._toggle_side,
             parent=base.aspect2d,
         )
@@ -237,6 +295,79 @@ class CncPandaApplication:
                 parent=base.aspect2d,
             )
             self._build_buttons.append(button)
+
+        ops_label = DirectLabel(
+            text="OPS",
+            scale=0.05,
+            pos=(-1.2, 0, self._ui_bottom_end - 0.06),
+            text_fg=(0.9, 0.84, 0.6, 1.0),
+            frameColor=(0, 0, 0, 0),
+            parent=base.aspect2d,
+        )
+        air_label = DirectLabel(
+            text="AIR",
+            scale=0.05,
+            pos=(0.3, 0, self._ui_bottom_end - 0.06),
+            text_fg=(0.6, 0.8, 0.95, 1.0),
+            frameColor=(0, 0, 0, 0),
+            parent=base.aspect2d,
+        )
+
+        self._prod_text_p1 = OnscreenText(
+            text="",
+            pos=(-1.28, self._ui_bottom_end - 0.16),
+            scale=0.038,
+            fg=(0.85, 0.9, 0.98, 1.0),
+            align=TextNode.ALeft,
+            parent=base.aspect2d,
+            mayChange=True,
+        )
+        self._prod_text_p2 = OnscreenText(
+            text="",
+            pos=(-1.28, self._ui_bottom_end - 0.26),
+            scale=0.038,
+            fg=(0.98, 0.85, 0.7, 1.0),
+            align=TextNode.ALeft,
+            parent=base.aspect2d,
+            mayChange=True,
+        )
+
+        self._op_buttons = []
+        op_items = [
+            ("Strike Factories", "strike_factories"),
+            ("Hit Logistics", "hit_logistics"),
+            ("Suppress Defenses", "suppress_defenses"),
+            ("Missile Barrage", "missile_barrage"),
+        ]
+        for idx, (label, key) in enumerate(op_items):
+            button = DirectButton(
+                text=label,
+                scale=0.04,
+                pos=(-0.6 + idx * 0.32, 0, self._ui_bottom_end - 0.14),
+                command=self._handle_operation_button,
+                extraArgs=[key],
+                parent=base.aspect2d,
+            )
+            self._op_buttons.append(button)
+
+        self._air_buttons = []
+        air_items = [
+            ("ISR", "ISR"),
+            ("SEAD", "SEAD"),
+            ("INTERDICT", "INTERDICT"),
+            ("DEEP", "DEEP_STRIKE"),
+            ("CAS", "CAS"),
+        ]
+        for idx, (label, key) in enumerate(air_items):
+            button = DirectButton(
+                text=label,
+                scale=0.04,
+                pos=(0.1 + idx * 0.18, 0, self._ui_bottom_end - 0.24),
+                command=self._handle_air_posture,
+                extraArgs=[key],
+                parent=base.aspect2d,
+            )
+            self._air_buttons.append(button)
 
         self._picker = CollisionTraverser()
         self._picker_queue = CollisionHandlerQueue()
@@ -280,12 +411,28 @@ class CncPandaApplication:
         np.setTransparency(True)
         return np
 
+    def _build_smoke(self) -> None:
+        assert self._world is not None
+        self._smoke_nodes = []
+        for idx in range(12):
+            node = self._world.attachNewNode(f"smoke_{idx}")
+            self._spawn_box(node, (0, 0, 0), (14, 14, 40), (0.2, 0.2, 0.22, 0.4))
+            offset_x = self._rng.uniform(-180, 180)
+            offset_y = self._rng.uniform(-140, 140)
+            node.setPos(offset_x, offset_y, 8)
+            node.setColorScale(1, 1, 1, 0.6)
+            self._smoke_nodes.append(node)
+
     def _build_bases(self) -> None:
         assert self._world is not None
         p1_base = self._world.attachNewNode("base_p1")
         p2_base = self._world.attachNewNode("base_p2")
         p1_base.setPos(-self._map_length / 2 + 180, 0, 0)
         p2_base.setPos(self._map_length / 2 - 180, 0, 0)
+        self._base_positions = {
+            "p1": p1_base.getPos(self._world),
+            "p2": p2_base.getPos(self._world),
+        }
 
         for idx in range(8):
             offset = (idx % 4) * 26 - 38
@@ -454,15 +601,19 @@ class CncPandaApplication:
     def _build_unit_markers(self) -> None:
         assert self._world is not None
         self._unit_markers = {"p1": {}, "p2": {}}
+        self._unit_offsets = {"p1": {}, "p2": {}}
         classes = ("infantry", "ifv", "tank", "helicopter", "aircraft", "def_arms", "def_vehicle", "def_air")
         for side in ("p1", "p2"):
             for unit in classes:
                 nodes: List["NodePath"] = []
+                offsets: List[Tuple[float, float]] = []
                 for idx in range(18):
                     marker = self._world.attachNewNode(f"{side}_{unit}_{idx}")
                     self._spawn_box(marker, (0, 0, 0), (6, 6, 6), self._unit_color(side, unit))
                     nodes.append(marker)
+                    offsets.append((self._rng.uniform(-120, 120), self._rng.uniform(-90, 90)))
                 self._unit_markers[side][unit] = nodes
+                self._unit_offsets[side][unit] = offsets
 
     def _build_sorties(self) -> None:
         assert self._world is not None
@@ -474,6 +625,25 @@ class CncPandaApplication:
                 self._spawn_box(node, (0, 0, 0), (6, 10, 3), color)
                 self._sorties.append(Sortie(node=node, side=side, progress=idx / 6, speed=0.04 + idx * 0.004))
 
+    def _build_convoys(self) -> None:
+        assert self._world is not None
+        self._convoys = []
+        colors = {
+            "infantry": (0.3, 0.7, 0.4, 1.0),
+            "armor": (0.35, 0.5, 0.8, 1.0),
+            "air": (0.85, 0.8, 0.3, 1.0),
+            "heli": (0.45, 0.7, 0.45, 1.0),
+            "defense": (0.8, 0.35, 0.35, 1.0),
+        }
+        for side in ("p1", "p2"):
+            for kind, color in colors.items():
+                for idx in range(6):
+                    node = self._world.attachNewNode(f"convoy_{side}_{kind}_{idx}")
+                    self._spawn_box(node, (0, 0, 0), (5, 9, 3), color)
+                    self._convoys.append(
+                        Convoy(node=node, side=side, kind=kind, progress=idx / 6, speed=0.03 + idx * 0.004, slot=idx)
+                    )
+
     def _build_ui_panels(self) -> None:
         from direct.gui.DirectGui import DirectFrame  # type: ignore
 
@@ -482,12 +652,12 @@ class CncPandaApplication:
         self._ui_right_start = aspect * (1.0 - 0.2)
         self._ui_bottom_end = -1.0 + 0.2 * 2.0
         DirectFrame(
-            frameColor=(0.08, 0.1, 0.12, 0.94),
+            frameColor=(0.09, 0.1, 0.11, 0.96),
             frameSize=(self._ui_right_start, aspect, -1.0, 1.0),
             parent=self._engine.aspect2d,
         )
         DirectFrame(
-            frameColor=(0.1, 0.12, 0.14, 0.94),
+            frameColor=(0.1, 0.11, 0.12, 0.96),
             frameSize=(-aspect, aspect, -1.0, self._ui_bottom_end),
             parent=self._engine.aspect2d,
         )
@@ -531,10 +701,10 @@ class CncPandaApplication:
         while self._tick_accumulator >= self._tick_interval:
             self.runtime.tick()
             self._tick_accumulator -= self._tick_interval
-        self._update_world()
+        self._update_world(dt)
         return task.cont
 
-    def _update_world(self) -> None:
+    def _update_world(self, dt: float) -> None:
         if not self._frontline_center:
             return
         front = self.runtime.state.frontline
@@ -549,11 +719,17 @@ class CncPandaApplication:
             p2_width = front_x + self._map_length / 2
             self._frontline_zone_p2.setX(-self._map_length / 2 + p2_width / 2)
             self._frontline_zone_p2.setScale(p2_width / self._map_length, 1.0, 1.0)
+        if self._battle_lane:
+            center_x, center_y = self._combat_center()
+            self._battle_lane.setPos(center_x, center_y, 0.05)
 
         self._update_objectives()
         self._update_structures()
         self._update_unit_markers()
         self._update_sorties()
+        self._update_convoys(dt)
+        self._update_combat_effects(dt)
+        self._update_missiles(dt)
         self._update_ui()
 
     def _update_objectives(self) -> None:
@@ -566,62 +742,255 @@ class CncPandaApplication:
                 marker.setColor(0.35, 0.35, 0.4, 1)
 
     def _update_unit_markers(self) -> None:
-        front_x = self._map_pos(self.runtime.state.frontline.position)
-        band = 120.0
-        spacing = self._map_width / 10
+        center_x, center_y = self._combat_center()
+        intensity = self._combat_intensity()
+        spacing = 32 + intensity * 18
+        lane_offsets = {
+            "infantry": 90,
+            "ifv": 130,
+            "tank": 170,
+            "helicopter": 220,
+            "aircraft": 280,
+        }
+        defense_offsets = {"def_arms": 50, "def_vehicle": 70, "def_air": 90}
         for side_key, player in (("p1", self.runtime.state.player1), ("p2", self.runtime.state.player2)):
             direction = -1 if side_key == "p1" else 1
+            base_pos = self._base_positions.get(side_key, None)
             for unit_key, nodes in self._unit_markers[side_key].items():
                 count = getattr(player.units, unit_key, 0.0) if hasattr(player.units, unit_key) else 0.0
                 desired = max(1, min(len(nodes), int(count / 12) + 1))
                 tier = player.unit_tiers.get(unit_key, 0)
+                offsets = self._unit_offsets.get(side_key, {}).get(unit_key, [])
                 for idx, node in enumerate(nodes):
                     node.setColorScale(1, 1, 1, 1)
                     if idx < desired:
-                        row = idx % 6
-                        col = idx // 6
-                        node.setPos(
-                            front_x + direction * (60 + col * 26),
-                            (row - 2.5) * spacing + (col * 6 * direction),
-                            2.5,
-                        )
+                        wobble = math.sin((self.runtime.state.tick + idx) * 0.08) * 6
+                        offset_x, offset_y = offsets[idx] if idx < len(offsets) else (0.0, 0.0)
+                        if unit_key.startswith("def_") and base_pos is not None:
+                            lane = defense_offsets.get(unit_key, 60)
+                            x = base_pos.x + direction * lane + offset_x * 0.2
+                            y = base_pos.y + offset_y * 0.2
+                            z = 2.5
+                        else:
+                            lane = lane_offsets.get(unit_key, 120)
+                            x = center_x + direction * lane + offset_x * 0.3
+                            y = center_y + offset_y * 0.3 + wobble
+                            z = 2.5
+                        node.setPos(x, y, z)
                         node.setScale(1.6 + tier * 0.25)
                         node.show()
                     else:
                         node.hide()
 
     def _update_sorties(self) -> None:
-        front_x = self._map_pos(self.runtime.state.frontline.position)
-        p1_start = -self._map_length / 2 + 160
-        p2_start = self._map_length / 2 - 160
-        for sortie in self._sorties:
-            sortie.progress = (sortie.progress + sortie.speed * 0.01) % 1.0
-            leg = abs(0.5 - sortie.progress) * 2.0
-            if sortie.side == "p1":
-                x0, x1 = p1_start, front_x
-                x = x1 + (x0 - x1) * leg
-                y = -180 + (sortie.progress * 360)
-            else:
-                x0, x1 = p2_start, front_x
-                x = x1 + (x0 - x1) * leg
-                y = 180 - (sortie.progress * 360)
-            z = 80 + 30 * (1.0 - leg)
-            sortie.node.setPos(x, y, z)
+        center_x, center_y = self._combat_center()
+        posture_alt = {
+            "ISR": 140,
+            "SEAD": 110,
+            "INTERDICT": 120,
+            "DEEP_STRIKE": 150,
+            "CAS": 85,
+        }
+        for side in ("p1", "p2"):
+            player = self.runtime.state.player1 if side == "p1" else self.runtime.state.player2
+            posture = player.air_posture
+            altitude = posture_alt.get(posture, 120)
+            alpha = max(0.35, 1.0 - player.air_stealth_level * 0.12)
+            sorties = [s for s in self._sorties if s.side == side]
+            active = max(1, min(len(sorties), int(player.units.aircraft / 4) + 1))
+            for idx, sortie in enumerate(sorties):
+                if idx >= active:
+                    sortie.node.hide()
+                    continue
+                sortie.node.show()
+                sortie.progress = (sortie.progress + sortie.speed * 0.01) % 1.0
+                angle = sortie.progress * math.tau + (0 if side == "p1" else math.pi)
+                radius = 220 + idx * 18
+                x = center_x + math.cos(angle) * radius
+                y = center_y + math.sin(angle) * radius
+                z = altitude + 10 * math.sin(angle * 2)
+                sortie.node.setPos(x, y, z)
+                sortie.node.setColorScale(1, 1, 1, alpha)
+
+    def _update_convoys(self, dt: float) -> None:
+        center_x, center_y = self._combat_center()
+        output_scale = 45.0
+        for convoy in self._convoys:
+            player = self.runtime.state.player1 if convoy.side == "p1" else self.runtime.state.player2
+            output_map = {
+                "infantry": player.last_output.arms,
+                "armor": player.last_output.vehicles,
+                "air": player.last_output.aircraft,
+                "heli": player.last_output.rotary,
+                "defense": player.last_output.defense,
+            }
+            desired = max(1, min(6, int(output_map.get(convoy.kind, 0.0) / output_scale) + 1))
+            if convoy.slot >= desired:
+                convoy.node.hide()
+                convoy.progress += convoy.speed * dt
+                continue
+            convoy.node.show()
+            convoy.progress = (convoy.progress + convoy.speed * dt) % 1.0
+            base_pos = self._base_positions.get(convoy.side)
+            if base_pos is None:
+                continue
+            offset = (convoy.slot - 2.5) * 12
+            x = base_pos.x + (center_x - base_pos.x) * convoy.progress
+            y = base_pos.y + (center_y - base_pos.y) * convoy.progress + offset
+            convoy.node.setPos(x, y, 2.0)
+
+    def _update_combat_effects(self, dt: float) -> None:
+        intensity = self._combat_intensity()
+        center_x, center_y = self._combat_center()
+        self._tracer_timer += dt
+        self._explosion_timer += dt
+
+        tracer_interval = max(0.06, 0.2 - intensity * 0.12)
+        if self._tracer_timer >= tracer_interval:
+            self._tracer_timer = 0.0
+            for _ in range(int(4 + intensity * 10)):
+                self._spawn_tracer(center_x, center_y)
+
+        explosion_interval = max(0.2, 0.6 - intensity * 0.3)
+        if self._explosion_timer >= explosion_interval:
+            self._explosion_timer = 0.0
+            for _ in range(int(1 + intensity * 4)):
+                self._spawn_explosion(center_x, center_y)
+
+        for tracer in list(self._tracers):
+            tracer.age += dt
+            if tracer.age >= tracer.duration:
+                tracer.node.removeNode()
+                self._tracers.remove(tracer)
+                continue
+            t = tracer.age / tracer.duration
+            x = tracer.start.x + (tracer.end.x - tracer.start.x) * t
+            y = tracer.start.y + (tracer.end.y - tracer.start.y) * t
+            z = tracer.start.z + (tracer.end.z - tracer.start.z) * t
+            tracer.node.setPos(x, y, z)
+            alpha = max(0.1, 1.0 - t)
+            tracer.node.setColorScale(tracer.color[0], tracer.color[1], tracer.color[2], alpha)
+
+        for explosion in list(self._explosions):
+            explosion.age += dt
+            if explosion.age >= explosion.duration:
+                explosion.node.removeNode()
+                self._explosions.remove(explosion)
+                continue
+            t = explosion.age / explosion.duration
+            scale = 0.2 + explosion.max_scale * t
+            explosion.node.setScale(scale, scale, scale * 0.6)
+            explosion.node.setColorScale(1.0, 0.6 + 0.4 * (1 - t), 0.2, max(0.1, 1 - t))
+
+        for idx, node in enumerate(self._smoke_nodes):
+            wobble = math.sin((self.runtime.state.tick + idx) * 0.05) * 8
+            offset_x = (idx % 6 - 2.5) * 32
+            offset_y = (idx // 6 - 0.5) * 70
+            node.setPos(center_x + offset_x, center_y + offset_y + wobble, 10 + 6 * math.sin(idx))
+            node.setColorScale(1.0, 1.0, 1.0, 0.3 + intensity * 0.5)
+
+    def _update_missiles(self, dt: float) -> None:
+        self._missile_timer += dt
+        if self._missile_timer >= 0.4:
+            self._missile_timer = 0.0
+            self._spawn_missiles_from_ops()
+
+        for missile in list(self._missiles):
+            missile.age += dt
+            if missile.age >= missile.duration:
+                missile.node.removeNode()
+                self._missiles.remove(missile)
+                continue
+            t = missile.age / missile.duration
+            height = 120 * math.sin(math.pi * t)
+            x = missile.start.x + (missile.end.x - missile.start.x) * t
+            y = missile.start.y + (missile.end.y - missile.start.y) * t
+            z = missile.start.z + (missile.end.z - missile.start.z) * t + height
+            missile.node.setPos(x, y, z)
+
+    def _spawn_tracer(self, center_x: float, center_y: float) -> None:
+        assert self._world is not None
+        start = self._random_point(center_x, center_y, 180)
+        end = self._random_point(center_x, center_y, 180)
+        color = (0.95, 0.75, 0.3, 1.0) if self._rng.random() > 0.5 else (0.6, 0.9, 1.0, 1.0)
+        node = self._world.attachNewNode("tracer")
+        self._spawn_box(node, (0, 0, 0), (2, 2, 2), color)
+        tracer = Tracer(node=node, start=start, end=end, age=0.0, duration=0.6, color=color)
+        self._tracers.append(tracer)
+
+    def _spawn_explosion(self, center_x: float, center_y: float) -> None:
+        assert self._world is not None
+        pos = self._random_point(center_x, center_y, 200)
+        node = self._world.attachNewNode("explosion")
+        self._spawn_box(node, (0, 0, 0), (6, 6, 4), (1.0, 0.6, 0.2, 0.8))
+        node.setPos(pos.x, pos.y, 2.0)
+        explosion = Explosion(node=node, age=0.0, duration=1.2, max_scale=4.5)
+        self._explosions.append(explosion)
+
+    def _spawn_missiles_from_ops(self) -> None:
+        assert self._world is not None
+        from panda3d.core import LPoint3f  # type: ignore
+
+        center_x, center_y = self._combat_center()
+        for side, player in (("p1", self.runtime.state.player1), ("p2", self.runtime.state.player2)):
+            active_ops = [op for op in player.operations if op.remaining_delay <= 0]
+            if not active_ops:
+                continue
+            base_pos = self._base_positions.get(side)
+            if base_pos is None:
+                continue
+            for op in active_ops:
+                if op.operation_id not in {"strike_factories", "suppress_defenses", "missile_barrage", "hit_logistics"}:
+                    continue
+                if self._rng.random() > 0.6:
+                    continue
+                target = self._random_point(center_x, center_y, 220)
+                node = self._world.attachNewNode("missile")
+                self._spawn_box(node, (0, 0, 0), (4, 4, 4), (0.9, 0.4, 0.2, 1.0))
+                missile = Missile(
+                    node=node,
+                    start=LPoint3f(base_pos.x, base_pos.y, 10),
+                    end=LPoint3f(target.x, target.y, 4),
+                    age=0.0,
+                    duration=1.4,
+                )
+                self._missiles.append(missile)
+
+    def _random_point(self, center_x: float, center_y: float, radius: float) -> "LPoint3f":
+        from panda3d.core import LPoint3f  # type: ignore
+
+        angle = self._rng.random() * math.tau
+        dist = self._rng.random() * radius
+        x = center_x + math.cos(angle) * dist
+        y = center_y + math.sin(angle) * dist
+        return LPoint3f(x, y, 4.0)
 
     def _update_ui(self) -> None:
         if not self._ui_text:
             return
         state = self.runtime.state
         text = (
-            f"Tick {state.tick} | Front {state.frontline.ratio(state.settings):.1f}%\n"
-            f"P1 Credits {state.player1.credits} | Logi {state.player1.logistics_health:.0f} | Air {state.player1.air_posture}\n"
-            f"P2 Credits {state.player2.credits} | Logi {state.player2.logistics_health:.0f} | Air {state.player2.air_posture}\n"
-            f"Escalation {state.escalation:.1f}"
+            f"Tick {state.tick} | Escalation {state.escalation:.1f}\n"
+            f"P1 Credits {state.player1.credits} | Logi {state.player1.logistics_health:.0f} | Ops {len(state.player1.operations)}\n"
+            f"P2 Credits {state.player2.credits} | Logi {state.player2.logistics_health:.0f} | Ops {len(state.player2.operations)}"
         )
         self._ui_text.setText(text)
         if self._info_text is not None:
             self._info_text.setText(self._selection_text())
+        if self._prod_text_p1 is not None:
+            output = state.player1.last_output
+            self._prod_text_p1.setText(
+                f"P1 Output INF {output.arms:.0f} ARM {output.vehicles:.0f} AIR {output.aircraft:.0f} "
+                f"HEL {output.rotary:.0f} DEF {output.defense:.0f}"
+            )
+        if self._prod_text_p2 is not None:
+            output = state.player2.last_output
+            self._prod_text_p2.setText(
+                f"P2 Output INF {output.arms:.0f} ARM {output.vehicles:.0f} AIR {output.aircraft:.0f} "
+                f"HEL {output.rotary:.0f} DEF {output.defense:.0f}"
+            )
         self._update_buttons()
+        self._update_air_buttons()
 
     def _update_camera(self, task: "Task") -> int:
         if not self._engine or self._camera_center is None:
@@ -643,17 +1012,25 @@ class CncPandaApplication:
         self._camera_center.y = max(-half_wid, min(half_wid, self._camera_center.y))
 
         cam = self._engine.camera
-        cam.setPos(self._camera_center.x, self._camera_center.y - 320, self._camera_height)
+        cam.setPos(self._camera_center.x, self._camera_center.y - 420, self._camera_height)
         cam.setHpr(0, self._camera_pitch, 0)
         return task.cont
 
     def _update_structures(self) -> None:
         for side_key, player in (("p1", self.runtime.state.player1), ("p2", self.runtime.state.player2)):
+            output_map = {
+                "infantry_factory": player.last_output.arms,
+                "armor_factory": player.last_output.vehicles,
+                "air_factory": player.last_output.aircraft,
+                "heli_factory": player.last_output.rotary,
+                "defense_factory": player.last_output.defense,
+            }
             for key, nodes in self._structure_nodes.get(side_key, {}).items():
                 built = player.structures.get(key, 0)
                 for idx, node in enumerate(nodes):
                     if idx < built:
-                        node.setColorScale(1, 1, 1, 1)
+                        glow = 1.0 + min(0.4, output_map.get(key, 0.0) / 180.0)
+                        node.setColorScale(glow, glow, glow, 1)
                         node.show()
                     else:
                         node.setColorScale(0.4, 0.4, 0.4, 0.6)
@@ -728,11 +1105,18 @@ class CncPandaApplication:
 
     def _selection_text(self) -> str:
         if not self._selected_asset:
-            return "Select a structure to view upgrades."
+            player = self.runtime.state.player1 if self._build_side == "p1" else self.runtime.state.player2
+            return (
+                f"Selected Side: {player.name}\n"
+                f"Air Posture: {player.air_posture}\n"
+                f"Active Ops: {len(player.operations)}"
+            )
         key = self._selected_asset["key"]
         side = self._selected_asset["side"]
         player = self.runtime.state.player1 if side == "p1" else self.runtime.state.player2
         lines = [f"{player.name} - {self._factory_names.get(key, key)}"]
+        built = player.structures.get(key, 0)
+        lines.append(f"Built: {built}/3")
         if key.endswith("_factory"):
             factory_key = self._factory_key_from_structure(key)
             tier = player.tech_levels.get(factory_key, 0) + 1
@@ -765,6 +1149,22 @@ class CncPandaApplication:
             self._stealth_button.show()
         else:
             self._stealth_button.hide()
+
+    def _update_air_buttons(self) -> None:
+        if not self._air_buttons:
+            return
+        player = self.runtime.state.player1 if self._build_side == "p1" else self.runtime.state.player2
+        current = player.air_posture
+        for button in self._air_buttons:
+            label = button["text"]
+            if label == "DEEP":
+                is_active = current == "DEEP_STRIKE"
+            else:
+                is_active = current == label
+            if is_active:
+                button["text_fg"] = (1.0, 0.9, 0.4, 1.0)
+            else:
+                button["text_fg"] = (0.85, 0.85, 0.85, 1.0)
 
     def _highlight_selection(self) -> None:
         for side_nodes in self._structure_nodes.values():
@@ -808,6 +1208,18 @@ class CncPandaApplication:
         try:
             self.runtime.queue_structure(self._build_side, key, 1)
             self._pulse_next_slot(self._build_side, key)
+        except ValueError:
+            return
+
+    def _handle_operation_button(self, key: str) -> None:
+        try:
+            self.runtime.launch_operation(self._build_side, key)
+        except ValueError:
+            return
+
+    def _handle_air_posture(self, key: str) -> None:
+        try:
+            self.runtime.set_air_posture(self._build_side, key)
         except ValueError:
             return
 
@@ -864,7 +1276,31 @@ class CncPandaApplication:
             return (0.9, 0.9, 0.95, 1.0)
         return base
 
+    def _combat_center(self) -> Tuple[float, float]:
+        tick = self.runtime.state.tick
+        drift_x = math.sin(tick * 0.05) * 140 + math.cos(tick * 0.017) * 90
+        drift_y = math.cos(tick * 0.04) * 120
+        pressure = self.runtime.state.frontline.ratio(self.runtime.settings) - 50.0
+        drift_x += pressure * 0.2
+        return drift_x, drift_y
+
+    def _combat_intensity(self) -> float:
+        intensity = self.runtime.state.combat_intensity
+        total_units = (
+            self.runtime.state.player1.units.infantry
+            + self.runtime.state.player1.units.ifv
+            + self.runtime.state.player1.units.tank
+            + self.runtime.state.player1.units.helicopter
+            + self.runtime.state.player1.units.aircraft
+            + self.runtime.state.player2.units.infantry
+            + self.runtime.state.player2.units.ifv
+            + self.runtime.state.player2.units.tank
+            + self.runtime.state.player2.units.helicopter
+            + self.runtime.state.player2.units.aircraft
+        )
+        return min(1.0, (intensity / 80.0) + (total_units / 600.0))
+
     def _map_pos(self, frontline_position: float) -> float:
         span = self.runtime.settings.frontline.max_position - self.runtime.settings.frontline.min_position
         ratio = (frontline_position - self.runtime.settings.frontline.min_position) / span
-        return self._map_length / 2 - ratio * self._map_length
+        return -self._map_length / 2 + ratio * self._map_length

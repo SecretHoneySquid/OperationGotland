@@ -9,6 +9,16 @@ from .config import SimulationSettings
 
 
 @dataclass
+class ProductionOutput:
+    arms: float = 0.0
+    vehicles: float = 0.0
+    aircraft: float = 0.0
+    rotary: float = 0.0
+    defense: float = 0.0
+    total: float = 0.0
+
+
+@dataclass
 class ProductionProfile:
     vehicles: float = 25.0
     arms: float = 25.0
@@ -97,6 +107,7 @@ class PlayerState:
             "def_air": 0.0,
         }
     )
+    last_output: ProductionOutput = field(default_factory=ProductionOutput)
     unit_tiers: Dict[str, int] = field(
         default_factory=lambda: {
             "infantry": 0,
@@ -150,6 +161,7 @@ class GameState:
     frontline: FrontlineState = field(default_factory=FrontlineState)
     escalation: float = 0.0
     objectives: List["ObjectiveState"] = field(default_factory=list)
+    combat_intensity: float = 0.0
     history: List[str] = field(default_factory=list)
     tick: int = 0
     winner: Optional[str] = None

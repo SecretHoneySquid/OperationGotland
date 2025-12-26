@@ -8,9 +8,9 @@ from typing import Dict, Tuple
 
 @dataclass(frozen=True)
 class EconomySettings:
-    base_credits: int = 120
-    base_income_per_tick: float = 20.0
-    income_per_structure: float = 15.0
+    base_credits: int = 5000
+    base_income_per_tick: float = 200.0
+    income_per_structure: float = 60.0
     build_queue_max: int = 9
 
 
@@ -259,6 +259,15 @@ def _default_operations() -> Dict[str, OperationDefinition]:
             magnitude=2.4,
             delay=2,
             duration=4,
+        ),
+        "missile_barrage": OperationDefinition(
+            key="missile_barrage",
+            name="Missile Barrage",
+            cost=140,
+            target="defense",
+            magnitude=3.0,
+            delay=1,
+            duration=2,
         ),
         "hit_logistics": OperationDefinition(
             key="hit_logistics",
