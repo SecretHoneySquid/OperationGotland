@@ -870,6 +870,7 @@ class GameUI:
         self.base_icons: List[int] = []
         self.lanes: List[Dict[str, float]] = []
         self.obstacles: List[Dict[str, float]] = []
+        self.structure_icons: List[int] = []
 
     def _build_layout(self) -> None:
         self.root.columnconfigure(0, weight=1)
@@ -1065,6 +1066,7 @@ class GameUI:
             self.canvas.create_oval(width - 80, ground_y - 80, width - 20, ground_y - 20, fill="#c12c2c", outline=""),
         ]
         self.obstacles = self._build_obstacles(width, ground_y)
+        self._render_structures()
         self.frontline_line_id = self.canvas.create_line(
             self._frontline_x(width),
             10,
@@ -1191,17 +1193,7 @@ class GameUI:
                 ground_y,
             )
         for dot in self.dots:
-            color = self._color_for_kind(dot["kind"], dot["side"])
-            size = self._size_for_kind(dot["kind"])
-            self.canvas.create_rectangle(
-                dot["x"] - size,
-                dot["y"] - size / 2,
-                dot["x"] + size,
-                dot["y"] + size / 2,
-                fill=color,
-                outline="",
-                tags="dot",
-            )
+            self._draw_unit_sprite(dot)
 
     def _animate(self) -> None:
         self._spawn_dots()
@@ -1209,6 +1201,65 @@ class GameUI:
         self._resolve_dot_collisions()
         self._render_dots()
         self.root.after(30, self._animate)
+
+    def _draw_unit_sprite(self, dot: Dict[str, float]) -> None:
+        kind = dot["kind"]
+        side = dot["side"]
+        color = self._color_for_kind(kind, side)
+        outline = "#0a0a0a"
+        scale = self._size_for_kind(kind)
+        cx, cy = dot["x"], dot["y"]
+        points = []
+        if kind in ("tank", "vehicle"):
+            body = [(-1.2, -0.5), (1.4, -0.5), (1.6, 0.0), (1.4, 0.5), (-1.2, 0.5), (-1.4, 0.0)]
+            turret = [(-0.2, -0.2), (0.8, -0.2), (0.8, 0.2), (-0.2, 0.2)]
+            gun = [(0.8, -0.05), (1.6, -0.05), (1.6, 0.05), (0.8, 0.05)]
+            for poly in (body, turret, gun):
+                pts = []
+                for x, y in poly:
+                    pts.extend([cx + x * scale, cy + y * scale])
+                self.canvas.create_polygon(pts, fill=color, outline=outline, width=1, tags="dot")
+            return
+        if kind == "infantry":
+            body = [(-0.6, -0.8), (0.6, -0.8), (0.6, 0.8), (-0.6, 0.8)]
+            pts = []
+            for x, y in body:
+                pts.extend([cx + x * scale, cy + y * scale])
+            self.canvas.create_polygon(pts, fill=color, outline=outline, width=1, tags="dot")
+            self.canvas.create_line(cx, cy - 0.8 * scale, cx, cy - 1.5 * scale, fill=color, width=2, tags="dot")
+            return
+        if kind in ("aircraft", "helicopter"):
+            nose = (1.5, 0.0)
+            tail = (-1.2, 0.0)
+            wing1 = (0.2, 0.8)
+            wing2 = (0.2, -0.8)
+            pts = []
+            for x, y in (nose, wing1, tail, wing2):
+                pts.extend([cx + x * scale, cy + y * scale])
+            self.canvas.create_polygon(pts, fill=color, outline=outline, width=1, tags="dot")
+            if kind == "helicopter":
+                self.canvas.create_oval(
+                    cx - 1.0 * scale,
+                    cy - 1.0 * scale,
+                    cx + 1.0 * scale,
+                    cy + 1.0 * scale,
+                    outline=color,
+                    width=2,
+                    tags="dot",
+                )
+            return
+        if kind == "missile":
+            body = [(-0.6, -0.2), (1.2, -0.2), (1.4, 0.0), (1.2, 0.2), (-0.6, 0.2)]
+            tail1 = [(-0.6, -0.2), (-0.9, -0.5), (-0.6, -0.5)]
+            tail2 = [(-0.6, 0.2), (-0.9, 0.5), (-0.6, 0.5)]
+            for poly in (body, tail1, tail2):
+                pts = []
+                for x, y in poly:
+                    pts.extend([cx + x * scale, cy + y * scale])
+                self.canvas.create_polygon(pts, fill=color, outline=outline, width=1, tags="dot")
+            return
+        # fallback dot
+        self.canvas.create_oval(cx - scale, cy - scale, cx + scale, cy + scale, fill=color, outline="", tags="dot")
 
     def _draw_map_background(self, width: int, height: int, ground_y: int) -> None:
         self.canvas.create_rectangle(0, 0, width, height, fill="#0b1612", outline="")
@@ -1255,6 +1306,44 @@ class GameUI:
             obstacles.append({"x1": x1, "y1": y1, "x2": x2, "y2": y2})
             self.canvas.create_rectangle(x1, y1, x2, y2, fill="#4a5b50", outline="#2a3a30", width=2, tags="obstacle")
         return obstacles
+
+    def _render_structures(self) -> None:
+        for item in self.structure_icons:
+            self.canvas.delete(item)
+        self.structure_icons = []
+        width = int(self.canvas.cget("width"))
+        ground_y = int(self.canvas.cget("height")) - 40
+        icon_size = 10
+        spacing = 16
+        for idx, (factory_id, count) in enumerate(sorted(FACTORIES_LOOKUP.items())):
+            # Place structures near respective bases; repeated purchases stack icons.
+            x_left = 30
+            x_right = width - 30
+            y_base = 40 + idx * spacing
+            for n in range(self.state.player1.purchases.get(factory_id, 0)):
+                self.structure_icons.append(
+                    self.canvas.create_rectangle(
+                        x_left - icon_size,
+                        y_base - icon_size,
+                        x_left + icon_size,
+                        y_base + icon_size,
+                        outline="#9ad69a",
+                        fill="#1b3326",
+                        tags="structure",
+                    )
+                )
+            for n in range(self.state.player2.purchases.get(factory_id, 0)):
+                self.structure_icons.append(
+                    self.canvas.create_rectangle(
+                        x_right - icon_size,
+                        y_base - icon_size,
+                        x_right + icon_size,
+                        y_base + icon_size,
+                        outline="#ff9a7b",
+                        fill="#3b1f1f",
+                        tags="structure",
+                    )
+                )
 
     def _choose_kind(self, player: Player) -> str:
         weights = {
