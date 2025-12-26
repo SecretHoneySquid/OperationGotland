@@ -10,8 +10,9 @@ Front line logic:
   * Player 1 positioned at 0, Player 2 at 100.
   * Front line starts at 50 and is shown as the percentage
     (frontline - p1) / (p2 - p1).
-  * If Player 1 production > Player 2, the front line shifts toward Player 2.
-    If Player 2 leads, it shifts back toward Player 1.
+  * Pressure is built from armor/infantry/air advantages (mitigated by enemy
+    defenses and your logistics). When net pressure hits a threshold, the
+    front line jumps by 25% toward the attacker—otherwise it stays fixed.
 
 Factories (buy from the store with credits):
   1. Vehicle Factory      -> raises vehicle production.
@@ -36,9 +37,10 @@ from typing import Optional
 
 FRONTLINE_MIN = 0.0
 FRONTLINE_MAX = 100.0
-FRONTLINE_SHIFT_DIVISOR = 20.0   # higher = slower movement
-FRONTLINE_SHIFT_CLAMP = 6.0      # max movement per tick
-FRONTLINE_UNIT_WEIGHT = 0.25     # how much unit advantage moves the line (relative to production)
+FRONTLINE_SEGMENT = 25.0         # front line moves in quarter-map chunks
+FRONTLINE_PRESSURE_THRESHOLD = 10.0
+FRONTLINE_PRESSURE_DECAY = 0.5   # passive decay of pressure progress each tick
+FRONTLINE_OPPOSING_BLEED = 0.35  # how much opposing pressure erodes progress
 
 BASE_CREDITS = 120
 INCOME_PER_TICK = 25.0
@@ -76,7 +78,6 @@ class Factory:
         self.apply_effect(player)
 
 
-@dataclass
 @dataclass
 class Sortie:
     owner: str
@@ -190,6 +191,8 @@ class GameState:
     ticks_elapsed: int = 0
     winner: Optional[str] = None
     sorties: List[Sortie] = field(default_factory=list)
+    pressure_toward_p2: float = 0.0  # P1 pushing toward P2
+    pressure_toward_p1: float = 0.0  # P2 pushing toward P1
 
     def record(self, message: str) -> None:
         self.history.append(message)
@@ -297,24 +300,6 @@ def advance_tick(state: GameState) -> Tuple[float, float]:
     state.ticks_elapsed += 1
     p1_prod = state.player1.total_production
     p2_prod = state.player2.total_production
-    advantage = p1_prod - p2_prod
-
-    if advantage == 0:
-        delta = 0.0
-    else:
-        delta = clamp(advantage / FRONTLINE_SHIFT_DIVISOR, -FRONTLINE_SHIFT_CLAMP, FRONTLINE_SHIFT_CLAMP)
-
-    # Unit-driven pressure (not sole factor)
-    unit_adv = unit_pressure_advantage(state.player1, state.player2)
-    delta += unit_adv * FRONTLINE_UNIT_WEIGHT
-
-    state.frontline = clamp(state.frontline + delta, FRONTLINE_MIN, FRONTLINE_MAX)
-    check_victory(state)
-    if state.winner:
-        state.record(
-            f"Tick {state.ticks_elapsed}: {state.winner} reached the front-line limit ({state.frontline_ratio:.2f}%)."
-        )
-        return p1_prod, p2_prod
 
     state.player1.earn_income()
     state.player2.earn_income()
@@ -332,9 +317,23 @@ def advance_tick(state: GameState) -> Tuple[float, float]:
                 player.credits += bonus
                 state.record(f"{player.name} gained {bonus} bonus credits from supply zones on tick {state.ticks_elapsed}.")
 
+    p1_net, p1_components = compute_frontline_pressure(state.player1, state.player2)
+    p2_net, p2_components = compute_frontline_pressure(state.player2, state.player1)
     state.record(
-        f"Tick: P1 prod {p1_prod:.2f} vs P2 {p2_prod:.2f} -> frontline shift {delta:+.2f} to {state.frontline_ratio:.2f}%"
+        f"Frontline Pressure (P1->P2): {format_pressure_components(p1_components)} | Net {p1_net:+.1f}"
     )
+    state.record(
+        f"Frontline Pressure (P2->P1): {format_pressure_components(p2_components)} | Net {p2_net:+.1f}"
+    )
+    apply_frontline_pressure(state, p1_net, p2_net)
+    if not state.winner:
+        state.record(
+            f"Tick {state.ticks_elapsed}: P1 prod {p1_prod:.2f} vs P2 {p2_prod:.2f} | "
+            f"Progress P1->{state.player2.name} {state.pressure_toward_p2:.1f}/"
+            f"{FRONTLINE_PRESSURE_THRESHOLD}, "
+            f"P2->{state.player1.name} {state.pressure_toward_p1:.1f}/{FRONTLINE_PRESSURE_THRESHOLD} | "
+            f"Front line {state.frontline_ratio:.2f}%"
+        )
     return p1_prod, p2_prod
 
 
@@ -496,24 +495,91 @@ def format_losses(losses: Dict[str, float]) -> str:
     return ", ".join(f"{k}:{v:.1f}" for k, v in sorted(losses.items()))
 
 
-def unit_pressure_advantage(p1: Player, p2: Player) -> float:
+def compute_frontline_pressure(attacker: Player, defender: Player) -> Tuple[float, Dict[str, float]]:
     """
-    Convert unit advantage to a small frontline push component.
+    Convert force advantages into a pressure score that can crack the front line.
+    Positive values favor the attacker; negative values stall progress.
     """
-    def power(p: Player) -> float:
-        return (
-            p.arms * 0.8
-            + p.vehicles * 0.85
-            + p.tanks * 1.3
-            + p.aircraft * 1.4
-            + p.def_arms * 0.5
-            + p.def_vehicle * 0.7
-            + p.def_air * 0.7
+    armor_strength = attacker.vehicles + attacker.tanks * 1.2
+    armor_resistance = defender.vehicles + defender.tanks * 1.1 + defender.def_vehicle * 0.5
+    armor_superiority = (armor_strength - armor_resistance) * 0.25
+
+    infantry_push = attacker.arms + attacker.def_arms * 0.4
+    infantry_wall = defender.arms + defender.def_arms * 0.6
+    infantry_density = (infantry_push - infantry_wall) * 0.2
+
+    air_push = attacker.aircraft * 1.05
+    air_denial = defender.aircraft + defender.def_air * 1.0
+    air_support = (air_push - air_denial) * 0.25
+
+    enemy_defenses = -(defender.def_vehicle * 0.04 + defender.def_arms * 0.04 + defender.def_air * 0.04)
+    logistics_penalty = -max(0.0, (100.0 - attacker.logistics_health) / 14.0)
+
+    components = {
+        "Armor Superiority": armor_superiority,
+        "Infantry Density": infantry_density,
+        "Air Support": air_support,
+        "Enemy Defenses": enemy_defenses,
+        "Logistics Penalty": logistics_penalty,
+    }
+    net = sum(components.values())
+    return net, components
+
+
+def format_pressure_components(components: Dict[str, float]) -> str:
+    return ", ".join(f"{name} {value:+.1f}" for name, value in components.items())
+
+
+def update_pressure_progress(current: float, pushing_net: float, opposing_net: float) -> float:
+    """
+    Apply decay, attacker pressure, and opposing bleed to a pressure progress meter.
+    """
+    progress = max(0.0, current - FRONTLINE_PRESSURE_DECAY)
+    progress += pushing_net
+    if opposing_net > 0:
+        progress -= opposing_net * FRONTLINE_OPPOSING_BLEED
+    return clamp(progress, 0.0, FRONTLINE_PRESSURE_THRESHOLD * 1.5)
+
+
+def apply_frontline_pressure(state: GameState, p1_net: float, p2_net: float) -> None:
+    """
+    Update pressure meters and move the front line in discrete 25% jumps.
+    """
+    state.pressure_toward_p2 = update_pressure_progress(state.pressure_toward_p2, p1_net, p2_net)
+    state.pressure_toward_p1 = update_pressure_progress(state.pressure_toward_p1, p2_net, p1_net)
+
+    moves = []
+    if state.pressure_toward_p2 >= FRONTLINE_PRESSURE_THRESHOLD:
+        moves.append(("p1", p1_net))
+    if state.pressure_toward_p1 >= FRONTLINE_PRESSURE_THRESHOLD:
+        moves.append(("p2", p2_net))
+
+    if not moves:
+        return
+
+    # Resolve simultaneous breakthroughs by taking the stronger net push.
+    mover, mover_net = max(moves, key=lambda item: item[1])
+    if mover == "p1":
+        state.frontline = clamp(state.frontline + FRONTLINE_SEGMENT, FRONTLINE_MIN, FRONTLINE_MAX)
+        state.record(
+            f"{state.player1.name} broke through! Front line advanced to {state.frontline_ratio:.0f}% "
+            f"(progress reset)."
+        )
+    else:
+        state.frontline = clamp(state.frontline - FRONTLINE_SEGMENT, FRONTLINE_MIN, FRONTLINE_MAX)
+        state.record(
+            f"{state.player2.name} counter-broke! Front line pushed back to {state.frontline_ratio:.0f}% "
+            f"(progress reset)."
         )
 
-    advantage = power(p1) - power(p2)
-    # Normalize to a small delta
-    return clamp(advantage / 50.0, -FRONTLINE_SHIFT_CLAMP / 2, FRONTLINE_SHIFT_CLAMP / 2)
+    # Reset pressure after a breakthrough to force a fresh buildup.
+    state.pressure_toward_p2 = 0.0
+    state.pressure_toward_p1 = 0.0
+    check_victory(state)
+    if state.winner:
+        state.record(
+            f"{state.winner} reached the front-line limit ({state.frontline_ratio:.0f}%)."
+        )
 
 
 def check_victory(state: GameState) -> None:
@@ -556,6 +622,9 @@ def buy_factory(
 def show_status(state: GameState) -> str:
     lines = [
         f"Front line at {state.frontline:.2f} (ratio {state.frontline_ratio:.2f}% between Player 1 @0 and Player 2 @100)",
+        "Pressure meters: "
+        f"P1->P2 {state.pressure_toward_p2:.1f}/{FRONTLINE_PRESSURE_THRESHOLD}, "
+        f"P2->P1 {state.pressure_toward_p1:.1f}/{FRONTLINE_PRESSURE_THRESHOLD}",
         describe_player(state.player1),
         describe_player(state.player2),
     ]
