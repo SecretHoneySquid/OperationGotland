@@ -1,3 +1,0 @@
-# Core headless runtime has no external dependencies.
-# Install Panda3D to enable the optional visual engine.
-panda3d>=1.10.13
