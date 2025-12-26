@@ -24,6 +24,9 @@ Factories (buy from the store with credits):
 Run interactively:
   python LF_prototype
 
+Run with a GUI:
+  python LF_prototype --gui
+
 Run a quick non-interactive tick burst:
   python LF_prototype --ticks 5
 """
@@ -844,8 +847,20 @@ class GameUI:
         self.factories = factories
         self.root = tk.Tk()
         self.root.title("Logistics & Production Tug-of-War")
+        self._init_vars()
         self._build_layout()
         self.update_status()
+
+    def _init_vars(self) -> None:
+        self.frontline_pct = tk.DoubleVar(value=self.state.frontline_ratio)
+        self.frontline_label = tk.StringVar()
+        self.pressure_p1 = tk.DoubleVar()
+        self.pressure_p2 = tk.DoubleVar()
+        self.pressure_label = tk.StringVar()
+        self.logi_penalty_label = tk.StringVar()
+        self.sortie_label = tk.StringVar()
+        self.p1_panel: Dict[str, tk.Variable] = {}
+        self.p2_panel: Dict[str, tk.Variable] = {}
 
     def _build_layout(self) -> None:
         main = ttk.Frame(self.root, padding=12)
@@ -859,9 +874,37 @@ class GameUI:
         status_frame = ttk.LabelFrame(main, text="Status")
         status_frame.grid(row=0, column=0, sticky="nsew", padx=(0, 8), pady=(0, 8))
         status_frame.columnconfigure(0, weight=1)
-        status_frame.rowconfigure(0, weight=1)
-        self.status_text = tk.Text(status_frame, width=80, height=30, wrap="word", state="disabled")
-        self.status_text.grid(row=0, column=0, sticky="nsew")
+        status_frame.rowconfigure(2, weight=1)
+
+        frontline_row = ttk.Frame(status_frame, padding=(6, 6))
+        frontline_row.grid(row=0, column=0, sticky="ew")
+        ttk.Label(frontline_row, text="Front line").grid(row=0, column=0, sticky="w", padx=(0, 8))
+        frontline_bar = ttk.Progressbar(frontline_row, maximum=100.0, variable=self.frontline_pct)
+        frontline_bar.grid(row=0, column=1, sticky="ew")
+        frontline_row.columnconfigure(1, weight=1)
+        ttk.Label(frontline_row, textvariable=self.frontline_label, width=8).grid(row=0, column=2, padx=(8, 0))
+
+        pressure_row = ttk.Frame(status_frame, padding=(6, 0))
+        pressure_row.grid(row=1, column=0, sticky="ew")
+        ttk.Label(pressure_row, text="Pressure P1 ➜ P2").grid(row=0, column=0, sticky="w", padx=(0, 8))
+        self.pressure_bar_p1 = ttk.Progressbar(pressure_row, maximum=FRONTLINE_PRESSURE_THRESHOLD, variable=self.pressure_p1)
+        self.pressure_bar_p1.grid(row=0, column=1, sticky="ew")
+        ttk.Label(pressure_row, text="P2 ➜ P1", padding=(12, 0)).grid(row=1, column=0, sticky="w")
+        self.pressure_bar_p2 = ttk.Progressbar(pressure_row, maximum=FRONTLINE_PRESSURE_THRESHOLD, variable=self.pressure_p2)
+        self.pressure_bar_p2.grid(row=1, column=1, sticky="ew")
+        pressure_row.columnconfigure(1, weight=1)
+        ttk.Label(pressure_row, textvariable=self.pressure_label, foreground="#555").grid(row=2, column=0, columnspan=2, sticky="w", pady=(4, 0))
+
+        ttk.Label(status_frame, textvariable=self.logi_penalty_label, padding=(6, 6)).grid(row=2, column=0, sticky="w")
+
+        players_frame = ttk.Frame(status_frame)
+        players_frame.grid(row=3, column=0, sticky="nsew", padx=6, pady=(0, 6))
+        players_frame.columnconfigure(0, weight=1)
+        players_frame.columnconfigure(1, weight=1)
+        self.p1_panel = self._build_player_panel(players_frame, "Player 1", column=0)
+        self.p2_panel = self._build_player_panel(players_frame, "Player 2", column=1)
+
+        ttk.Label(status_frame, textvariable=self.sortie_label, padding=(6, 2)).grid(row=4, column=0, sticky="w")
 
         # Controls and history
         right = ttk.Frame(main)
@@ -945,6 +988,47 @@ class GameUI:
         self.history_text = tk.Text(history_frame, width=40, height=10, wrap="word", state="disabled")
         self.history_text.grid(row=0, column=0, sticky="nsew")
 
+    def _build_player_panel(self, parent: ttk.Frame, title: str, column: int) -> Dict[str, tk.Variable]:
+        frame = ttk.LabelFrame(parent, text=title, padding=6)
+        frame.grid(row=0, column=column, sticky="nsew", padx=4)
+        frame.columnconfigure(1, weight=1)
+
+        credits = tk.StringVar()
+        logi_text = tk.StringVar()
+        logi_bar = tk.DoubleVar()
+        production = tk.StringVar()
+        units = tk.StringVar()
+        build = tk.StringVar()
+        purchases = tk.StringVar()
+
+        ttk.Label(frame, textvariable=credits, font=("TkDefaultFont", 10, "bold")).grid(row=0, column=0, columnspan=2, sticky="w")
+
+        ttk.Label(frame, text="Logistics").grid(row=1, column=0, sticky="w", pady=(2, 0))
+        ttk.Progressbar(frame, maximum=250.0, variable=logi_bar).grid(row=1, column=1, sticky="ew", pady=(2, 0))
+        ttk.Label(frame, textvariable=logi_text, foreground="#444").grid(row=2, column=0, columnspan=2, sticky="w")
+
+        ttk.Label(frame, text="Production").grid(row=3, column=0, sticky="nw", pady=(4, 0))
+        ttk.Label(frame, textvariable=production, wraplength=260, justify="left").grid(row=3, column=1, sticky="w", pady=(4, 0))
+
+        ttk.Label(frame, text="Units").grid(row=4, column=0, sticky="nw", pady=(2, 0))
+        ttk.Label(frame, textvariable=units, wraplength=260, justify="left").grid(row=4, column=1, sticky="w", pady=(2, 0))
+
+        ttk.Label(frame, text="Build queue").grid(row=5, column=0, sticky="nw", pady=(2, 0))
+        ttk.Label(frame, textvariable=build, wraplength=260, justify="left").grid(row=5, column=1, sticky="w", pady=(2, 0))
+
+        ttk.Label(frame, text="Purchases").grid(row=6, column=0, sticky="nw", pady=(2, 0))
+        ttk.Label(frame, textvariable=purchases, wraplength=260, justify="left").grid(row=6, column=1, sticky="w", pady=(2, 0))
+
+        return {
+            "credits": credits,
+            "logi_text": logi_text,
+            "logi_bar": logi_bar,
+            "production": production,
+            "units": units,
+            "build": build,
+            "purchases": purchases,
+        }
+
     def _refresh_store(self) -> None:
         self.store_text.configure(state="normal")
         self.store_text.delete("1.0", "end")
@@ -952,15 +1036,55 @@ class GameUI:
         self.store_text.configure(state="disabled")
 
     def update_status(self) -> None:
-        self.status_text.configure(state="normal")
-        self.status_text.delete("1.0", "end")
-        self.status_text.insert("1.0", show_status(self.state))
-        self.status_text.configure(state="disabled")
+        self.frontline_pct.set(self.state.frontline_ratio)
+        self.frontline_label.set(f"{self.state.frontline_ratio:.1f}%")
+        self.pressure_p1.set(self.state.pressure_toward_p2)
+        self.pressure_p2.set(self.state.pressure_toward_p1)
+        self.pressure_label.set(
+            f"P1➜P2 {self.state.pressure_toward_p2:.1f}/{FRONTLINE_PRESSURE_THRESHOLD} | "
+            f"P2➜P1 {self.state.pressure_toward_p1:.1f}/{FRONTLINE_PRESSURE_THRESHOLD}"
+        )
+        self.logi_penalty_label.set(
+            f"Missile logistics penalty: P1 {self.state.player1.logistics_penalty:.1f} | "
+            f"P2 {self.state.player2.logistics_penalty:.1f}"
+        )
+
+        self._update_player_panel(self.p1_panel, self.state.player1)
+        self._update_player_panel(self.p2_panel, self.state.player2)
+
+        active_sorties = len(self.state.sorties)
+        if active_sorties:
+            self.sortie_label.set(f"Active sorties: {active_sorties} aircraft groups away from the front.")
+        else:
+            self.sortie_label.set("")
 
         self.history_text.configure(state="normal")
         self.history_text.delete("1.0", "end")
         self.history_text.insert("1.0", render_history(self.state.history, limit=12))
         self.history_text.configure(state="disabled")
+
+    def _update_player_panel(self, panel: Dict[str, tk.Variable], player: Player) -> None:
+        panel["credits"].set(f"{player.name}: {player.credits} credits (Income: {player.income_this_tick()})")
+        panel["logi_bar"].set(player.logistics_health)
+        panel["logi_text"].set(f"Logistics {player.logistics_health:.1f} (factor {player.logistics_factor:.2f})")
+        panel["production"].set(
+            f"Vehicles {player.vehicle_prod:.1f} | Arms {player.arms_prod:.1f} | "
+            f"Aircraft {player.aircraft_prod:.1f} | Defense {player.defense_prod:.1f} | "
+            f"Total {player.total_production:.1f}"
+        )
+        panel["units"].set(
+            f"Arms {player.arms:.1f}, IFVs {player.vehicles:.1f}, Tanks {player.tanks:.1f}, "
+            f"Aircraft {player.aircraft:.1f}, Helicopters {player.helicopters:.1f}, "
+            f"Missiles {player.missile_launchers:.1f}, Def (arms/veh/air) "
+            f"{player.def_arms:.1f}/{player.def_vehicle:.1f}/{player.def_air:.1f}"
+        )
+        queue_details = (
+            ", ".join(f"{bo.factory.name} ({bo.remaining}t)" for bo in player.build_queue) or "empty"
+        )
+        panel["build"].set(f"Slots {player.build_capacity()} | Queue {len(player.build_queue)}/{BUILD_QUEUE_MAX} -> {queue_details}")
+        panel["purchases"].set(
+            ", ".join(f"{factory_id} x{count}" for factory_id, count in sorted(player.purchases.items()))
+        )
 
     def handle_single_tick(self) -> None:
         self.handle_multiple_ticks(1)
