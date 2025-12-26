@@ -497,6 +497,8 @@ class CncPandaApplication:
                     nodes.append(node)
                     label = self._spawn_label(node, label_text)
                     labels.append(label)
+                    node.hide()
+                    label.hide()
                 self._structure_nodes[side].setdefault(key, []).extend(nodes)
                 self._structure_labels[side].setdefault(key, []).extend(labels)
 
@@ -917,6 +919,16 @@ class CncPandaApplication:
         self._tracer_timer += dt
         self._explosion_timer += dt
 
+        for node in self._smoke_nodes:
+            if intensity <= 0.05:
+                node.hide()
+            else:
+                node.show()
+                node.setColorScale(1.0, 1.0, 1.0, 0.25 + intensity * 0.5)
+
+        if intensity <= 0.1:
+            return
+
         tracer_interval = max(0.1, 0.35 - intensity * 0.18)
         if self._tracer_timer >= tracer_interval:
             self._tracer_timer = 0.0
@@ -959,7 +971,6 @@ class CncPandaApplication:
             offset_x = (idx % 6 - 2.5) * 32
             offset_y = (idx // 6 - 0.5) * 70
             node.setPos(center_x + offset_x, center_y + offset_y + wobble, 10 + 6 * math.sin(idx))
-            node.setColorScale(1.0, 1.0, 1.0, 0.3 + intensity * 0.5)
 
     def _update_missiles(self, dt: float) -> None:
         self._missile_timer += dt
@@ -1198,14 +1209,14 @@ class CncPandaApplication:
                         node.setColorScale(glow, glow, glow, 1)
                         node.show()
                     else:
-                        node.setColorScale(0.4, 0.4, 0.4, 0.6)
-                        node.show()
+                        node.hide()
                 labels = self._structure_labels.get(side_key, {}).get(key, [])
                 for idx, label in enumerate(labels):
                     if idx < built:
                         label.setColor(0.95, 0.95, 1.0, 1.0)
+                        label.show()
                     else:
-                        label.setColor(0.5, 0.5, 0.5, 1.0)
+                        label.hide()
         self._highlight_selection()
 
     def _handle_click(self) -> None:
@@ -1463,6 +1474,8 @@ class CncPandaApplication:
             + self.runtime.state.player2.units.helicopter
             + self.runtime.state.player2.units.aircraft
         )
+        if total_units < 5:
+            return 0.0
         return min(1.0, (intensity / 80.0) + (total_units / 600.0))
 
     def _map_pos(self, frontline_position: float) -> float:
