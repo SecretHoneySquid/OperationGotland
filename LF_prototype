@@ -869,6 +869,7 @@ class GameUI:
         self.frontline_line_id: Optional[int] = None
         self.base_icons: List[int] = []
         self.lanes: List[Dict[str, float]] = []
+        self.obstacles: List[Dict[str, float]] = []
 
     def _build_layout(self) -> None:
         self.root.columnconfigure(0, weight=1)
@@ -1063,6 +1064,7 @@ class GameUI:
             self.canvas.create_oval(20, ground_y - 80, 80, ground_y - 20, fill="#1b5fc1", outline=""),
             self.canvas.create_oval(width - 80, ground_y - 80, width - 20, ground_y - 20, fill="#c12c2c", outline=""),
         ]
+        self.obstacles = self._build_obstacles(width, ground_y)
         self.frontline_line_id = self.canvas.create_line(
             self._frontline_x(width),
             10,
@@ -1090,6 +1092,7 @@ class GameUI:
         p2_spawn = self._spawn_count(self.state.player2)
         for _ in range(p1_spawn):
             y = random.randint(*spawn_band)
+            kind = self._choose_kind(self.state.player1)
             lane = random.choice(self.lanes)
             self.dots.append(
                 {
@@ -1097,13 +1100,15 @@ class GameUI:
                     "progress": 0.0,
                     "y": float(y),
                     "dir": 1,
-                    "speed": random.uniform(1.4, 2.2),
+                    "speed": self._speed_for_kind(kind),
                     "side": "p1",
                     "lane": lane,
+                    "kind": kind,
                 }
             )
         for _ in range(p2_spawn):
             y = random.randint(*spawn_band)
+            kind = self._choose_kind(self.state.player2)
             lane = random.choice(self.lanes)
             self.dots.append(
                 {
@@ -1111,9 +1116,10 @@ class GameUI:
                     "progress": 0.0,
                     "y": float(y),
                     "dir": -1,
-                    "speed": random.uniform(1.4, 2.2),
+                    "speed": self._speed_for_kind(kind),
                     "side": "p2",
                     "lane": lane,
+                    "kind": kind,
                 }
             )
         # Trim to avoid runaway counts.
@@ -1156,8 +1162,18 @@ class GameUI:
             lane = dot["lane"]
             base_x = dot["start"] + dot["dir"] * dot["progress"]
             sway = math.sin((dot["progress"] / lane["period"]) + lane["phase"]) * lane["amplitude"]
-            dot["x"] = base_x
-            dot["y"] = lane["y"] + sway
+            candidate_x = base_x
+            candidate_y = lane["y"] + sway
+            if dot["kind"] not in ("aircraft", "helicopter"):
+                for obs in self.obstacles:
+                    if obs["x1"] <= candidate_x <= obs["x2"] and obs["y1"] <= candidate_y <= obs["y2"]:
+                        # divert vertically around the obstacle
+                        if candidate_y < (obs["y1"] + obs["y2"]) / 2:
+                            candidate_y = obs["y1"] - 5
+                        else:
+                            candidate_y = obs["y2"] + 5
+            dot["x"] = candidate_x
+            dot["y"] = candidate_y
             next_dots.append(dot)
         self.dots = next_dots
 
@@ -1175,12 +1191,13 @@ class GameUI:
                 ground_y,
             )
         for dot in self.dots:
-            color = "#4fb3ff" if dot["side"] == "p1" else "#ff8b8b"
-            self.canvas.create_oval(
-                dot["x"] - 3,
-                dot["y"] - 3,
-                dot["x"] + 3,
-                dot["y"] + 3,
+            color = self._color_for_kind(dot["kind"], dot["side"])
+            size = self._size_for_kind(dot["kind"])
+            self.canvas.create_rectangle(
+                dot["x"] - size,
+                dot["y"] - size / 2,
+                dot["x"] + size,
+                dot["y"] + size / 2,
                 fill=color,
                 outline="",
                 tags="dot",
@@ -1225,6 +1242,63 @@ class GameUI:
             lanes.append({"y": base_y, "amplitude": amplitude, "period": period, "phase": phase})
         return lanes
 
+    def _build_obstacles(self, width: int, ground_y: int) -> List[Dict[str, float]]:
+        obstacles: List[Dict[str, float]] = []
+        random.seed(7)
+        for _ in range(6):
+            w = random.randint(30, 60)
+            h = random.randint(24, 48)
+            x1 = random.randint(140, width - 200)
+            y1 = random.randint(80, int(ground_y - 120))
+            x2 = x1 + w
+            y2 = y1 + h
+            obstacles.append({"x1": x1, "y1": y1, "x2": x2, "y2": y2})
+            self.canvas.create_rectangle(x1, y1, x2, y2, fill="#4a5b50", outline="#2a3a30", width=2, tags="obstacle")
+        return obstacles
+
+    def _choose_kind(self, player: Player) -> str:
+        weights = {
+            "tank": player.tanks,
+            "vehicle": player.vehicles,
+            "infantry": player.arms,
+            "aircraft": player.aircraft,
+            "helicopter": player.helicopters,
+            "missile": player.missile_launchers,
+        }
+        total = sum(weights.values())
+        if total <= 0:
+            return "infantry"
+        pick = random.uniform(0, total)
+        cumulative = 0.0
+        for kind, val in weights.items():
+            cumulative += val
+            if pick <= cumulative:
+                return kind
+        return "infantry"
+
+    def _speed_for_kind(self, kind: str) -> float:
+        base = {"infantry": 1.1, "vehicle": 1.5, "tank": 1.35, "aircraft": 2.6, "helicopter": 2.1, "missile": 1.4}
+        return base.get(kind, 1.2)
+
+    def _size_for_kind(self, kind: str) -> float:
+        sizes = {"infantry": 3.0, "vehicle": 4.5, "tank": 5.0, "aircraft": 4.0, "helicopter": 3.8, "missile": 3.5}
+        return sizes.get(kind, 3.0)
+
+    def _color_for_kind(self, kind: str, side: str) -> str:
+        base = {
+            "infantry": "#9ad69a",
+            "vehicle": "#7fb0ff",
+            "tank": "#4fa3ff",
+            "aircraft": "#ffd36f",
+            "helicopter": "#ffb347",
+            "missile": "#d6a0ff",
+        }
+        shade = base.get(kind, "#9ad69a")
+        if side == "p2":
+            # Tint red-ish for player 2
+            return "#ff7b7b" if kind in ("infantry", "missile") else "#ff9a7b"
+        return shade
+
     def _refresh_store(self) -> None:
         self.store_text.configure(state="normal")
         self.store_text.delete("1.0", "end")
@@ -1264,22 +1338,36 @@ class GameUI:
         panel["logi_bar"].set(player.logistics_health)
         panel["logi_text"].set(f"Logistics {player.logistics_health:.1f} (factor {player.logistics_factor:.2f})")
         panel["production"].set(
-            f"Vehicles {player.vehicle_prod:.1f} | Arms {player.arms_prod:.1f} | "
-            f"Aircraft {player.aircraft_prod:.1f} | Defense {player.defense_prod:.1f} | "
+            f"Output -> Veh {player.vehicle_prod:.1f} | Arms {player.arms_prod:.1f} | "
+            f"Air {player.aircraft_prod:.1f} | Def {player.defense_prod:.1f} | "
             f"Total {player.total_production:.1f}"
         )
         panel["units"].set(
-            f"Arms {player.arms:.1f}, IFVs {player.vehicles:.1f}, Tanks {player.tanks:.1f}, "
-            f"Aircraft {player.aircraft:.1f}, Helicopters {player.helicopters:.1f}, "
-            f"Missiles {player.missile_launchers:.1f}, Def (arms/veh/air) "
-            f"{player.def_arms:.1f}/{player.def_vehicle:.1f}/{player.def_air:.1f}"
+            "Ground: INF {inf:.1f} | IFV {veh:.1f} | TANK {tank:.1f}\n"
+            "Air: AC {air:.1f} | HELI {heli:.1f} | MISS {miss:.1f}\n"
+            "Def: AR {defa:.1f} | VEH {defv:.1f} | AIR {defair:.1f}".format(
+                inf=player.arms,
+                veh=player.vehicles,
+                tank=player.tanks,
+                air=player.aircraft,
+                heli=player.helicopters,
+                miss=player.missile_launchers,
+                defa=player.def_arms,
+                defv=player.def_vehicle,
+                defair=player.def_air,
+            )
         )
         queue_details = (
             ", ".join(f"{bo.factory.name} ({bo.remaining}t)" for bo in player.build_queue) or "empty"
         )
         panel["build"].set(f"Slots {player.build_capacity()} | Queue {len(player.build_queue)}/{BUILD_QUEUE_MAX} -> {queue_details}")
         panel["purchases"].set(
-            ", ".join(f"{factory_id} x{count}" for factory_id, count in sorted(player.purchases.items()))
+            ", ".join(
+                f"{FACTORIES_LOOKUP[factory_id].name} x{count}"
+                for factory_id, count in sorted(player.purchases.items())
+                if count > 0
+            )
+            or "No structures yet"
         )
 
     def handle_single_tick(self) -> None:
@@ -1437,7 +1525,9 @@ def main() -> None:
     )
     args = parser.parse_args()
 
+    global FACTORIES_LOOKUP
     factories = make_factories()
+    FACTORIES_LOOKUP = factories
     state = GameState(player1=Player("Player 1"), player2=Player("Player 2"))
 
     if args.gui:
