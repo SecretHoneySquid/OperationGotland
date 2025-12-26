@@ -1,0 +1,11 @@
+# Byte-compiled / cached files
+__pycache__/
+*.py[cod]
+
+# Virtual environments
+.venv/
+venv/
+
+# IDE artifacts
+.vscode/
+.idea/
