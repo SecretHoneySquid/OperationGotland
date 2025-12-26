@@ -456,7 +456,7 @@ def casualties_from(attacker: Player, defender: Player) -> Dict[str, float]:
         "tanks": {"vehicles": 0.8, "tanks": 0.5, "def_vehicle": 0.6, "def_arms": 0.4},
         "aircraft": {
             "tanks": 0.9,
-            "vehicles": 1.35,  # buff vs IFVs/vehicles
+            "vehicles": 1.62,  # buff vs IFVs/vehicles (20% increase)
             "aircraft": 0.6,
             "def_air": 0.4,
             "def_vehicle": 0.5,  # more threat to vehicle defenses
@@ -619,13 +619,37 @@ def buy_factory(
     return f"{player.name} queued {quantity}x {factory.name}. Remaining credits: {player.credits}"
 
 
+def render_bar(label: str, value: float, maximum: float, width: int = 22) -> str:
+    value_clamped = clamp(value, 0.0, maximum)
+    filled = int(round((value_clamped / maximum) * width))
+    empty = width - filled
+    bar = "█" * filled + "·" * empty
+    return f"{label:<14} [{bar}] {value:.1f}/{maximum}"
+
+
+def render_frontline_bar(ratio_percent: float, width: int = 30) -> str:
+    ratio_clamped = clamp(ratio_percent, 0.0, 100.0)
+    filled = int(round((ratio_clamped / 100.0) * width))
+    empty = width - filled
+    bar = "█" * filled + "·" * empty
+    return f"Front line      [{bar}] {ratio_clamped:.1f}%"
+
+
+def render_history(history: List[str], limit: int = 10) -> str:
+    if not history:
+        return "No history yet."
+    recent = history[-limit:]
+    return "Recent events:\n" + "\n".join(f" - {item}" for item in recent)
+
+
 def show_status(state: GameState) -> str:
     lines = [
-        f"Front line at {state.frontline:.2f} (ratio {state.frontline_ratio:.2f}% between Player 1 @0 and Player 2 @100)",
-        "Pressure meters: "
-        f"P1->P2 {state.pressure_toward_p2:.1f}/{FRONTLINE_PRESSURE_THRESHOLD}, "
-        f"P2->P1 {state.pressure_toward_p1:.1f}/{FRONTLINE_PRESSURE_THRESHOLD}",
+        render_frontline_bar(state.frontline_ratio),
+        render_bar("Pressure P1->P2", state.pressure_toward_p2, FRONTLINE_PRESSURE_THRESHOLD),
+        render_bar("Pressure P2->P1", state.pressure_toward_p1, FRONTLINE_PRESSURE_THRESHOLD),
+        "",
         describe_player(state.player1),
+        "",
         describe_player(state.player2),
     ]
     if state.sorties:
@@ -676,7 +700,7 @@ def interactive_loop(state: GameState, factories: Dict[int, Factory]) -> None:
             elif cmd == "store":
                 print(describe_store(factories))
             elif cmd == "log":
-                print("\n".join(state.history[-10:]) or "No history yet.")
+                print(render_history(state.history))
             elif cmd == "buy":
                 if len(parts) < 3:
                     print("Usage: buy <p1|p2> <factory_id> [n|max]")
@@ -745,9 +769,8 @@ def main() -> None:
             if state.winner:
                 break
         print(show_status(state))
-        print("\nRecent events:")
-        for line in state.history[-10:]:
-            print(" -", line)
+        print()
+        print(render_history(state.history))
     else:
         interactive_loop(state, factories)
 
