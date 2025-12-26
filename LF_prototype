@@ -36,6 +36,7 @@ from __future__ import annotations
 import argparse
 import tkinter as tk
 from dataclasses import dataclass, field
+import random
 from tkinter import messagebox, ttk
 from typing import Callable, Dict, List, Optional, Tuple
 
@@ -849,7 +850,9 @@ class GameUI:
         self.root.title("Logistics & Production Tug-of-War")
         self._init_vars()
         self._build_layout()
+        self._init_visualization()
         self.update_status()
+        self._animate()
 
     def _init_vars(self) -> None:
         self.frontline_pct = tk.DoubleVar(value=self.state.frontline_ratio)
@@ -861,17 +864,31 @@ class GameUI:
         self.sortie_label = tk.StringVar()
         self.p1_panel: Dict[str, tk.Variable] = {}
         self.p2_panel: Dict[str, tk.Variable] = {}
+        self.dots: List[Dict[str, float]] = []
+        self.frontline_line_id: Optional[int] = None
+        self.base_icons: List[int] = []
 
     def _build_layout(self) -> None:
-        main = ttk.Frame(self.root, padding=12)
-        main.grid(row=0, column=0, sticky="nsew")
         self.root.columnconfigure(0, weight=1)
         self.root.rowconfigure(0, weight=1)
-        main.columnconfigure(0, weight=3)
-        main.columnconfigure(1, weight=2)
+
+        # Large visualization canvas
+        self.canvas = tk.Canvas(self.root, width=1100, height=420, bg="#0f1a24", highlightthickness=0)
+        self.canvas.grid(row=0, column=0, sticky="nsew")
+        self.canvas.create_rectangle(0, 0, 1100, 420, fill="#0f1a24", outline="")
+
+        # Overlay container that floats above the canvas
+        style = ttk.Style()
+        style.configure("Overlay.TFrame", background="", relief="flat")
+        style.configure("Overlay.TLabelframe", background="", relief="flat")
+        style.configure("Overlay.TLabelframe.Label", background="", relief="flat")
+
+        main = ttk.Frame(self.root, padding=12, style="Overlay.TFrame")
+        main.place(relx=1.0, rely=0.0, anchor="ne", relwidth=0.42, relheight=1.0)
+        main.columnconfigure(0, weight=1)
 
         # Status pane
-        status_frame = ttk.LabelFrame(main, text="Status")
+        status_frame = ttk.LabelFrame(main, text="Status", style="Overlay.TLabelframe")
         status_frame.grid(row=0, column=0, sticky="nsew", padx=(0, 8), pady=(0, 8))
         status_frame.columnconfigure(0, weight=1)
         status_frame.rowconfigure(2, weight=1)
@@ -907,11 +924,11 @@ class GameUI:
         ttk.Label(status_frame, textvariable=self.sortie_label, padding=(6, 2)).grid(row=4, column=0, sticky="w")
 
         # Controls and history
-        right = ttk.Frame(main)
+        right = ttk.Frame(main, style="Overlay.TFrame")
         right.grid(row=0, column=1, sticky="nsew")
         right.columnconfigure(0, weight=1)
 
-        controls = ttk.LabelFrame(right, text="Controls")
+        controls = ttk.LabelFrame(right, text="Controls", style="Overlay.TLabelframe")
         controls.grid(row=0, column=0, sticky="nsew", pady=(0, 8))
 
         tick_row = ttk.Frame(controls)
@@ -922,7 +939,7 @@ class GameUI:
         ttk.Button(tick_row, text="+25", command=lambda: self.handle_multiple_ticks(25)).grid(row=0, column=3, padx=2)
 
         # Purchase controls
-        buy_frame = ttk.LabelFrame(controls, text="Purchase factory")
+        buy_frame = ttk.LabelFrame(controls, text="Purchase factory", style="Overlay.TLabelframe")
         buy_frame.grid(row=1, column=0, sticky="ew", padx=6, pady=6)
         buy_frame.columnconfigure(1, weight=1)
 
@@ -945,7 +962,7 @@ class GameUI:
         ttk.Button(buy_frame, text="Queue Purchase", command=self.handle_buy).grid(row=3, column=0, columnspan=2, pady=(6, 0))
 
         # Sortie controls
-        sortie_frame = ttk.LabelFrame(controls, text="Launch air sortie")
+        sortie_frame = ttk.LabelFrame(controls, text="Launch air sortie", style="Overlay.TLabelframe")
         sortie_frame.grid(row=2, column=0, sticky="ew", padx=6, pady=6)
         sortie_frame.columnconfigure(1, weight=1)
 
@@ -973,7 +990,7 @@ class GameUI:
         ttk.Button(sortie_frame, text="Launch Sortie", command=self.handle_sortie).grid(row=3, column=0, columnspan=2, pady=(6, 0))
 
         # Store and history
-        store_frame = ttk.LabelFrame(right, text="Store (read-only)")
+        store_frame = ttk.LabelFrame(right, text="Store (read-only)", style="Overlay.TLabelframe")
         store_frame.grid(row=1, column=0, sticky="nsew")
         store_frame.columnconfigure(0, weight=1)
         store_frame.rowconfigure(0, weight=1)
@@ -981,7 +998,7 @@ class GameUI:
         self.store_text.grid(row=0, column=0, sticky="nsew")
         self._refresh_store()
 
-        history_frame = ttk.LabelFrame(right, text="Recent events")
+        history_frame = ttk.LabelFrame(right, text="Recent events", style="Overlay.TLabelframe")
         history_frame.grid(row=2, column=0, sticky="nsew", pady=(8, 0))
         history_frame.columnconfigure(0, weight=1)
         history_frame.rowconfigure(0, weight=1)
@@ -1028,6 +1045,112 @@ class GameUI:
             "build": build,
             "purchases": purchases,
         }
+
+    def _init_visualization(self) -> None:
+        self.canvas.delete("all")
+        self.canvas.configure(bg="#0f1a24")
+        width = int(self.canvas.cget("width"))
+        height = int(self.canvas.cget("height"))
+        ground_y = height - 40
+        self.canvas.create_rectangle(0, ground_y, width, height, fill="#0c141a", outline="")
+        self.base_icons = [
+            self.canvas.create_oval(20, ground_y - 80, 80, ground_y - 20, fill="#1b5fc1", outline=""),
+            self.canvas.create_oval(width - 80, ground_y - 80, width - 20, ground_y - 20, fill="#c12c2c", outline=""),
+        ]
+        self.frontline_line_id = self.canvas.create_line(
+            self._frontline_x(width),
+            10,
+            self._frontline_x(width),
+            ground_y,
+            fill="#d3d7de",
+            width=2,
+            dash=(4, 4),
+        )
+        self.canvas.create_text(40, 24, text="P1 Base", fill="#d3e3ff", anchor="w", font=("TkDefaultFont", 11, "bold"))
+        self.canvas.create_text(width - 40, 24, text="P2 Base", fill="#ffd8d8", anchor="e", font=("TkDefaultFont", 11, "bold"))
+
+    def _frontline_x(self, width: int) -> float:
+        return FRONTLINE_MIN + (self.state.frontline_ratio / 100.0) * width
+
+    def _spawn_dots(self) -> None:
+        width = int(self.canvas.cget("width"))
+        height = int(self.canvas.cget("height"))
+        ground_y = height - 50
+        spawn_band = (40, ground_y - 20)
+        # Spawn proportional to production, capped for performance.
+        p1_spawn = clamp(int(self.state.player1.total_production / 60), 1, 6)
+        p2_spawn = clamp(int(self.state.player2.total_production / 60), 1, 6)
+        for _ in range(p1_spawn):
+            y = random.randint(*spawn_band)
+            self.dots.append({"x": 36.0, "y": float(y), "dir": 1, "speed": random.uniform(0.6, 1.2), "side": "p1"})
+        for _ in range(p2_spawn):
+            y = random.randint(*spawn_band)
+            self.dots.append({"x": float(width - 36), "y": float(y), "dir": -1, "speed": random.uniform(0.6, 1.2), "side": "p2"})
+        # Trim to avoid runaway counts.
+        if len(self.dots) > 400:
+            self.dots = self.dots[-400:]
+
+    def _resolve_dot_collisions(self) -> None:
+        survivors: List[Dict[str, float]] = []
+        grid: Dict[int, Dict[int, Dict[str, float]]] = {}
+        cell_size = 10
+        for dot in self.dots:
+            cell_x = int(dot["x"] // cell_size)
+            cell_y = int(dot["y"] // cell_size)
+            key = (cell_x, cell_y)
+            bucket = grid.setdefault(key, {})
+            if bucket and bucket.get("side") != dot["side"]:
+                # Collision: remove both (skip adding)
+                bucket.clear()
+            else:
+                bucket["dot"] = dot
+                bucket["side"] = dot["side"]
+        for bucket in grid.values():
+            dot = bucket.get("dot")
+            if dot:
+                survivors.append(dot)
+        self.dots = survivors
+
+    def _step_dots(self) -> None:
+        width = int(self.canvas.cget("width"))
+        next_dots: List[Dict[str, float]] = []
+        for dot in self.dots:
+            dot["x"] += dot["dir"] * dot["speed"]
+            if 10 <= dot["x"] <= width - 10:
+                next_dots.append(dot)
+        self.dots = next_dots
+
+    def _render_dots(self) -> None:
+        width = int(self.canvas.cget("width"))
+        height = int(self.canvas.cget("height"))
+        ground_y = height - 40
+        self.canvas.delete("dot")
+        if self.frontline_line_id:
+            self.canvas.coords(
+                self.frontline_line_id,
+                self._frontline_x(width),
+                10,
+                self._frontline_x(width),
+                ground_y,
+            )
+        for dot in self.dots:
+            color = "#4fb3ff" if dot["side"] == "p1" else "#ff8b8b"
+            self.canvas.create_oval(
+                dot["x"] - 3,
+                dot["y"] - 3,
+                dot["x"] + 3,
+                dot["y"] + 3,
+                fill=color,
+                outline="",
+                tags="dot",
+            )
+
+    def _animate(self) -> None:
+        self._spawn_dots()
+        self._step_dots()
+        self._resolve_dot_collisions()
+        self._render_dots()
+        self.root.after(30, self._animate)
 
     def _refresh_store(self) -> None:
         self.store_text.configure(state="normal")
