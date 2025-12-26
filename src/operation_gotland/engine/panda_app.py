@@ -14,8 +14,10 @@ from operation_gotland.simulation.runtime import SimulationRuntime
 class Sortie:
     node: "NodePath"
     side: str
+    state: str
     progress: float
     speed: float
+    timer: float
 
 
 @dataclass
@@ -37,22 +39,23 @@ class Explosion:
 
 
 @dataclass
-class Convoy:
-    node: "NodePath"
-    side: str
-    kind: str
-    progress: float
-    speed: float
-    slot: int
-
-
-@dataclass
 class Missile:
     node: "NodePath"
     start: "LPoint3f"
     end: "LPoint3f"
     age: float
     duration: float
+
+
+@dataclass
+class ProductionUnit:
+    node: "NodePath"
+    side: str
+    unit_key: str
+    start: "LPoint3f"
+    end: "LPoint3f"
+    progress: float
+    speed: float
 
 
 class CncPandaApplication:
@@ -75,11 +78,14 @@ class CncPandaApplication:
         self._structure_nodes: Dict[str, Dict[str, List["NodePath"]]] = {}
         self._structure_labels: Dict[str, Dict[str, List["OnscreenText"]]] = {}
         self._sorties: List[Sortie] = []
-        self._convoys: List[Convoy] = []
         self._tracers: List[Tracer] = []
         self._explosions: List[Explosion] = []
         self._missiles: List[Missile] = []
         self._smoke_nodes: List["NodePath"] = []
+        self._production_units: List[ProductionUnit] = []
+        self._prev_counts: Dict[str, Dict[str, int]] = {"p1": {}, "p2": {}}
+        self._spawn_backlog: Dict[str, Dict[str, int]] = {"p1": {}, "p2": {}}
+        self._last_tick = -1
         self._unit_offsets: Dict[str, Dict[str, List[Tuple[float, float]]]] = {}
         self._base_positions: Dict[str, "LPoint3f"] = {}
         self._rng = random.Random(42)
@@ -124,7 +130,7 @@ class CncPandaApplication:
         self._picker_ray: Optional["CollisionRay"] = None
         self._key_state: Dict[str, bool] = {"left": False, "right": False, "up": False, "down": False}
         self._camera_center = None
-        self._camera_height = 260.0
+        self._camera_height = 280.0
         self._camera_pitch = -45.0
         self._map_length = 2000.0
         self._map_width = 700.0
@@ -174,7 +180,7 @@ class CncPandaApplication:
         render.setAntialias(True)
 
         self._world = render.attachNewNode("world")
-        self._camera_center = LPoint3f(0.0, 60.0, 0.0)
+        self._camera_center = LPoint3f(0.0, 80.0, 0.0)
 
         base = self._engine  # type: ignore[assignment]
         base.setBackgroundColor(0.04, 0.06, 0.07)
@@ -207,7 +213,7 @@ class CncPandaApplication:
         self._build_objectives()
         self._build_unit_markers()
         self._build_sorties()
-        self._build_convoys()
+        # Production-driven units will be spawned on tick updates.
         self._build_ui_panels()
 
         self._ui_text = OnscreenText(
@@ -434,11 +440,20 @@ class CncPandaApplication:
             "p2": p2_base.getPos(self._world),
         }
 
+        self._spawn_base_floor(p1_base, (200, 140), (0.12, 0.12, 0.12, 1.0))
+        self._spawn_base_floor(p2_base, (200, 140), (0.12, 0.12, 0.12, 1.0))
+
         for idx in range(8):
             offset = (idx % 4) * 26 - 38
             row = (idx // 4) * 32 - 16
             self._spawn_box(p1_base, (offset, row, 0), (20, 20, 14), (0.22, 0.25, 0.3, 1))
             self._spawn_box(p2_base, (offset, row, 0), (20, 20, 14), (0.3, 0.22, 0.2, 1))
+
+        for idx in range(3):
+            self._spawn_box(p1_base, (-70 + idx * 45, 55, 0), (32, 20, 12), (0.2, 0.22, 0.26, 1))
+            self._spawn_box(p2_base, (-70 + idx * 45, 55, 0), (32, 20, 12), (0.26, 0.22, 0.2, 1))
+        self._spawn_box(p1_base, (60, -55, 0), (18, 18, 24), (0.25, 0.28, 0.3, 1))
+        self._spawn_box(p2_base, (60, -55, 0), (18, 18, 24), (0.3, 0.26, 0.22, 1))
 
         self._spawn_runway(p1_base, (-40, -70, 0))
         self._spawn_runway(p2_base, (40, 70, 0))
@@ -505,6 +520,23 @@ class CncPandaApplication:
         pad_np.setPos(*pos)
         pad_np.setP(-90)
         pad_np.setColor(*color)
+
+    def _spawn_base_floor(self, parent: "NodePath", size: Tuple[float, float], color) -> None:
+        from panda3d.core import CardMaker  # type: ignore
+
+        width, height = size
+        base = CardMaker("base-floor")
+        base.setFrame(-width / 2, width / 2, -height / 2, height / 2)
+        floor = parent.attachNewNode(base.generate())
+        floor.setP(-90)
+        floor.setColor(*color)
+        for offset in (-height / 4, height / 4):
+            stripe = CardMaker("stripe")
+            stripe.setFrame(-width / 2, width / 2, -6, 6)
+            stripe_np = parent.attachNewNode(stripe.generate())
+            stripe_np.setP(-90)
+            stripe_np.setY(offset)
+            stripe_np.setColor(0.16, 0.16, 0.16, 1.0)
 
     def _spawn_label(self, parent: "NodePath", text: str) -> "OnscreenText":
         from direct.gui.DirectGui import OnscreenText  # type: ignore
@@ -588,6 +620,32 @@ class CncPandaApplication:
             collider.setTag("asset_side", parent.getTag("asset_side") or "")
             collider.setTag("asset_index", parent.getTag("asset_index") or "")
 
+    def _spawn_unit_shape(self, parent: "NodePath", unit_key: str, color) -> None:
+        if unit_key == "infantry":
+            self._spawn_box(parent, (0, 0, 0), (2.5, 2.5, 6.0), color)
+        elif unit_key == "ifv":
+            self._spawn_box(parent, (0, 0, 0), (8, 4.5, 3.0), color)
+            self._spawn_box(parent, (1, 0, 2.6), (3, 2.5, 1.5), color)
+        elif unit_key == "tank":
+            self._spawn_box(parent, (0, 0, 0), (10, 5, 3.5), color)
+            self._spawn_box(parent, (0, 0, 3), (4, 3, 1.8), color)
+            self._spawn_box(parent, (6, 0, 3.2), (8, 1, 1), color)
+        elif unit_key == "helicopter":
+            self._spawn_box(parent, (0, 0, 0), (8, 3.5, 3), color)
+            self._spawn_box(parent, (-5, 0, 1.5), (6, 1.5, 1.5), color)
+            self._spawn_box(parent, (0, 0, 3.2), (12, 1, 0.6), color)
+            self._spawn_box(parent, (0, 0, 3.2), (1, 10, 0.6), color)
+        elif unit_key == "aircraft":
+            self._spawn_box(parent, (0, 0, 0), (14, 3, 3), color)
+            self._spawn_box(parent, (0, 0, 1), (6, 16, 0.8), color)
+            self._spawn_box(parent, (-6, 0, 1.8), (4, 4, 1.2), color)
+            self._spawn_box(parent, (-6.5, 0, 3.2), (2, 2, 3.2), color)
+        elif unit_key.startswith("def_"):
+            self._spawn_box(parent, (0, 0, 0), (6, 6, 3), color)
+            self._spawn_box(parent, (0, 0, 3.2), (4, 4, 2), color)
+        else:
+            self._spawn_box(parent, (0, 0, 0), (6, 6, 3), color)
+
     def _build_objectives(self) -> None:
         from panda3d.core import NodePath  # type: ignore
 
@@ -607,11 +665,11 @@ class CncPandaApplication:
             for unit in classes:
                 nodes: List["NodePath"] = []
                 offsets: List[Tuple[float, float]] = []
-                for idx in range(18):
+                for idx in range(8):
                     marker = self._world.attachNewNode(f"{side}_{unit}_{idx}")
-                    self._spawn_box(marker, (0, 0, 0), (6, 6, 6), self._unit_color(side, unit))
+                    self._spawn_unit_shape(marker, unit, self._unit_color(side, unit))
                     nodes.append(marker)
-                    offsets.append((self._rng.uniform(-120, 120), self._rng.uniform(-90, 90)))
+                    offsets.append((self._rng.uniform(-90, 90), self._rng.uniform(-70, 70)))
                 self._unit_markers[side][unit] = nodes
                 self._unit_offsets[side][unit] = offsets
 
@@ -619,30 +677,12 @@ class CncPandaApplication:
         assert self._world is not None
         self._sorties = []
         for side in ("p1", "p2"):
-            color = (0.6, 0.8, 1.0, 1.0) if side == "p1" else (1.0, 0.6, 0.4, 1.0)
             for idx in range(6):
                 node = self._world.attachNewNode(f"sortie_{side}_{idx}")
-                self._spawn_box(node, (0, 0, 0), (6, 10, 3), color)
-                self._sorties.append(Sortie(node=node, side=side, progress=idx / 6, speed=0.04 + idx * 0.004))
-
-    def _build_convoys(self) -> None:
-        assert self._world is not None
-        self._convoys = []
-        colors = {
-            "infantry": (0.3, 0.7, 0.4, 1.0),
-            "armor": (0.35, 0.5, 0.8, 1.0),
-            "air": (0.85, 0.8, 0.3, 1.0),
-            "heli": (0.45, 0.7, 0.45, 1.0),
-            "defense": (0.8, 0.35, 0.35, 1.0),
-        }
-        for side in ("p1", "p2"):
-            for kind, color in colors.items():
-                for idx in range(6):
-                    node = self._world.attachNewNode(f"convoy_{side}_{kind}_{idx}")
-                    self._spawn_box(node, (0, 0, 0), (5, 9, 3), color)
-                    self._convoys.append(
-                        Convoy(node=node, side=side, kind=kind, progress=idx / 6, speed=0.03 + idx * 0.004, slot=idx)
-                    )
+                self._spawn_unit_shape(node, "aircraft", self._unit_color(side, "aircraft"))
+                self._sorties.append(
+                    Sortie(node=node, side=side, state="refuel", progress=idx / 6, speed=0.18 + idx * 0.02, timer=0.0)
+                )
 
     def _build_ui_panels(self) -> None:
         from direct.gui.DirectGui import DirectFrame  # type: ignore
@@ -691,7 +731,7 @@ class CncPandaApplication:
         self._key_state[key] = value
 
     def _adjust_zoom(self, direction: int) -> None:
-        self._camera_height = max(70.0, min(640.0, self._camera_height - direction * 20))
+        self._camera_height = max(70.0, min(720.0, self._camera_height - direction * 20))
 
     def _advance_simulation(self, task: "Task") -> int:
         """Advance the simulation and allow Panda3D to continue its task chain."""
@@ -723,11 +763,15 @@ class CncPandaApplication:
             center_x, center_y = self._combat_center()
             self._battle_lane.setPos(center_x, center_y, 0.05)
 
+        if self.runtime.state.tick != self._last_tick:
+            self._handle_tick_update()
+            self._last_tick = self.runtime.state.tick
+
         self._update_objectives()
         self._update_structures()
         self._update_unit_markers()
         self._update_sorties()
-        self._update_convoys(dt)
+        self._update_production_units(dt)
         self._update_combat_effects(dt)
         self._update_missiles(dt)
         self._update_ui()
@@ -758,7 +802,7 @@ class CncPandaApplication:
             base_pos = self._base_positions.get(side_key, None)
             for unit_key, nodes in self._unit_markers[side_key].items():
                 count = getattr(player.units, unit_key, 0.0) if hasattr(player.units, unit_key) else 0.0
-                desired = max(1, min(len(nodes), int(count / 12) + 1))
+                desired = min(len(nodes), int(count / 20) + (1 if count > 0 else 0))
                 tier = player.unit_tiers.get(unit_key, 0)
                 offsets = self._unit_offsets.get(side_key, {}).get(unit_key, [])
                 for idx, node in enumerate(nodes):
@@ -777,67 +821,93 @@ class CncPandaApplication:
                             y = center_y + offset_y * 0.3 + wobble
                             z = 2.5
                         node.setPos(x, y, z)
-                        node.setScale(1.6 + tier * 0.25)
+                        node.setScale(1.4 + tier * 0.2)
                         node.show()
                     else:
                         node.hide()
 
     def _update_sorties(self) -> None:
         center_x, center_y = self._combat_center()
-        posture_alt = {
-            "ISR": 140,
-            "SEAD": 110,
-            "INTERDICT": 120,
-            "DEEP_STRIKE": 150,
-            "CAS": 85,
+        posture_orbit = {
+            "ISR": 8.0,
+            "SEAD": 6.0,
+            "INTERDICT": 6.0,
+            "DEEP_STRIKE": 5.0,
+            "CAS": 4.0,
         }
         for side in ("p1", "p2"):
             player = self.runtime.state.player1 if side == "p1" else self.runtime.state.player2
             posture = player.air_posture
-            altitude = posture_alt.get(posture, 120)
             alpha = max(0.35, 1.0 - player.air_stealth_level * 0.12)
             sorties = [s for s in self._sorties if s.side == side]
-            active = max(1, min(len(sorties), int(player.units.aircraft / 4) + 1))
+            active = max(0, min(len(sorties), int(player.units.aircraft / 6)))
+            runway = self._runway_position(side)
             for idx, sortie in enumerate(sorties):
                 if idx >= active:
                     sortie.node.hide()
                     continue
                 sortie.node.show()
-                sortie.progress = (sortie.progress + sortie.speed * 0.01) % 1.0
-                angle = sortie.progress * math.tau + (0 if side == "p1" else math.pi)
-                radius = 220 + idx * 18
-                x = center_x + math.cos(angle) * radius
-                y = center_y + math.sin(angle) * radius
-                z = altitude + 10 * math.sin(angle * 2)
-                sortie.node.setPos(x, y, z)
+                sortie.timer += 0.02
+                if sortie.state == "refuel":
+                    sortie.node.setPos(runway.x, runway.y, 4.0)
+                    if sortie.timer > 3.0:
+                        sortie.state = "taxi"
+                        sortie.timer = 0.0
+                elif sortie.state == "taxi":
+                    t = min(1.0, sortie.timer / 1.0)
+                    sortie.node.setPos(runway.x + t * 12, runway.y, 4.0)
+                    if t >= 1.0:
+                        sortie.state = "takeoff"
+                        sortie.timer = 0.0
+                elif sortie.state == "takeoff":
+                    t = min(1.0, sortie.timer / 1.2)
+                    x = runway.x + t * 40
+                    y = runway.y + (4 if side == "p1" else -4) * t
+                    z = 4 + t * 60
+                    sortie.node.setPos(x, y, z)
+                    if t >= 1.0:
+                        sortie.state = "enroute"
+                        sortie.timer = 0.0
+                elif sortie.state == "enroute":
+                    t = min(1.0, sortie.timer / 4.0)
+                    x = runway.x + (center_x - runway.x) * t
+                    y = runway.y + (center_y - runway.y) * t
+                    z = 80 + t * 40
+                    sortie.node.setPos(x, y, z)
+                    if t >= 1.0:
+                        sortie.state = "orbit"
+                        sortie.timer = 0.0
+                        sortie.progress = self._rng.random()
+                elif sortie.state == "orbit":
+                    sortie.progress = (sortie.progress + sortie.speed * 0.01) % 1.0
+                    angle = sortie.progress * math.tau
+                    radius = 200 + idx * 12
+                    x = center_x + math.cos(angle) * radius
+                    y = center_y + math.sin(angle) * radius
+                    z = 120 + 10 * math.sin(angle * 2)
+                    sortie.node.setPos(x, y, z)
+                    if sortie.timer >= posture_orbit.get(posture, 6.0):
+                        sortie.state = "return"
+                        sortie.timer = 0.0
+                elif sortie.state == "return":
+                    t = min(1.0, sortie.timer / 3.0)
+                    x = center_x + (runway.x - center_x) * t
+                    y = center_y + (runway.y - center_y) * t
+                    z = 120 - t * 80
+                    sortie.node.setPos(x, y, z)
+                    if t >= 1.0:
+                        sortie.state = "landing"
+                        sortie.timer = 0.0
+                elif sortie.state == "landing":
+                    t = min(1.0, sortie.timer / 1.2)
+                    x = runway.x
+                    y = runway.y
+                    z = 40 - t * 36
+                    sortie.node.setPos(x, y, z)
+                    if t >= 1.0:
+                        sortie.state = "refuel"
+                        sortie.timer = 0.0
                 sortie.node.setColorScale(1, 1, 1, alpha)
-
-    def _update_convoys(self, dt: float) -> None:
-        center_x, center_y = self._combat_center()
-        output_scale = 45.0
-        for convoy in self._convoys:
-            player = self.runtime.state.player1 if convoy.side == "p1" else self.runtime.state.player2
-            output_map = {
-                "infantry": player.last_output.arms,
-                "armor": player.last_output.vehicles,
-                "air": player.last_output.aircraft,
-                "heli": player.last_output.rotary,
-                "defense": player.last_output.defense,
-            }
-            desired = max(1, min(6, int(output_map.get(convoy.kind, 0.0) / output_scale) + 1))
-            if convoy.slot >= desired:
-                convoy.node.hide()
-                convoy.progress += convoy.speed * dt
-                continue
-            convoy.node.show()
-            convoy.progress = (convoy.progress + convoy.speed * dt) % 1.0
-            base_pos = self._base_positions.get(convoy.side)
-            if base_pos is None:
-                continue
-            offset = (convoy.slot - 2.5) * 12
-            x = base_pos.x + (center_x - base_pos.x) * convoy.progress
-            y = base_pos.y + (center_y - base_pos.y) * convoy.progress + offset
-            convoy.node.setPos(x, y, 2.0)
 
     def _update_combat_effects(self, dt: float) -> None:
         intensity = self._combat_intensity()
@@ -845,16 +915,16 @@ class CncPandaApplication:
         self._tracer_timer += dt
         self._explosion_timer += dt
 
-        tracer_interval = max(0.06, 0.2 - intensity * 0.12)
+        tracer_interval = max(0.1, 0.35 - intensity * 0.18)
         if self._tracer_timer >= tracer_interval:
             self._tracer_timer = 0.0
-            for _ in range(int(4 + intensity * 10)):
+            for _ in range(int(1 + intensity * 4)):
                 self._spawn_tracer(center_x, center_y)
 
-        explosion_interval = max(0.2, 0.6 - intensity * 0.3)
+        explosion_interval = max(0.4, 1.0 - intensity * 0.4)
         if self._explosion_timer >= explosion_interval:
             self._explosion_timer = 0.0
-            for _ in range(int(1 + intensity * 4)):
+            for _ in range(int(1 + intensity * 2)):
                 self._spawn_explosion(center_x, center_y)
 
         for tracer in list(self._tracers):
@@ -908,11 +978,77 @@ class CncPandaApplication:
             z = missile.start.z + (missile.end.z - missile.start.z) * t + height
             missile.node.setPos(x, y, z)
 
+    def _handle_tick_update(self) -> None:
+        for side, player in (("p1", self.runtime.state.player1), ("p2", self.runtime.state.player2)):
+            for unit_key in ("infantry", "ifv", "tank", "helicopter", "aircraft"):
+                current = int(getattr(player.units, unit_key, 0.0))
+                prev = self._prev_counts[side].get(unit_key, 0)
+                if current > prev:
+                    delta = current - prev
+                    self._spawn_backlog[side][unit_key] = self._spawn_backlog[side].get(unit_key, 0) + delta
+                self._prev_counts[side][unit_key] = current
+            self._spawn_from_backlog(side)
+
+    def _spawn_from_backlog(self, side: str) -> None:
+        priority = ["tank", "ifv", "infantry", "helicopter"]
+        spawned = 0
+        for unit_key in priority:
+            if spawned >= 1:
+                break
+            backlog = self._spawn_backlog[side].get(unit_key, 0)
+            if backlog <= 0:
+                continue
+            self._spawn_backlog[side][unit_key] = backlog - 1
+            self._spawn_production_unit(side, unit_key)
+            spawned += 1
+
+    def _spawn_production_unit(self, side: str, unit_key: str) -> None:
+        from panda3d.core import LPoint3f  # type: ignore
+
+        base = self._base_positions.get(side)
+        if base is None or self._world is None:
+            return
+        offset = {
+            "infantry": LPoint3f(20, 20, 0),
+            "ifv": LPoint3f(30, -10, 0),
+            "tank": LPoint3f(40, 10, 0),
+            "helicopter": LPoint3f(10, -30, 0),
+            "aircraft": LPoint3f(-20, -40, 0),
+        }.get(unit_key, LPoint3f(20, 0, 0))
+        start = LPoint3f(base.x + offset.x, base.y + offset.y, 2.0)
+        center_x, center_y = self._combat_center()
+        end = LPoint3f(center_x + self._rng.uniform(-40, 40), center_y + self._rng.uniform(-30, 30), 2.0)
+        node = self._world.attachNewNode(f"prod_{side}_{unit_key}_{self.runtime.state.tick}")
+        self._spawn_unit_shape(node, unit_key, self._unit_color(side, unit_key))
+        self._production_units.append(
+            ProductionUnit(
+                node=node,
+                side=side,
+                unit_key=unit_key,
+                start=start,
+                end=end,
+                progress=0.0,
+                speed=0.18 if unit_key in {"tank", "ifv"} else 0.22,
+            )
+        )
+
+    def _update_production_units(self, dt: float) -> None:
+        for unit in list(self._production_units):
+            unit.progress += unit.speed * dt
+            if unit.progress >= 1.0:
+                unit.node.removeNode()
+                self._production_units.remove(unit)
+                continue
+            x = unit.start.x + (unit.end.x - unit.start.x) * unit.progress
+            y = unit.start.y + (unit.end.y - unit.start.y) * unit.progress
+            z = unit.start.z + (unit.end.z - unit.start.z) * unit.progress
+            unit.node.setPos(x, y, z)
+
     def _spawn_tracer(self, center_x: float, center_y: float) -> None:
         assert self._world is not None
-        start = self._random_point(center_x, center_y, 180)
-        end = self._random_point(center_x, center_y, 180)
-        color = (0.95, 0.75, 0.3, 1.0) if self._rng.random() > 0.5 else (0.6, 0.9, 1.0, 1.0)
+        start = self._random_point(center_x, center_y, 160)
+        end = self._random_point(center_x, center_y, 160)
+        color = (0.95, 0.75, 0.3, 1.0) if self._rng.random() > 0.5 else (0.7, 0.9, 1.0, 1.0)
         node = self._world.attachNewNode("tracer")
         self._spawn_box(node, (0, 0, 0), (2, 2, 2), color)
         tracer = Tracer(node=node, start=start, end=end, age=0.0, duration=0.6, color=color)
@@ -922,9 +1058,9 @@ class CncPandaApplication:
         assert self._world is not None
         pos = self._random_point(center_x, center_y, 200)
         node = self._world.attachNewNode("explosion")
-        self._spawn_box(node, (0, 0, 0), (6, 6, 4), (1.0, 0.6, 0.2, 0.8))
+        self._spawn_box(node, (0, 0, 0), (4, 4, 3), (1.0, 0.6, 0.2, 0.7))
         node.setPos(pos.x, pos.y, 2.0)
-        explosion = Explosion(node=node, age=0.0, duration=1.2, max_scale=4.5)
+        explosion = Explosion(node=node, age=0.0, duration=1.0, max_scale=3.0)
         self._explosions.append(explosion)
 
     def _spawn_missiles_from_ops(self) -> None:
@@ -942,11 +1078,11 @@ class CncPandaApplication:
             for op in active_ops:
                 if op.operation_id not in {"strike_factories", "suppress_defenses", "missile_barrage", "hit_logistics"}:
                     continue
-                if self._rng.random() > 0.6:
+                if self._rng.random() > 0.35:
                     continue
                 target = self._random_point(center_x, center_y, 220)
                 node = self._world.attachNewNode("missile")
-                self._spawn_box(node, (0, 0, 0), (4, 4, 4), (0.9, 0.4, 0.2, 1.0))
+                self._spawn_box(node, (0, 0, 0), (4, 4, 4), (0.9, 0.45, 0.25, 1.0))
                 missile = Missile(
                     node=node,
                     start=LPoint3f(base_pos.x, base_pos.y, 10),
@@ -964,6 +1100,15 @@ class CncPandaApplication:
         x = center_x + math.cos(angle) * dist
         y = center_y + math.sin(angle) * dist
         return LPoint3f(x, y, 4.0)
+
+    def _runway_position(self, side: str) -> "LPoint3f":
+        from panda3d.core import LPoint3f  # type: ignore
+
+        base = self._base_positions.get(side)
+        if base is None:
+            return LPoint3f(0, 0, 0)
+        offset = LPoint3f(-40, -70, 0) if side == "p1" else LPoint3f(40, 70, 0)
+        return LPoint3f(base.x + offset.x, base.y + offset.y, base.z)
 
     def _update_ui(self) -> None:
         if not self._ui_text:
@@ -1012,7 +1157,7 @@ class CncPandaApplication:
         self._camera_center.y = max(-half_wid, min(half_wid, self._camera_center.y))
 
         cam = self._engine.camera
-        cam.setPos(self._camera_center.x, self._camera_center.y - 420, self._camera_height)
+        cam.setPos(self._camera_center.x, self._camera_center.y - 520, self._camera_height)
         cam.setHpr(0, self._camera_pitch, 0)
         return task.cont
 
