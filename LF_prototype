@@ -10,8 +10,9 @@ Front line logic:
   * Player 1 positioned at 0, Player 2 at 100.
   * Front line starts at 50 and is shown as the percentage
     (frontline - p1) / (p2 - p1).
-  * If Player 1 production > Player 2, the front line shifts toward Player 2.
-    If Player 2 leads, it shifts back toward Player 1.
+  * Pressure is built from armor/infantry/air advantages (mitigated by enemy
+    defenses and your logistics). When net pressure hits a threshold, the
+    front line jumps by 25% toward the attacker—otherwise it stays fixed.
 
 Factories (buy from the store with credits):
   1. Vehicle Factory      -> raises vehicle production.
@@ -36,15 +37,18 @@ from typing import Optional
 
 FRONTLINE_MIN = 0.0
 FRONTLINE_MAX = 100.0
-FRONTLINE_SHIFT_DIVISOR = 20.0   # higher = slower movement
-FRONTLINE_SHIFT_CLAMP = 6.0      # max movement per tick
-FRONTLINE_UNIT_WEIGHT = 0.25     # how much unit advantage moves the line (relative to production)
+FRONTLINE_SEGMENT = 25.0         # front line moves in quarter-map chunks
+FRONTLINE_PRESSURE_THRESHOLD = 10.0
+FRONTLINE_PRESSURE_DECAY = 0.5   # passive decay of pressure progress each tick
+FRONTLINE_OPPOSING_BLEED = 0.35  # how much opposing pressure erodes progress
+MISSILE_LOGI_PENALTY_PER = 2.5
+MISSILE_LOGI_PENALTY_CAP = 50.0
 
 BASE_CREDITS = 120
 INCOME_PER_TICK = 25.0
 SUPPLY_ZONE_BONUS = 50
 UNIT_BUILD_RATE = 0.12            # how many units per production point per tick
-COMBAT_SCALE = 0.02               # higher = deadlier exchanges per tick
+COMBAT_SCALE = 0.04               # higher = deadlier exchanges per tick
 SORTIE_DURATION = 3               # ticks a sortie aircraft are away
 
 # Building system
@@ -77,7 +81,6 @@ class Factory:
 
 
 @dataclass
-@dataclass
 class Sortie:
     owner: str
     target_attr: str
@@ -99,9 +102,16 @@ class Player:
     arms_prod: float = 25.0
     aircraft_prod: float = 25.0
     defense_prod: float = 25.0
+    tank_bonus: float = 0.0
     credits: int = BASE_CREDITS
     purchases: Dict[int, int] = field(default_factory=dict)
     supply_zones: int = 0
+    missile_unlocked: bool = False
+    missile_launchers: float = 0.0
+    helicopters: float = 0.0
+    helipads: int = 0
+    armored_synergy_bonus: bool = False
+    logistics_penalty: float = 0.0
     # Unit pools
     arms: float = 0.0
     vehicles: float = 0.0  # IFVs
@@ -113,7 +123,7 @@ class Player:
     build_queue: List[BuildOrder] = field(default_factory=list)
 
     def __post_init__(self) -> None:
-        for key in range(1, 9):
+        for key in range(1, 13):
             self.purchases.setdefault(key, 0)
 
     @property
@@ -121,7 +131,8 @@ class Player:
         """
         Dampened effect: 60% baseline + 40% scaled by logistics health.
         """
-        return 0.6 + 0.4 * (self.logistics_health / 100.0)
+        effective_logi = max(1.0, self.logistics_health - max(0.0, self.logistics_penalty))
+        return 0.6 + 0.4 * (effective_logi / 100.0)
 
     @property
     def production_components(self) -> Dict[str, float]:
@@ -160,7 +171,8 @@ class Player:
         self.def_vehicle += self.defense_prod * UNIT_BUILD_RATE * factor * 0.35
         self.def_arms += self.defense_prod * UNIT_BUILD_RATE * factor * 0.25
         # Tanks scale with logistics and the heavier end of production (vehicles + arms)
-        self.tanks += ((self.vehicle_prod + self.arms_prod) / 2.0) * UNIT_BUILD_RATE * factor * 0.35
+        tank_input = ((self.vehicle_prod + self.arms_prod) / 2.0) + self.tank_bonus
+        self.tanks += tank_input * UNIT_BUILD_RATE * factor * 0.35
 
     def apply_losses(self, losses: Dict[str, float]) -> None:
         for key, dmg in losses.items():
@@ -190,6 +202,8 @@ class GameState:
     ticks_elapsed: int = 0
     winner: Optional[str] = None
     sorties: List[Sortie] = field(default_factory=list)
+    pressure_toward_p2: float = 0.0  # P1 pushing toward P2
+    pressure_toward_p1: float = 0.0  # P2 pushing toward P1
 
     def record(self, message: str) -> None:
         self.history.append(message)
@@ -208,10 +222,10 @@ def make_factories() -> Dict[int, Factory]:
     return {
         1: Factory(
             key=1,
-            name="Vehicle Factory",
-            cost=60,
-            description="Boosts vehicle production by +15.",
-            apply_effect=lambda p: setattr(p, "vehicle_prod", p.vehicle_prod + 15),
+            name="IFV Factory",
+            cost=55,
+            description="Boosts IFV vehicle production by +15.",
+            apply_effect=lambda p: apply_armored_factory(p, vehicle_boost=15, tank_boost=0, key=1),
         ),
         2: Factory(
             key=2,
@@ -244,7 +258,7 @@ def make_factories() -> Dict[int, Factory]:
         6: Factory(
             key=6,
             name="Supply Zone",
-            cost=85,
+            cost=60,
             description=f"Generates +{SUPPLY_ZONE_BONUS} credits every 5th tick.",
             apply_effect=lambda p: setattr(p, "supply_zones", p.supply_zones + 1),
         ),
@@ -262,6 +276,34 @@ def make_factories() -> Dict[int, Factory]:
             description="Deploys vehicle defenses (immediate +30 def_vehicle units).",
             apply_effect=lambda p: setattr(p, "def_vehicle", p.def_vehicle + 30),
         ),
+        9: Factory(
+            key=9,
+            name="Tank Foundry",
+            cost=70,
+            description="Adds heavy tank focus (+6 tank bonus, +6 vehicle prod).",
+            apply_effect=lambda p: apply_armored_factory(p, vehicle_boost=6, tank_boost=6, key=9),
+        ),
+        10: Factory(
+            key=10,
+            name="Missile Corps Authorization",
+            cost=500,
+            description="Unlocks missile launchers (requires armor plants or Aircraft Works + 3 Helipads).",
+            apply_effect=lambda p: unlock_missiles(p),
+        ),
+        11: Factory(
+            key=11,
+            name="Missile Launcher Battery",
+            cost=100,
+            description="Adds one missile launcher (logistics harass near the front).",
+            apply_effect=lambda p: setattr(p, "missile_launchers", p.missile_launchers + 1),
+        ),
+        12: Factory(
+            key=12,
+            name="Helipad",
+            cost=30,
+            description="Requires Aircraft Works. Adds 5 helicopters and +5% arms production.",
+            apply_effect=lambda p: add_helipad(p),
+        ),
     }
 
 
@@ -269,12 +311,12 @@ def describe_player(player: Player) -> str:
     parts = [
         f"{player.name} :: Credits {player.credits} | Logistics {player.logistics_health:.1f}",
         f"  Vehicles {player.vehicle_prod:.1f} | Arms {player.arms_prod:.1f} | "
-        f"Aircraft {player.aircraft_prod:.1f} | Air Defense {player.defense_prod:.1f}",
+        f"Aircraft {player.aircraft_prod:.1f} | Defense {player.defense_prod:.1f}",
         f"  Total Production (all types x logistics): {player.total_production:.2f}",
         "  Units: "
         f"Arms {player.arms:.1f}, IFVs {player.vehicles:.1f}, Tanks {player.tanks:.1f}, "
-        f"Aircraft {player.aircraft:.1f}, Def(arms/veh/air) "
-        f"{player.def_arms:.1f}/{player.def_vehicle:.1f}/{player.def_air:.1f}",
+        f"Aircraft {player.aircraft:.1f}, Helicopters {player.helicopters:.1f}, Missiles {player.missile_launchers:.1f}, "
+        f"Ground Def (arms/veh) {player.def_arms:.1f}/{player.def_vehicle:.1f}, Air Def {player.def_air:.1f}",
         f"  Build Queue (cap {player.build_capacity()}): "
         + (", ".join(f"{bo.factory.name} ({bo.remaining}t)" for bo in player.build_queue) or "empty"),
         "  Purchases: " + ", ".join(f"F{key} x{count}" for key, count in sorted(player.purchases.items())),
@@ -295,26 +337,15 @@ def advance_tick(state: GameState) -> Tuple[float, float]:
         return state.player1.total_production, state.player2.total_production
 
     state.ticks_elapsed += 1
+    state.player1.logistics_penalty = missile_penalty_value(state.player2, state.frontline)
+    state.player2.logistics_penalty = missile_penalty_value(state.player1, state.frontline)
+    if state.player1.logistics_penalty > 0 or state.player2.logistics_penalty > 0:
+        state.record(
+            f"Missile pressure -> P1 -{state.player1.logistics_penalty:.1f} logi, "
+            f"P2 -{state.player2.logistics_penalty:.1f} logi."
+        )
     p1_prod = state.player1.total_production
     p2_prod = state.player2.total_production
-    advantage = p1_prod - p2_prod
-
-    if advantage == 0:
-        delta = 0.0
-    else:
-        delta = clamp(advantage / FRONTLINE_SHIFT_DIVISOR, -FRONTLINE_SHIFT_CLAMP, FRONTLINE_SHIFT_CLAMP)
-
-    # Unit-driven pressure (not sole factor)
-    unit_adv = unit_pressure_advantage(state.player1, state.player2)
-    delta += unit_adv * FRONTLINE_UNIT_WEIGHT
-
-    state.frontline = clamp(state.frontline + delta, FRONTLINE_MIN, FRONTLINE_MAX)
-    check_victory(state)
-    if state.winner:
-        state.record(
-            f"Tick {state.ticks_elapsed}: {state.winner} reached the front-line limit ({state.frontline_ratio:.2f}%)."
-        )
-        return p1_prod, p2_prod
 
     state.player1.earn_income()
     state.player2.earn_income()
@@ -332,9 +363,23 @@ def advance_tick(state: GameState) -> Tuple[float, float]:
                 player.credits += bonus
                 state.record(f"{player.name} gained {bonus} bonus credits from supply zones on tick {state.ticks_elapsed}.")
 
+    p1_net, p1_components = compute_frontline_pressure(state.player1, state.player2)
+    p2_net, p2_components = compute_frontline_pressure(state.player2, state.player1)
     state.record(
-        f"Tick: P1 prod {p1_prod:.2f} vs P2 {p2_prod:.2f} -> frontline shift {delta:+.2f} to {state.frontline_ratio:.2f}%"
+        f"Frontline Pressure (P1->P2): {format_pressure_components(p1_components)} | Net {p1_net:+.1f}"
     )
+    state.record(
+        f"Frontline Pressure (P2->P1): {format_pressure_components(p2_components)} | Net {p2_net:+.1f}"
+    )
+    apply_frontline_pressure(state, p1_net, p2_net)
+    if not state.winner:
+        state.record(
+            f"Tick {state.ticks_elapsed}: P1 prod {p1_prod:.2f} vs P2 {p2_prod:.2f} | "
+            f"Progress P1->{state.player2.name} {state.pressure_toward_p2:.1f}/"
+            f"{FRONTLINE_PRESSURE_THRESHOLD}, "
+            f"P2->{state.player1.name} {state.pressure_toward_p1:.1f}/{FRONTLINE_PRESSURE_THRESHOLD} | "
+            f"Front line {state.frontline_ratio:.2f}%"
+        )
     return p1_prod, p2_prod
 
 
@@ -457,16 +502,34 @@ def casualties_from(attacker: Player, defender: Player) -> Dict[str, float]:
         "tanks": {"vehicles": 0.8, "tanks": 0.5, "def_vehicle": 0.6, "def_arms": 0.4},
         "aircraft": {
             "tanks": 0.9,
-            "vehicles": 1.35,  # buff vs IFVs/vehicles
+            "vehicles": 1.62,  # buff vs IFVs/vehicles (20% increase)
             "aircraft": 0.6,
             "def_air": 0.4,
             "def_vehicle": 0.5,  # more threat to vehicle defenses
             "def_arms": 0.35,
             "arms": 0.25,
+            "missiles": 0.8,
+        },
+        "helicopters": {
+            "arms": 1.0,
+            "vehicles": 1.2,
+            "helicopters": 0.6,
+            "aircraft": 0.2,
+            "def_air": 0.5,
+            "def_vehicle": 0.3,
+            "missiles": 0.4,
+        },
+        "missiles": {
+            "def_air": 0.5,
+            "def_vehicle": 0.6,
+            "def_arms": 0.4,
+            "vehicles": 0.25,
+            "arms": 0.2,
+            "helicopters": 0.2,
         },
         "def_arms": {"arms": 0.7},
-        "def_vehicle": {"vehicles": 0.7},
-        "def_air": {"aircraft": 1.0},
+        "def_vehicle": {"vehicles": 0.7, "helicopters": 0.3},
+        "def_air": {"aircraft": 1.0, "helicopters": 0.9, "missiles": 0.6},
     }
 
     attacker_counts = {
@@ -477,6 +540,8 @@ def casualties_from(attacker: Player, defender: Player) -> Dict[str, float]:
         "def_arms": attacker.def_arms,
         "def_vehicle": attacker.def_vehicle,
         "def_air": attacker.def_air,
+        "helicopters": attacker.helicopters,
+        "missiles": attacker.missile_launchers,
     }
     losses: Dict[str, float] = {k: 0.0 for k in attacker_counts.keys()}
 
@@ -496,24 +561,157 @@ def format_losses(losses: Dict[str, float]) -> str:
     return ", ".join(f"{k}:{v:.1f}" for k, v in sorted(losses.items()))
 
 
-def unit_pressure_advantage(p1: Player, p2: Player) -> float:
+def missile_penalty_value(attacker: Player, frontline_pos: float) -> float:
+    if attacker.missile_launchers <= 0:
+        return 0.0
+    base_penalty = min(attacker.missile_launchers * MISSILE_LOGI_PENALTY_PER, MISSILE_LOGI_PENALTY_CAP)
+    # Strongest in the central contested zone; weaker at the map edges.
+    proximity = clamp(1.0 - abs((frontline_pos - 50.0) / 50.0), 0.0, 1.0)
+    return base_penalty * proximity
+
+
+def apply_armored_factory(player: Player, vehicle_boost: float, tank_boost: float, key: int) -> None:
+    player.vehicle_prod += vehicle_boost
+    player.tank_bonus += tank_boost
+    projected = dict(player.purchases)
+    projected[key] = projected.get(key, 0) + 1
+    maybe_apply_armor_synergy(player, projected)
+    maybe_update_missile_prereq(player)
+
+
+def maybe_apply_armor_synergy(player: Player, projected_purchases: Optional[Dict[int, int]] = None) -> None:
+    if player.armored_synergy_bonus:
+        return
+    purchases = projected_purchases or player.purchases
+    if purchases.get(1, 0) > 0 and purchases.get(9, 0) > 0:
+        player.armored_synergy_bonus = True
+        player.logistics_health = clamp(player.logistics_health + 5, 10.0, 250.0)
+        player.defense_prod += 3
+        maybe_update_missile_prereq(player)
+
+
+def unlock_missiles(player: Player) -> None:
+    if player.missile_unlocked:
+        return
+    if not missile_authorization_allowed(player):
+        raise ValueError("Missile unlock requires armor plants or Aircraft Works + 3 Helipads.")
+    player.missile_unlocked = True
+
+
+def add_helipad(player: Player) -> None:
+    if player.purchases.get(4, 0) <= 0:
+        raise ValueError("Helipads require owning an Aircraft Works.")
+    player.helipads += 1
+    player.helicopters += 5
+    player.arms_prod = round(player.arms_prod * 1.05, 2)
+    maybe_update_missile_prereq(player)
+
+
+def missile_authorization_allowed(player: Player) -> bool:
+    armor_path = player.purchases.get(1, 0) > 0 and player.purchases.get(9, 0) > 0
+    air_path = player.purchases.get(4, 0) > 0 and player.helipads >= 3
+    return armor_path or air_path
+
+
+def maybe_update_missile_prereq(player: Player) -> None:
     """
-    Convert unit advantage to a small frontline push component.
+    If the player reaches the air route prereqs (Aircraft Works + 3 helipads),
+    mark the missile unlock flag so they can immediately build launchers.
     """
-    def power(p: Player) -> float:
-        return (
-            p.arms * 0.8
-            + p.vehicles * 0.85
-            + p.tanks * 1.3
-            + p.aircraft * 1.4
-            + p.def_arms * 0.5
-            + p.def_vehicle * 0.7
-            + p.def_air * 0.7
+    if player.missile_unlocked:
+        return
+    if missile_authorization_allowed(player):
+        player.missile_unlocked = True
+
+
+def compute_frontline_pressure(attacker: Player, defender: Player) -> Tuple[float, Dict[str, float]]:
+    """
+    Convert force advantages into a pressure score that can crack the front line.
+    Positive values favor the attacker; negative values stall progress.
+    """
+    armor_strength = attacker.vehicles + attacker.tanks * 1.2
+    armor_resistance = defender.vehicles + defender.tanks * 1.1 + defender.def_vehicle * 0.5
+    armor_superiority = (armor_strength - armor_resistance) * 0.25
+
+    infantry_push = attacker.arms + attacker.def_arms * 0.4
+    infantry_wall = defender.arms + defender.def_arms * 0.6
+    infantry_density = (infantry_push - infantry_wall) * 0.2
+
+    air_push = attacker.aircraft * 1.05 + attacker.helicopters * 0.8
+    air_denial = defender.aircraft + defender.helicopters * 0.6 + defender.def_air * 1.0
+    air_support = (air_push - air_denial) * 0.25
+
+    enemy_defenses = -(defender.def_vehicle * 0.04 + defender.def_arms * 0.04 + defender.def_air * 0.04)
+    logistics_penalty = -max(0.0, (100.0 - attacker.logistics_health) / 14.0)
+
+    components = {
+        "Armor Superiority": armor_superiority,
+        "Infantry Density": infantry_density,
+        "Air Support": air_support,
+        "Enemy Defenses": enemy_defenses,
+        "Logistics Penalty": logistics_penalty,
+    }
+    net = sum(components.values())
+    return net, components
+
+
+def format_pressure_components(components: Dict[str, float]) -> str:
+    return ", ".join(f"{name} {value:+.1f}" for name, value in components.items())
+
+
+def update_pressure_progress(current: float, pushing_net: float, opposing_net: float) -> float:
+    """
+    Apply decay, attacker pressure, and opposing bleed to a pressure progress meter.
+    """
+    progress = max(0.0, current - FRONTLINE_PRESSURE_DECAY)
+    progress += pushing_net
+    if opposing_net > 0:
+        progress -= opposing_net * FRONTLINE_OPPOSING_BLEED
+    return clamp(progress, 0.0, FRONTLINE_PRESSURE_THRESHOLD * 1.5)
+
+
+def apply_frontline_pressure(state: GameState, p1_net: float, p2_net: float) -> None:
+    """
+    Update pressure meters and move the front line in discrete 25% jumps.
+    """
+    state.pressure_toward_p2 = update_pressure_progress(state.pressure_toward_p2, p1_net, p2_net)
+    state.pressure_toward_p1 = update_pressure_progress(state.pressure_toward_p1, p2_net, p1_net)
+
+    moves = []
+    if state.pressure_toward_p2 >= FRONTLINE_PRESSURE_THRESHOLD:
+        moves.append(("p1", p1_net))
+    if state.pressure_toward_p1 >= FRONTLINE_PRESSURE_THRESHOLD:
+        moves.append(("p2", p2_net))
+
+    if not moves:
+        return
+
+    # Resolve simultaneous breakthroughs by taking the stronger net push.
+    mover, mover_net = max(moves, key=lambda item: item[1])
+    if mover == "p1":
+        state.frontline = clamp(state.frontline + FRONTLINE_SEGMENT, FRONTLINE_MIN, FRONTLINE_MAX)
+        state.record(
+            f"{state.player1.name} broke through! Front line advanced to {state.frontline_ratio:.0f}% "
+            f"(progress reset)."
+        )
+    else:
+        state.frontline = clamp(state.frontline - FRONTLINE_SEGMENT, FRONTLINE_MIN, FRONTLINE_MAX)
+        state.record(
+            f"{state.player2.name} counter-broke! Front line pushed back to {state.frontline_ratio:.0f}% "
+            f"(progress reset)."
         )
 
-    advantage = power(p1) - power(p2)
-    # Normalize to a small delta
-    return clamp(advantage / 50.0, -FRONTLINE_SHIFT_CLAMP / 2, FRONTLINE_SHIFT_CLAMP / 2)
+    check_victory(state)
+    if state.winner:
+        state.record(
+            f"{state.winner} reached the front-line limit ({state.frontline_ratio:.0f}%). "
+            f"Final pressure meters P1->P2 {state.pressure_toward_p2:.1f}, "
+            f"P2->P1 {state.pressure_toward_p1:.1f}."
+        )
+    else:
+        # Reset pressure after a breakthrough to force a fresh buildup when game continues.
+        state.pressure_toward_p2 = 0.0
+        state.pressure_toward_p1 = 0.0
 
 
 def check_victory(state: GameState) -> None:
@@ -537,6 +735,13 @@ def buy_factory(
         raise ValueError("Quantity must be at least 1.")
 
     factory = factories[factory_id]
+    if factory.key == 10 and not missile_authorization_allowed(player):
+        raise ValueError("Missile Corps Authorization requires armor plants or Aircraft Works + 3 Helipads.")
+    if factory.key == 11 and not player.missile_unlocked:
+        raise ValueError("Buy Missile Corps Authorization before purchasing launchers.")
+    if factory.key == 12 and player.purchases.get(4, 0) <= 0:
+        raise ValueError("Helipads require Aircraft Works.")
+
     total_cost = factory.cost * quantity
     if player.credits < total_cost:
         raise ValueError(
@@ -553,10 +758,39 @@ def buy_factory(
     return f"{player.name} queued {quantity}x {factory.name}. Remaining credits: {player.credits}"
 
 
+def render_bar(label: str, value: float, maximum: float, width: int = 22) -> str:
+    value_clamped = clamp(value, 0.0, maximum)
+    filled = int(round((value_clamped / maximum) * width))
+    empty = width - filled
+    bar = "█" * filled + "·" * empty
+    return f"{label:<14} [{bar}] {value:.1f}/{maximum}"
+
+
+def render_frontline_bar(ratio_percent: float, width: int = 30) -> str:
+    ratio_clamped = clamp(ratio_percent, 0.0, 100.0)
+    filled = int(round((ratio_clamped / 100.0) * width))
+    empty = width - filled
+    bar = "█" * filled + "·" * empty
+    return f"Front line      [{bar}] {ratio_clamped:.1f}%"
+
+
+def render_history(history: List[str], limit: int = 10) -> str:
+    if not history:
+        return "No history yet."
+    recent = history[-limit:]
+    return "Recent events:\n" + "\n".join(f" - {item}" for item in recent)
+
+
 def show_status(state: GameState) -> str:
     lines = [
-        f"Front line at {state.frontline:.2f} (ratio {state.frontline_ratio:.2f}% between Player 1 @0 and Player 2 @100)",
+        render_frontline_bar(state.frontline_ratio),
+        render_bar("Pressure P1->P2", state.pressure_toward_p2, FRONTLINE_PRESSURE_THRESHOLD),
+        render_bar("Pressure P2->P1", state.pressure_toward_p1, FRONTLINE_PRESSURE_THRESHOLD),
+        f"Missile logistics penalty -> P1 {state.player1.logistics_penalty:.1f}, "
+        f"-> P2 {state.player2.logistics_penalty:.1f}",
+        "",
         describe_player(state.player1),
+        "",
         describe_player(state.player2),
     ]
     if state.sorties:
@@ -607,7 +841,7 @@ def interactive_loop(state: GameState, factories: Dict[int, Factory]) -> None:
             elif cmd == "store":
                 print(describe_store(factories))
             elif cmd == "log":
-                print("\n".join(state.history[-10:]) or "No history yet.")
+                print(render_history(state.history))
             elif cmd == "buy":
                 if len(parts) < 3:
                     print("Usage: buy <p1|p2> <factory_id> [n|max]")
@@ -676,9 +910,8 @@ def main() -> None:
             if state.winner:
                 break
         print(show_status(state))
-        print("\nRecent events:")
-        for line in state.history[-10:]:
-            print(" -", line)
+        print()
+        print(render_history(state.history))
     else:
         interactive_loop(state, factories)
 
