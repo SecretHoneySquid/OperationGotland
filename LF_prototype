@@ -311,12 +311,12 @@ def describe_player(player: Player) -> str:
     parts = [
         f"{player.name} :: Credits {player.credits} | Logistics {player.logistics_health:.1f}",
         f"  Vehicles {player.vehicle_prod:.1f} | Arms {player.arms_prod:.1f} | "
-        f"Aircraft {player.aircraft_prod:.1f} | Air Defense {player.defense_prod:.1f}",
+        f"Aircraft {player.aircraft_prod:.1f} | Defense {player.defense_prod:.1f}",
         f"  Total Production (all types x logistics): {player.total_production:.2f}",
         "  Units: "
         f"Arms {player.arms:.1f}, IFVs {player.vehicles:.1f}, Tanks {player.tanks:.1f}, "
         f"Aircraft {player.aircraft:.1f}, Helicopters {player.helicopters:.1f}, Missiles {player.missile_launchers:.1f}, "
-        f"Def(arms/veh/air) {player.def_arms:.1f}/{player.def_vehicle:.1f}/{player.def_air:.1f}",
+        f"Ground Def (arms/veh) {player.def_arms:.1f}/{player.def_vehicle:.1f}, Air Def {player.def_air:.1f}",
         f"  Build Queue (cap {player.build_capacity()}): "
         + (", ".join(f"{bo.factory.name} ({bo.remaining}t)" for bo in player.build_queue) or "empty"),
         "  Purchases: " + ", ".join(f"F{key} x{count}" for key, count in sorted(player.purchases.items())),
