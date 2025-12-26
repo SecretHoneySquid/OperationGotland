@@ -34,9 +34,10 @@ Run a quick non-interactive tick burst:
 from __future__ import annotations
 
 import argparse
+import math
+import random
 import tkinter as tk
 from dataclasses import dataclass, field
-import random
 from tkinter import messagebox, ttk
 from typing import Callable, Dict, List, Optional, Tuple
 
@@ -867,21 +868,26 @@ class GameUI:
         self.dots: List[Dict[str, float]] = []
         self.frontline_line_id: Optional[int] = None
         self.base_icons: List[int] = []
+        self.lanes: List[Dict[str, float]] = []
 
     def _build_layout(self) -> None:
         self.root.columnconfigure(0, weight=1)
         self.root.rowconfigure(0, weight=1)
 
         # Large visualization canvas
-        self.canvas = tk.Canvas(self.root, width=1100, height=420, bg="#0f1a24", highlightthickness=0)
+        self.canvas = tk.Canvas(self.root, width=1100, height=420, bg="#0b1612", highlightthickness=0)
         self.canvas.grid(row=0, column=0, sticky="nsew")
-        self.canvas.create_rectangle(0, 0, 1100, 420, fill="#0f1a24", outline="")
 
         # Overlay container that floats above the canvas
         style = ttk.Style()
-        style.configure("Overlay.TFrame", background="", relief="flat")
-        style.configure("Overlay.TLabelframe", background="", relief="flat")
-        style.configure("Overlay.TLabelframe.Label", background="", relief="flat")
+        military_bg = "#0e1f16"
+        military_fg = "#e4f1d7"
+        style.configure("Overlay.TFrame", background=military_bg, relief="flat")
+        style.configure("Overlay.TLabelframe", background=military_bg, relief="flat", foreground=military_fg)
+        style.configure("Overlay.TLabelframe.Label", background=military_bg, foreground=military_fg)
+        style.configure("Military.TLabel", background=military_bg, foreground=military_fg, font=("TkFixedFont", 10))
+        style.configure("MilitaryBold.TLabel", background=military_bg, foreground=military_fg, font=("TkFixedFont", 10, "bold"))
+        style.configure("Military.TButton", font=("TkFixedFont", 10))
 
         main = ttk.Frame(self.root, padding=12, style="Overlay.TFrame")
         main.place(relx=1.0, rely=0.0, anchor="ne", relwidth=0.42, relheight=1.0)
@@ -895,24 +901,24 @@ class GameUI:
 
         frontline_row = ttk.Frame(status_frame, padding=(6, 6))
         frontline_row.grid(row=0, column=0, sticky="ew")
-        ttk.Label(frontline_row, text="Front line").grid(row=0, column=0, sticky="w", padx=(0, 8))
+        ttk.Label(frontline_row, text="Front line", style="MilitaryBold.TLabel").grid(row=0, column=0, sticky="w", padx=(0, 8))
         frontline_bar = ttk.Progressbar(frontline_row, maximum=100.0, variable=self.frontline_pct)
         frontline_bar.grid(row=0, column=1, sticky="ew")
         frontline_row.columnconfigure(1, weight=1)
-        ttk.Label(frontline_row, textvariable=self.frontline_label, width=8).grid(row=0, column=2, padx=(8, 0))
+        ttk.Label(frontline_row, textvariable=self.frontline_label, width=8, style="MilitaryBold.TLabel").grid(row=0, column=2, padx=(8, 0))
 
         pressure_row = ttk.Frame(status_frame, padding=(6, 0))
         pressure_row.grid(row=1, column=0, sticky="ew")
-        ttk.Label(pressure_row, text="Pressure P1 ➜ P2").grid(row=0, column=0, sticky="w", padx=(0, 8))
+        ttk.Label(pressure_row, text="Pressure P1 ➜ P2", style="MilitaryBold.TLabel").grid(row=0, column=0, sticky="w", padx=(0, 8))
         self.pressure_bar_p1 = ttk.Progressbar(pressure_row, maximum=FRONTLINE_PRESSURE_THRESHOLD, variable=self.pressure_p1)
         self.pressure_bar_p1.grid(row=0, column=1, sticky="ew")
-        ttk.Label(pressure_row, text="P2 ➜ P1", padding=(12, 0)).grid(row=1, column=0, sticky="w")
+        ttk.Label(pressure_row, text="P2 ➜ P1", padding=(12, 0), style="MilitaryBold.TLabel").grid(row=1, column=0, sticky="w")
         self.pressure_bar_p2 = ttk.Progressbar(pressure_row, maximum=FRONTLINE_PRESSURE_THRESHOLD, variable=self.pressure_p2)
         self.pressure_bar_p2.grid(row=1, column=1, sticky="ew")
         pressure_row.columnconfigure(1, weight=1)
-        ttk.Label(pressure_row, textvariable=self.pressure_label, foreground="#555").grid(row=2, column=0, columnspan=2, sticky="w", pady=(4, 0))
+        ttk.Label(pressure_row, textvariable=self.pressure_label, style="Military.TLabel").grid(row=2, column=0, columnspan=2, sticky="w", pady=(4, 0))
 
-        ttk.Label(status_frame, textvariable=self.logi_penalty_label, padding=(6, 6)).grid(row=2, column=0, sticky="w")
+        ttk.Label(status_frame, textvariable=self.logi_penalty_label, padding=(6, 6), style="Military.TLabel").grid(row=2, column=0, sticky="w")
 
         players_frame = ttk.Frame(status_frame)
         players_frame.grid(row=3, column=0, sticky="nsew", padx=6, pady=(0, 6))
@@ -921,7 +927,7 @@ class GameUI:
         self.p1_panel = self._build_player_panel(players_frame, "Player 1", column=0)
         self.p2_panel = self._build_player_panel(players_frame, "Player 2", column=1)
 
-        ttk.Label(status_frame, textvariable=self.sortie_label, padding=(6, 2)).grid(row=4, column=0, sticky="w")
+        ttk.Label(status_frame, textvariable=self.sortie_label, padding=(6, 2), style="Military.TLabel").grid(row=4, column=0, sticky="w")
 
         # Controls and history
         right = ttk.Frame(main, style="Overlay.TFrame")
@@ -994,7 +1000,7 @@ class GameUI:
         store_frame.grid(row=1, column=0, sticky="nsew")
         store_frame.columnconfigure(0, weight=1)
         store_frame.rowconfigure(0, weight=1)
-        self.store_text = tk.Text(store_frame, width=40, height=12, wrap="word", state="disabled")
+        self.store_text = tk.Text(store_frame, width=40, height=12, wrap="word", state="disabled", bg="#0f2019", fg="#e4f1d7", insertbackground="#e4f1d7")
         self.store_text.grid(row=0, column=0, sticky="nsew")
         self._refresh_store()
 
@@ -1002,11 +1008,11 @@ class GameUI:
         history_frame.grid(row=2, column=0, sticky="nsew", pady=(8, 0))
         history_frame.columnconfigure(0, weight=1)
         history_frame.rowconfigure(0, weight=1)
-        self.history_text = tk.Text(history_frame, width=40, height=10, wrap="word", state="disabled")
+        self.history_text = tk.Text(history_frame, width=40, height=10, wrap="word", state="disabled", bg="#0f2019", fg="#e4f1d7", insertbackground="#e4f1d7")
         self.history_text.grid(row=0, column=0, sticky="nsew")
 
     def _build_player_panel(self, parent: ttk.Frame, title: str, column: int) -> Dict[str, tk.Variable]:
-        frame = ttk.LabelFrame(parent, text=title, padding=6)
+        frame = ttk.LabelFrame(parent, text=title, padding=6, style="Overlay.TLabelframe")
         frame.grid(row=0, column=column, sticky="nsew", padx=4)
         frame.columnconfigure(1, weight=1)
 
@@ -1018,23 +1024,23 @@ class GameUI:
         build = tk.StringVar()
         purchases = tk.StringVar()
 
-        ttk.Label(frame, textvariable=credits, font=("TkDefaultFont", 10, "bold")).grid(row=0, column=0, columnspan=2, sticky="w")
+        ttk.Label(frame, textvariable=credits, style="MilitaryBold.TLabel").grid(row=0, column=0, columnspan=2, sticky="w")
 
-        ttk.Label(frame, text="Logistics").grid(row=1, column=0, sticky="w", pady=(2, 0))
+        ttk.Label(frame, text="Logistics", style="MilitaryBold.TLabel").grid(row=1, column=0, sticky="w", pady=(2, 0))
         ttk.Progressbar(frame, maximum=250.0, variable=logi_bar).grid(row=1, column=1, sticky="ew", pady=(2, 0))
-        ttk.Label(frame, textvariable=logi_text, foreground="#444").grid(row=2, column=0, columnspan=2, sticky="w")
+        ttk.Label(frame, textvariable=logi_text, style="Military.TLabel").grid(row=2, column=0, columnspan=2, sticky="w")
 
-        ttk.Label(frame, text="Production").grid(row=3, column=0, sticky="nw", pady=(4, 0))
-        ttk.Label(frame, textvariable=production, wraplength=260, justify="left").grid(row=3, column=1, sticky="w", pady=(4, 0))
+        ttk.Label(frame, text="Production", style="MilitaryBold.TLabel").grid(row=3, column=0, sticky="nw", pady=(4, 0))
+        ttk.Label(frame, textvariable=production, wraplength=260, justify="left", style="Military.TLabel").grid(row=3, column=1, sticky="w", pady=(4, 0))
 
-        ttk.Label(frame, text="Units").grid(row=4, column=0, sticky="nw", pady=(2, 0))
-        ttk.Label(frame, textvariable=units, wraplength=260, justify="left").grid(row=4, column=1, sticky="w", pady=(2, 0))
+        ttk.Label(frame, text="Units", style="MilitaryBold.TLabel").grid(row=4, column=0, sticky="nw", pady=(2, 0))
+        ttk.Label(frame, textvariable=units, wraplength=260, justify="left", style="Military.TLabel").grid(row=4, column=1, sticky="w", pady=(2, 0))
 
-        ttk.Label(frame, text="Build queue").grid(row=5, column=0, sticky="nw", pady=(2, 0))
-        ttk.Label(frame, textvariable=build, wraplength=260, justify="left").grid(row=5, column=1, sticky="w", pady=(2, 0))
+        ttk.Label(frame, text="Build queue", style="MilitaryBold.TLabel").grid(row=5, column=0, sticky="nw", pady=(2, 0))
+        ttk.Label(frame, textvariable=build, wraplength=260, justify="left", style="Military.TLabel").grid(row=5, column=1, sticky="w", pady=(2, 0))
 
-        ttk.Label(frame, text="Purchases").grid(row=6, column=0, sticky="nw", pady=(2, 0))
-        ttk.Label(frame, textvariable=purchases, wraplength=260, justify="left").grid(row=6, column=1, sticky="w", pady=(2, 0))
+        ttk.Label(frame, text="Purchases", style="MilitaryBold.TLabel").grid(row=6, column=0, sticky="nw", pady=(2, 0))
+        ttk.Label(frame, textvariable=purchases, wraplength=260, justify="left", style="Military.TLabel").grid(row=6, column=1, sticky="w", pady=(2, 0))
 
         return {
             "credits": credits,
@@ -1048,11 +1054,11 @@ class GameUI:
 
     def _init_visualization(self) -> None:
         self.canvas.delete("all")
-        self.canvas.configure(bg="#0f1a24")
+        self.canvas.configure(bg="#0b1612")
         width = int(self.canvas.cget("width"))
         height = int(self.canvas.cget("height"))
         ground_y = height - 40
-        self.canvas.create_rectangle(0, ground_y, width, height, fill="#0c141a", outline="")
+        self._draw_map_background(width, height, ground_y)
         self.base_icons = [
             self.canvas.create_oval(20, ground_y - 80, 80, ground_y - 20, fill="#1b5fc1", outline=""),
             self.canvas.create_oval(width - 80, ground_y - 80, width - 20, ground_y - 20, fill="#c12c2c", outline=""),
@@ -1066,8 +1072,10 @@ class GameUI:
             width=2,
             dash=(4, 4),
         )
-        self.canvas.create_text(40, 24, text="P1 Base", fill="#d3e3ff", anchor="w", font=("TkDefaultFont", 11, "bold"))
-        self.canvas.create_text(width - 40, 24, text="P2 Base", fill="#ffd8d8", anchor="e", font=("TkDefaultFont", 11, "bold"))
+        self.canvas.create_text(40, 24, text="P1 Base", fill="#b7e1ff", anchor="w", font=("TkFixedFont", 11, "bold"))
+        self.canvas.create_text(width - 40, 24, text="P2 Base", fill="#ffd8d8", anchor="e", font=("TkFixedFont", 11, "bold"))
+        # Curved lanes for marching dots
+        self.lanes = self._build_lanes(height)
 
     def _frontline_x(self, width: int) -> float:
         return FRONTLINE_MIN + (self.state.frontline_ratio / 100.0) * width
@@ -1082,10 +1090,32 @@ class GameUI:
         p2_spawn = self._spawn_count(self.state.player2)
         for _ in range(p1_spawn):
             y = random.randint(*spawn_band)
-            self.dots.append({"x": 36.0, "y": float(y), "dir": 1, "speed": random.uniform(0.6, 1.2), "side": "p1"})
+            lane = random.choice(self.lanes)
+            self.dots.append(
+                {
+                    "start": 60.0,
+                    "progress": 0.0,
+                    "y": float(y),
+                    "dir": 1,
+                    "speed": random.uniform(1.4, 2.2),
+                    "side": "p1",
+                    "lane": lane,
+                }
+            )
         for _ in range(p2_spawn):
             y = random.randint(*spawn_band)
-            self.dots.append({"x": float(width - 36), "y": float(y), "dir": -1, "speed": random.uniform(0.6, 1.2), "side": "p2"})
+            lane = random.choice(self.lanes)
+            self.dots.append(
+                {
+                    "start": float(width - 60),
+                    "progress": 0.0,
+                    "y": float(y),
+                    "dir": -1,
+                    "speed": random.uniform(1.4, 2.2),
+                    "side": "p2",
+                    "lane": lane,
+                }
+            )
         # Trim to avoid runaway counts.
         if len(self.dots) > 400:
             self.dots = self.dots[-400:]
@@ -1117,11 +1147,18 @@ class GameUI:
 
     def _step_dots(self) -> None:
         width = int(self.canvas.cget("width"))
+        travel = width - 120
         next_dots: List[Dict[str, float]] = []
         for dot in self.dots:
-            dot["x"] += dot["dir"] * dot["speed"]
-            if 10 <= dot["x"] <= width - 10:
-                next_dots.append(dot)
+            dot["progress"] += dot["speed"]
+            if dot["progress"] > travel:
+                continue
+            lane = dot["lane"]
+            base_x = dot["start"] + dot["dir"] * dot["progress"]
+            sway = math.sin((dot["progress"] / lane["period"]) + lane["phase"]) * lane["amplitude"]
+            dot["x"] = base_x
+            dot["y"] = lane["y"] + sway
+            next_dots.append(dot)
         self.dots = next_dots
 
     def _render_dots(self) -> None:
@@ -1155,6 +1192,38 @@ class GameUI:
         self._resolve_dot_collisions()
         self._render_dots()
         self.root.after(30, self._animate)
+
+    def _draw_map_background(self, width: int, height: int, ground_y: int) -> None:
+        self.canvas.create_rectangle(0, 0, width, height, fill="#0b1612", outline="")
+        # Grid lines
+        for x in range(0, width, 40):
+            self.canvas.create_line(x, 0, x, height, fill="#143021", width=1, tags="map")
+        for y in range(0, height, 40):
+            self.canvas.create_line(0, y, width, y, fill="#143021", width=1, tags="map")
+        # Landmass shapes
+        land_colors = ("#123e2c", "#1a4d36")
+        random.seed(42)
+        for _ in range(6):
+            cx = random.randint(80, width - 80)
+            cy = random.randint(60, ground_y - 60)
+            points = []
+            radius = random.randint(60, 140)
+            for i in range(8):
+                angle = (math.pi * 2 * i) / 8
+                r = radius * random.uniform(0.6, 1.1)
+                points.extend([cx + math.cos(angle) * r, cy + math.sin(angle) * r])
+            self.canvas.create_polygon(points, fill=random.choice(land_colors), outline="")
+        self.canvas.create_rectangle(0, ground_y, width, height, fill="#0c141a", outline="")
+
+    def _build_lanes(self, height: int) -> List[Dict[str, float]]:
+        lanes: List[Dict[str, float]] = []
+        base_y_positions = [height * 0.35, height * 0.45, height * 0.55, height * 0.65]
+        for base_y in base_y_positions:
+            amplitude = random.uniform(6.0, 14.0)
+            period = random.uniform(55.0, 95.0)
+            phase = random.uniform(0, math.pi * 2)
+            lanes.append({"y": base_y, "amplitude": amplitude, "period": period, "phase": phase})
+        return lanes
 
     def _refresh_store(self) -> None:
         self.store_text.configure(state="normal")
