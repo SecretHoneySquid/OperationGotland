@@ -871,6 +871,7 @@ class GameUI:
         self.lanes: List[Dict[str, float]] = []
         self.obstacles: List[Dict[str, float]] = []
         self.structure_icons: List[int] = []
+        self.effects: List[Dict[str, float]] = []
 
     def _build_layout(self) -> None:
         self.root.columnconfigure(0, weight=1)
@@ -1096,9 +1097,10 @@ class GameUI:
             y = random.randint(*spawn_band)
             kind = self._choose_kind(self.state.player1)
             lane = random.choice(self.lanes)
+            start_x = 60.0 if kind not in ("aircraft", "helicopter") else self._airfield_x("p1")
             self.dots.append(
                 {
-                    "start": 60.0,
+                    "start": start_x,
                     "progress": 0.0,
                     "y": float(y),
                     "dir": 1,
@@ -1106,15 +1108,17 @@ class GameUI:
                     "side": "p1",
                     "lane": lane,
                     "kind": kind,
+                    "phase": "outbound",
                 }
             )
         for _ in range(p2_spawn):
             y = random.randint(*spawn_band)
             kind = self._choose_kind(self.state.player2)
             lane = random.choice(self.lanes)
+            start_x = float(width - 60) if kind not in ("aircraft", "helicopter") else self._airfield_x("p2")
             self.dots.append(
                 {
-                    "start": float(width - 60),
+                    "start": start_x,
                     "progress": 0.0,
                     "y": float(y),
                     "dir": -1,
@@ -1122,6 +1126,7 @@ class GameUI:
                     "side": "p2",
                     "lane": lane,
                     "kind": kind,
+                    "phase": "outbound",
                 }
             )
         # Trim to avoid runaway counts.
@@ -1142,7 +1147,7 @@ class GameUI:
             key = (cell_x, cell_y)
             bucket = grid.setdefault(key, {})
             if bucket and bucket.get("side") != dot["side"]:
-                # Collision: remove both (skip adding)
+                # Collision only across sides
                 bucket.clear()
             else:
                 bucket["dot"] = dot
@@ -1152,6 +1157,8 @@ class GameUI:
             if dot:
                 survivors.append(dot)
         self.dots = survivors
+        if self.effects:
+            self.effects = [eff for eff in self.effects if eff.get("ttl", 0) > 0]
 
     def _step_dots(self) -> None:
         width = int(self.canvas.cget("width"))
@@ -1159,8 +1166,6 @@ class GameUI:
         next_dots: List[Dict[str, float]] = []
         for dot in self.dots:
             dot["progress"] += dot["speed"]
-            if dot["progress"] > travel:
-                continue
             lane = dot["lane"]
             base_x = dot["start"] + dot["dir"] * dot["progress"]
             sway = math.sin((dot["progress"] / lane["period"]) + lane["phase"]) * lane["amplitude"]
@@ -1176,6 +1181,19 @@ class GameUI:
                             candidate_y = obs["y2"] + 5
             dot["x"] = candidate_x
             dot["y"] = candidate_y
+            if dot["kind"] in ("aircraft", "helicopter"):
+                target_x = self._frontline_x(width)
+                reached_target = (dot["dir"] == 1 and candidate_x >= target_x) or (dot["dir"] == -1 and candidate_x <= target_x)
+                if dot["phase"] == "outbound" and reached_target:
+                    # Impact effect
+                    self.effects.append({"x": target_x, "y": candidate_y, "ttl": 18})
+                    dot["phase"] = "return"
+                    dot["dir"] *= -1
+                    dot["start"] = candidate_x
+                    dot["progress"] = 0.0
+            if dot["phase"] == "return" and dot["progress"] > travel / 2:
+                # Landed
+                continue
             next_dots.append(dot)
         self.dots = next_dots
 
@@ -1200,6 +1218,7 @@ class GameUI:
         self._step_dots()
         self._resolve_dot_collisions()
         self._render_dots()
+        self._render_effects()
         self.root.after(30, self._animate)
 
     def _draw_unit_sprite(self, dot: Dict[str, float]) -> None:
@@ -1261,6 +1280,27 @@ class GameUI:
         # fallback dot
         self.canvas.create_oval(cx - scale, cy - scale, cx + scale, cy + scale, fill=color, outline="", tags="dot")
 
+    def _render_effects(self) -> None:
+        if not self.effects:
+            return
+        self.canvas.delete("effect")
+        survivors: List[Dict[str, float]] = []
+        for eff in self.effects:
+            r = max(4, eff.get("ttl", 0) // 2)
+            self.canvas.create_oval(
+                eff["x"] - r,
+                eff["y"] - r,
+                eff["x"] + r,
+                eff["y"] + r,
+                outline="#ffd36f",
+                width=2,
+                tags="effect",
+            )
+            eff["ttl"] -= 1
+            if eff["ttl"] > 0:
+                survivors.append(eff)
+        self.effects = survivors
+
     def _draw_map_background(self, width: int, height: int, ground_y: int) -> None:
         self.canvas.create_rectangle(0, 0, width, height, fill="#0b1612", outline="")
         # Grid lines
@@ -1282,6 +1322,9 @@ class GameUI:
                 points.extend([cx + math.cos(angle) * r, cy + math.sin(angle) * r])
             self.canvas.create_polygon(points, fill=random.choice(land_colors), outline="")
         self.canvas.create_rectangle(0, ground_y, width, height, fill="#0c141a", outline="")
+        # Airfields near bases
+        self.canvas.create_rectangle(20, ground_y - 24, 120, ground_y - 8, fill="#1f2e2a", outline="#4a5b50", tags="map")
+        self.canvas.create_rectangle(width - 120, ground_y - 24, width - 20, ground_y - 8, fill="#2e1f1f", outline="#5b4a4a", tags="map")
 
     def _build_lanes(self, height: int) -> List[Dict[str, float]]:
         lanes: List[Dict[str, float]] = []
@@ -1307,6 +1350,10 @@ class GameUI:
             self.canvas.create_rectangle(x1, y1, x2, y2, fill="#4a5b50", outline="#2a3a30", width=2, tags="obstacle")
         return obstacles
 
+    def _airfield_x(self, side: str) -> float:
+        width = int(self.canvas.cget("width"))
+        return 70.0 if side == "p1" else float(width - 70)
+
     def _render_structures(self) -> None:
         for item in self.structure_icons:
             self.canvas.delete(item)
@@ -1315,7 +1362,7 @@ class GameUI:
         ground_y = int(self.canvas.cget("height")) - 40
         icon_size = 10
         spacing = 16
-        for idx, (factory_id, count) in enumerate(sorted(FACTORIES_LOOKUP.items())):
+        for idx, (factory_id, factory) in enumerate(sorted(FACTORIES_LOOKUP.items())):
             # Place structures near respective bases; repeated purchases stack icons.
             x_left = 30
             x_right = width - 30
@@ -1344,7 +1391,17 @@ class GameUI:
                         tags="structure",
                     )
                 )
-
+            self.structure_icons.append(
+                self.canvas.create_text(
+                    x_left + 20,
+                    y_base,
+                    text=factory.name,
+                    anchor="w",
+                    fill="#9ad69a",
+                    font=("TkFixedFont", 8),
+                    tags="structure",
+                )
+            )
     def _choose_kind(self, player: Player) -> str:
         weights = {
             "tank": player.tanks,
