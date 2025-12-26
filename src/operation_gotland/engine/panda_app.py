@@ -111,7 +111,7 @@ class CncPandaApplication:
         self._setup_controls()
 
     def _build_grid(self, step: float, color: Tuple[float, float, float, float]) -> "NodePath":
-        from panda3d.core import LineSegs  # type: ignore
+        from panda3d.core import LineSegs, NodePath  # type: ignore
 
         lines = LineSegs("grid")
         lines.setThickness(1.2)
