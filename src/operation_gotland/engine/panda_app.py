@@ -83,8 +83,7 @@ class CncPandaApplication:
         self._missiles: List[Missile] = []
         self._smoke_nodes: List["NodePath"] = []
         self._production_units: List[ProductionUnit] = []
-        self._prev_counts: Dict[str, Dict[str, int]] = {"p1": {}, "p2": {}}
-        self._spawn_backlog: Dict[str, Dict[str, int]] = {"p1": {}, "p2": {}}
+        self._spawn_budget: Dict[str, Dict[str, float]] = {"p1": {}, "p2": {}}
         self._last_tick = -1
         self._unit_offsets: Dict[str, Dict[str, List[Tuple[float, float]]]] = {}
         self._base_positions: Dict[str, "LPoint3f"] = {}
@@ -802,7 +801,10 @@ class CncPandaApplication:
             base_pos = self._base_positions.get(side_key, None)
             for unit_key, nodes in self._unit_markers[side_key].items():
                 count = getattr(player.units, unit_key, 0.0) if hasattr(player.units, unit_key) else 0.0
-                desired = min(len(nodes), int(count / 20) + (1 if count > 0 else 0))
+                if count < 30:
+                    desired = 0
+                else:
+                    desired = min(len(nodes), max(1, int(count / 50)))
                 tier = player.unit_tiers.get(unit_key, 0)
                 offsets = self._unit_offsets.get(side_key, {}).get(unit_key, [])
                 for idx, node in enumerate(nodes):
@@ -980,27 +982,31 @@ class CncPandaApplication:
 
     def _handle_tick_update(self) -> None:
         for side, player in (("p1", self.runtime.state.player1), ("p2", self.runtime.state.player2)):
-            for unit_key in ("infantry", "ifv", "tank", "helicopter", "aircraft"):
-                current = int(getattr(player.units, unit_key, 0.0))
-                prev = self._prev_counts[side].get(unit_key, 0)
-                if current > prev:
-                    delta = current - prev
-                    self._spawn_backlog[side][unit_key] = self._spawn_backlog[side].get(unit_key, 0) + delta
-                self._prev_counts[side][unit_key] = current
-            self._spawn_from_backlog(side)
-
-    def _spawn_from_backlog(self, side: str) -> None:
-        priority = ["tank", "ifv", "infantry", "helicopter"]
-        spawned = 0
-        for unit_key in priority:
-            if spawned >= 1:
-                break
-            backlog = self._spawn_backlog[side].get(unit_key, 0)
-            if backlog <= 0:
-                continue
-            self._spawn_backlog[side][unit_key] = backlog - 1
-            self._spawn_production_unit(side, unit_key)
-            spawned += 1
+            output_map = {
+                "infantry": player.last_output.arms,
+                "ifv": player.last_output.vehicles * 0.6,
+                "tank": player.last_output.vehicles * 0.4,
+                "helicopter": player.last_output.rotary,
+                "aircraft": player.last_output.aircraft,
+            }
+            scale = {
+                "infantry": 180.0,
+                "ifv": 220.0,
+                "tank": 280.0,
+                "helicopter": 260.0,
+                "aircraft": 320.0,
+            }
+            total_output = sum(output_map.values())
+            spawn_cap = max(1, min(3, int(total_output / 200.0) + 1))
+            spawned = 0
+            for unit_key in ("tank", "ifv", "infantry", "helicopter", "aircraft"):
+                budget = self._spawn_budget[side].get(unit_key, 0.0)
+                budget += output_map.get(unit_key, 0.0) / scale[unit_key]
+                while budget >= 1.0 and spawned < spawn_cap:
+                    budget -= 1.0
+                    self._spawn_production_unit(side, unit_key)
+                    spawned += 1
+                self._spawn_budget[side][unit_key] = budget
 
     def _spawn_production_unit(self, side: str, unit_key: str) -> None:
         from panda3d.core import LPoint3f  # type: ignore
@@ -1008,14 +1014,14 @@ class CncPandaApplication:
         base = self._base_positions.get(side)
         if base is None or self._world is None:
             return
-        offset = {
-            "infantry": LPoint3f(20, 20, 0),
-            "ifv": LPoint3f(30, -10, 0),
-            "tank": LPoint3f(40, 10, 0),
-            "helicopter": LPoint3f(10, -30, 0),
-            "aircraft": LPoint3f(-20, -40, 0),
-        }.get(unit_key, LPoint3f(20, 0, 0))
-        start = LPoint3f(base.x + offset.x, base.y + offset.y, 2.0)
+        factory_key = {
+            "infantry": "infantry_factory",
+            "ifv": "armor_factory",
+            "tank": "armor_factory",
+            "helicopter": "heli_factory",
+            "aircraft": "air_factory",
+        }.get(unit_key, "")
+        start = self._factory_spawn_point(side, factory_key, base)
         center_x, center_y = self._combat_center()
         end = LPoint3f(center_x + self._rng.uniform(-40, 40), center_y + self._rng.uniform(-30, 30), 2.0)
         node = self._world.attachNewNode(f"prod_{side}_{unit_key}_{self.runtime.state.tick}")
@@ -1109,6 +1115,20 @@ class CncPandaApplication:
             return LPoint3f(0, 0, 0)
         offset = LPoint3f(-40, -70, 0) if side == "p1" else LPoint3f(40, 70, 0)
         return LPoint3f(base.x + offset.x, base.y + offset.y, base.z)
+
+    def _factory_spawn_point(self, side: str, factory_key: str, base: "LPoint3f") -> "LPoint3f":
+        from panda3d.core import LPoint3f  # type: ignore
+
+        if factory_key:
+            nodes = self._structure_nodes.get(side, {}).get(factory_key, [])
+            if nodes:
+                built = self.runtime.state.player1.structures.get(factory_key, 0) if side == "p1" else \
+                    self.runtime.state.player2.structures.get(factory_key, 0)
+                if built > 0:
+                    node = nodes[min(built - 1, len(nodes) - 1)]
+                    pos = node.getPos(self._world)
+                    return LPoint3f(pos.x, pos.y, 2.0)
+        return LPoint3f(base.x, base.y, 2.0)
 
     def _update_ui(self) -> None:
         if not self._ui_text:

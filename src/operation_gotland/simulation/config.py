@@ -16,7 +16,7 @@ class EconomySettings:
 
 @dataclass(frozen=True)
 class ProductionSettings:
-    base_output: float = 30.0
+    base_output: float = 0.0
     factory_output: float = 12.0
     armor_split: Tuple[float, float] = (0.6, 0.4)
     defense_split: Tuple[float, float, float] = (0.4, 0.4, 0.2)
