@@ -73,11 +73,11 @@ class CncPandaApplication:
         self._key_state: Dict[str, bool] = {"left": False, "right": False, "up": False, "down": False}
         self._camera_center = None
         self._camera_height = 260.0
-        self._camera_pitch = -38.0
+        self._camera_pitch = -42.0
         self._map_length = 2000.0
         self._map_width = 700.0
         self._tick_accumulator = 0.0
-        self._tick_interval = 1.0
+        self._tick_interval = 2.0
         self._mouse_dragging = False
         self._last_mouse_pos = None
         self._ui_right_start = 0.0
@@ -119,7 +119,7 @@ class CncPandaApplication:
         render.setAntialias(True)
 
         self._world = render.attachNewNode("world")
-        self._camera_center = LPoint3f(0.0, 0.0, 0.0)
+        self._camera_center = LPoint3f(0.0, 60.0, 0.0)
 
         base = self._engine  # type: ignore[assignment]
         base.setBackgroundColor(0.04, 0.06, 0.07)
@@ -134,9 +134,14 @@ class CncPandaApplication:
         grid.reparentTo(self._world)
         grid.setZ(0.1)
 
-        self._frontline_zone_p2 = self._build_frontline_band(color=(0.7, 0.2, 0.15, 0.25))
+        battle_lane = self._build_frontline_band(color=(0.08, 0.1, 0.11, 0.6), width=220.0)
+        battle_lane.setX(0)
+        battle_lane.setZ(0.05)
+        battle_lane.reparentTo(self._world)
+
+        self._frontline_zone_p2 = self._build_frontline_band(color=(0.7, 0.2, 0.15, 0.18))
         self._frontline_zone_p2.reparentTo(self._world)
-        self._frontline_zone_p1 = self._build_frontline_band(color=(0.15, 0.35, 0.7, 0.25))
+        self._frontline_zone_p1 = self._build_frontline_band(color=(0.15, 0.35, 0.7, 0.18))
         self._frontline_zone_p1.reparentTo(self._world)
         self._frontline_center = self._build_frontline_band(color=(0.9, 0.9, 0.9, 0.4), width=12.0)
         self._frontline_center.reparentTo(self._world)
@@ -516,7 +521,7 @@ class CncPandaApplication:
         self._key_state[key] = value
 
     def _adjust_zoom(self, direction: int) -> None:
-        self._camera_height = max(70.0, min(520.0, self._camera_height - direction * 20))
+        self._camera_height = max(70.0, min(640.0, self._camera_height - direction * 20))
 
     def _advance_simulation(self, task: "Task") -> int:
         """Advance the simulation and allow Panda3D to continue its task chain."""
@@ -563,7 +568,7 @@ class CncPandaApplication:
     def _update_unit_markers(self) -> None:
         front_x = self._map_pos(self.runtime.state.frontline.position)
         band = 120.0
-        spacing = self._map_width / 12
+        spacing = self._map_width / 10
         for side_key, player in (("p1", self.runtime.state.player1), ("p2", self.runtime.state.player2)):
             direction = -1 if side_key == "p1" else 1
             for unit_key, nodes in self._unit_markers[side_key].items():
@@ -576,9 +581,9 @@ class CncPandaApplication:
                         row = idx % 6
                         col = idx // 6
                         node.setPos(
-                            front_x + direction * (25 + col * 18),
-                            (row - 2.5) * spacing + (col * 4 * direction),
-                            2.0,
+                            front_x + direction * (60 + col * 26),
+                            (row - 2.5) * spacing + (col * 6 * direction),
+                            2.5,
                         )
                         node.setScale(1.6 + tier * 0.25)
                         node.show()
@@ -633,12 +638,12 @@ class CncPandaApplication:
         if self._key_state["down"]:
             self._camera_center.y -= speed
         half_len = self._map_length / 2 - 100
-        half_wid = self._map_width / 2 - 80
+        half_wid = self._map_width / 2 + 80
         self._camera_center.x = max(-half_len, min(half_len, self._camera_center.x))
         self._camera_center.y = max(-half_wid, min(half_wid, self._camera_center.y))
 
         cam = self._engine.camera
-        cam.setPos(self._camera_center.x, self._camera_center.y - 220, self._camera_height)
+        cam.setPos(self._camera_center.x, self._camera_center.y - 320, self._camera_height)
         cam.setHpr(0, self._camera_pitch, 0)
         return task.cont
 
