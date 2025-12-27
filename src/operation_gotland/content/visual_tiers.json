@@ -1,0 +1,25 @@
+{
+  "domains": {
+    "aircraft": [
+      { "tier": 0, "label": "Legacy", "description": "Early jets and limited avionics" },
+      { "tier": 1, "label": "Modern", "description": "Multi-role fighters and improved sensors" },
+      { "tier": 2, "label": "Advanced", "description": "Low observable airframes and sensor fusion" },
+      { "tier": 3, "label": "Elite", "description": "Air dominance platforms" }
+    ],
+    "armor": [
+      { "tier": 0, "label": "Cold War MBT", "description": "Baseline armor and gunnery" },
+      { "tier": 1, "label": "Modern MBT", "description": "Improved fire control and survivability" },
+      { "tier": 2, "label": "Advanced MBT", "description": "Active protection and networked sensors" }
+    ],
+    "infantry": [
+      { "tier": 0, "label": "Legacy Infantry", "description": "Basic infantry gear" },
+      { "tier": 1, "label": "Modern Infantry", "description": "Improved optics and mobility" },
+      { "tier": 2, "label": "Advanced Infantry", "description": "Enhanced comms and protection" }
+    ],
+    "air_defense": [
+      { "tier": 0, "label": "Legacy SAM", "description": "Point defense and limited radar" },
+      { "tier": 1, "label": "Modern IADS", "description": "Integrated radar and longer range" },
+      { "tier": 2, "label": "Layered Air Defense", "description": "Multi-layer coverage and networking" }
+    ]
+  }
+}

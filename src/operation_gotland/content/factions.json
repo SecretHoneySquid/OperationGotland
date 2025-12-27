@@ -1,0 +1,28 @@
+{
+  "factions": [
+    {
+      "id": "nato",
+      "display_name": "NATO",
+      "doctrine": "Air-centric combined arms",
+      "equipment": {
+        "aircraft": ["F-14", "F-16", "F-35", "F-22"],
+        "armor": ["Cold War MBT", "Modern MBT", "Advanced MBT"],
+        "infantry": ["Cold War Infantry", "Modern Infantry", "Advanced Infantry"],
+        "air_defense": ["Legacy SAM", "Modern IADS", "Layered Air Defense"],
+        "helicopter": ["Early Attack Helo", "Modern Attack Helo", "Advanced Attack Helo"]
+      }
+    },
+    {
+      "id": "eastern",
+      "display_name": "Eastern Coalition",
+      "doctrine": "Armor and artillery mass",
+      "equipment": {
+        "aircraft": ["MiG-23", "MiG-29", "Su-35", "Su-57"],
+        "armor": ["Cold War MBT", "Modern MBT", "Advanced MBT"],
+        "infantry": ["Mass Infantry", "Mechanized Infantry", "Elite Infantry"],
+        "air_defense": ["Legacy SAM", "Modern IADS", "Layered Air Defense"],
+        "helicopter": ["Attack Helo", "Modern Attack Helo", "Advanced Attack Helo"]
+      }
+    }
+  ]
+}
