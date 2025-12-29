@@ -1,0 +1,65 @@
+[gd_scene load_steps=8 format=3 uid="uid://fo5h4srnvbrq"]
+
+[ext_resource type="Script" uid="uid://cw7e3v4l114bn" path="res://scripts/core/debug_overlay.gd" id="1"]
+[ext_resource type="Script" uid="uid://deqd3q3icoi8c" path="res://scripts/core/map_loader.gd" id="2"]
+[ext_resource type="Script" uid="uid://wvuepufvm1f1" path="res://scripts/core/build_controller.gd" id="3"]
+[ext_resource type="Script" uid="uid://dtk74mj7u4cr" path="res://scripts/ui/build_ui.gd" id="4"]
+[ext_resource type="Script" uid="uid://i6cxurji1ggc" path="res://scripts/core/game_controller.gd" id="5"]
+[ext_resource type="Script" uid="uid://beln4a1ylqin3" path="res://scripts/core/camera_controller.gd" id="6"]
+[ext_resource type="Script" uid="uid://daegbssvq2pbh" path="res://scripts/core/selection_controller.gd" id="7"]
+
+[node name="Main" type="Node2D"]
+
+[node name="MapRoot" type="Node2D" parent="."]
+script = ExtResource("2")
+map_fill = Color(0.12, 0.16, 0.12, 1)
+map_outline = Color(0.2, 0.25, 0.2, 1)
+show_facets = null
+facet_size = null
+facet_variation = null
+facet_seed = null
+grid_color = Color(0.18, 0.22, 0.18, 0.5)
+build_zone_fill = Color(0.1, 0.6, 0.2, 0.18)
+build_zone_outline = Color(0.1, 0.6, 0.2, 0.7)
+build_zone_hatch_color = Color(0.1, 0.6, 0.2, 0.25)
+show_resource_nodes = false
+resource_color = Color(0.95, 0.75, 0.2, 0.9)
+resource_outline = Color(0.35, 0.25, 0.1, 0.9)
+resource_cross = Color(0.2, 0.15, 0.05, 0.9)
+
+[node name="GameController" type="Node2D" parent="."]
+script = ExtResource("5")
+
+[node name="Structures" type="Node2D" parent="GameController"]
+
+[node name="Units" type="Node2D" parent="GameController"]
+
+[node name="BuildController" type="Node2D" parent="."]
+script = ExtResource("3")
+
+[node name="SelectionController" type="Node2D" parent="."]
+script = ExtResource("7")
+
+[node name="Fog" type="CanvasModulate" parent="."]
+color = Color(0.08, 0.08, 0.1, 1)
+
+[node name="Camera2D" type="Camera2D" parent="."]
+position = Vector2(1000, 600)
+zoom = Vector2(0.6, 0.6)
+script = ExtResource("6")
+
+[node name="DebugOverlay" type="CanvasLayer" parent="."]
+
+[node name="Label" type="Label" parent="DebugOverlay"]
+anchors_preset = 1
+anchor_left = 1.0
+anchor_right = 1.0
+offset_left = -360.0
+offset_top = 12.0
+offset_right = -12.0
+offset_bottom = 380.0
+text = "Loading..."
+script = ExtResource("1")
+
+[node name="BuildUI" type="CanvasLayer" parent="."]
+script = ExtResource("4")

@@ -12,6 +12,7 @@ class SimulationConfig:
     pressure_threshold: float = 10.0
     pressure_decay: float = 0.5
     opposing_bleed: float = 0.35
+    pressure_gain_cap: float = 2.0
     missile_penalty_per: float = 2.5
     missile_penalty_cap: float = 50.0
     base_credits: int = 120

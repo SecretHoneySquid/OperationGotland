@@ -79,6 +79,8 @@ def update_pressure_progress(
     config: SimulationConfig,
 ) -> float:
     progress = max(0.0, current - config.pressure_decay)
+    if pushing_net > 0:
+        pushing_net = min(pushing_net, config.pressure_gain_cap)
     progress += pushing_net
     if opposing_net > 0:
         progress -= opposing_net * config.opposing_bleed

@@ -1,0 +1,43 @@
+[gd_scene load_steps=6 format=3]
+
+[sub_resource type="CylinderMesh" id="1"]
+top_radius = 0.2
+bottom_radius = 0.2
+height = 1.0
+
+[sub_resource type="CylinderMesh" id="2"]
+top_radius = 0.0
+bottom_radius = 0.2
+height = 0.4
+
+[sub_resource type="BoxMesh" id="3"]
+size = Vector3(0.5, 0.06, 0.35)
+
+[sub_resource type="BoxMesh" id="4"]
+size = Vector3(0.06, 0.5, 0.35)
+
+[sub_resource type="SphereMesh" id="5"]
+radius = 0.08
+
+[node name="Missile" type="Node3D"]
+
+[node name="Body" type="MeshInstance3D" parent="."]
+mesh = SubResource("1")
+rotation_degrees = Vector3(90, 0, 0)
+
+[node name="Nose" type="MeshInstance3D" parent="."]
+mesh = SubResource("2")
+rotation_degrees = Vector3(90, 0, 0)
+position = Vector3(0, 0, -0.7)
+
+[node name="FinA" type="MeshInstance3D" parent="."]
+mesh = SubResource("3")
+position = Vector3(0, 0, 0.45)
+
+[node name="FinB" type="MeshInstance3D" parent="."]
+mesh = SubResource("4")
+position = Vector3(0, 0, 0.45)
+
+[node name="Exhaust" type="MeshInstance3D" parent="."]
+mesh = SubResource("5")
+position = Vector3(0, 0, 0.62)

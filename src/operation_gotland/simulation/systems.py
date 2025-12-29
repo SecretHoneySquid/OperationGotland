@@ -274,6 +274,8 @@ class FrontlineSystem:
             )
 
         apply_breakthrough_attrition(state)
+        state.frontline.pressure_toward_p2 = 0.0
+        state.frontline.pressure_toward_p1 = 0.0
         events.append(
             SimEvent(
                 tick=state.tick,
@@ -303,9 +305,6 @@ class FrontlineSystem:
                     payload={"winner": state.winner},
                 )
             )
-        else:
-            state.frontline.pressure_toward_p2 = 0.0
-            state.frontline.pressure_toward_p1 = 0.0
 
 
 class VictorySystem:

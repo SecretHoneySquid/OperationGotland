@@ -1,0 +1,43 @@
+[gd_scene load_steps=7 format=3]
+
+[ext_resource type="PackedScene" path="res://scenes/game/main.tscn" id="1"]
+[ext_resource type="Script" path="res://scripts/core/camera_controller_3d.gd" id="2"]
+[ext_resource type="Script" path="res://scripts/visuals/visual_sync_3d.gd" id="3"]
+[ext_resource type="Script" path="res://scripts/visuals/world_input_3d.gd" id="4"]
+[ext_resource type="Script" path="res://scripts/visuals/ground_plane_3d.gd" id="5"]
+
+[sub_resource type="Environment" id="1"]
+background_mode = 2
+background_color = Color(0.05, 0.06, 0.07, 1)
+
+[node name="Main3D" type="Node"]
+
+[node name="Logic2D" instance=ExtResource("1") parent="."]
+
+[node name="World3D" type="Node3D" parent="."]
+
+[node name="CameraRig" type="Node3D" parent="World3D"]
+script = ExtResource("2")
+
+[node name="Camera3D" type="Camera3D" parent="World3D/CameraRig"]
+current = true
+
+[node name="DirectionalLight3D" type="DirectionalLight3D" parent="World3D"]
+rotation_degrees = Vector3(-55, 30, 0)
+light_energy = 1.1
+shadow_enabled = true
+
+[node name="Environment" type="WorldEnvironment" parent="World3D"]
+environment = SubResource("1")
+
+[node name="Ground" type="Node3D" parent="World3D"]
+script = ExtResource("5")
+
+[node name="MeshInstance3D" type="MeshInstance3D" parent="World3D/Ground"]
+
+[node name="VisualSync" type="Node3D" parent="World3D"]
+script = ExtResource("3")
+
+[node name="WorldInput" type="Node" parent="."]
+script = ExtResource("4")
+groups = ["world_input"]
