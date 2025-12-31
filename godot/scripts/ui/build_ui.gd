@@ -50,11 +50,13 @@ func _process(_delta: float) -> void:
 	if _income_label != null:
 		_income_label.text = "Income/s: %.1f" % GameState.p1_income_rate
 	if _prod_label != null:
-		_prod_label.text = "Inf Prod: %.2f (Barracks: %d)  Veh Prod: %.2f (Factories: %d)" % [
+		_prod_label.text = "Inf Prod: %.2f (Barracks: %d)\nVeh Prod: %.2f (Factories: %d)\nAir Prod: %.2f (Airfields: %d)" % [
 			GameState.p1_infantry_prod,
 			GameState.p1_barracks,
 			GameState.p1_vehicle_prod,
-			GameState.p1_factory
+			GameState.p1_factory,
+			GameState.p1_aircraft_prod,
+			GameState.p1_airfield
 		]
 	if _infantry_status_label != null:
 		var eta_text := "--"
@@ -141,11 +143,13 @@ func _build_ui() -> void:
 	vbox.add_child(_income_label)
 
 	_prod_label = Label.new()
-	_prod_label.text = "Inf Prod: %.2f (Barracks: %d)  Veh Prod: %.2f (Factories: %d)" % [
+	_prod_label.text = "Inf Prod: %.2f (Barracks: %d)\nVeh Prod: %.2f (Factories: %d)\nAir Prod: %.2f (Airfields: %d)" % [
 		GameState.p1_infantry_prod,
 		GameState.p1_barracks,
 		GameState.p1_vehicle_prod,
-		GameState.p1_factory
+		GameState.p1_factory,
+		GameState.p1_aircraft_prod,
+		GameState.p1_airfield
 	]
 	vbox.add_child(_prod_label)
 

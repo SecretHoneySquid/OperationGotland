@@ -31,6 +31,7 @@ var _cancel_start := Vector2.ZERO
 var _build_order := [
 	"barracks",
 	"factory",
+	"airfield",
 	"supply",
 	"power",
 	"command_center",
@@ -52,6 +53,13 @@ var _build_defs := {
 		"cost": 300,
 		"hp": 260.0,
 		"color": Color(0.6, 0.45, 0.2, 1.0),
+	},
+	"airfield": {
+		"name": "Airfield",
+		"size": Vector2(432, 288),
+		"cost": 250,
+		"hp": 260.0,
+		"color": Color(0.28, 0.38, 0.55, 1.0),
 	},
 	"supply": {
 		"name": "Supply Depot",
@@ -267,6 +275,9 @@ func _try_place() -> void:
 		building.wait_mode = false
 	if _active_build_id == "factory":
 		building.vehicle_production_type = "mixed"
+	if _active_build_id == "airfield":
+		building.set_meta("aircraft_active", 0)
+		building.set_meta("aircraft_landing", 0)
 	building.position = _ghost_pos
 	add_child(building)
 	_buildings.append(building)
@@ -402,6 +413,8 @@ func _increment_building_count(build_id: String) -> void:
 				GameState.p1_barracks += 1
 			"factory":
 				GameState.p1_factory += 1
+			"airfield":
+				GameState.p1_airfield += 1
 			"supply":
 				GameState.p1_supply += 1
 			"power":
@@ -418,6 +431,8 @@ func _increment_building_count(build_id: String) -> void:
 				GameState.p2_barracks += 1
 			"factory":
 				GameState.p2_factory += 1
+			"airfield":
+				GameState.p2_airfield += 1
 			"supply":
 				GameState.p2_supply += 1
 			"power":
@@ -434,6 +449,8 @@ func _get_building_visual_path(build_id: String) -> String:
 			return "res://scenes/buildings/barracks_visual.tscn"
 		"factory":
 			return "res://scenes/buildings/factory_visual.tscn"
+		"airfield":
+			return "res://scenes/buildings/airfield_visual.tscn"
 		"supply":
 			return "res://scenes/buildings/supply_visual.tscn"
 		"power":
@@ -453,6 +470,8 @@ func _get_building_visual_base_size(build_id: String) -> Vector2:
 			return Vector2(100, 90)
 		"factory":
 			return Vector2(140, 110)
+		"airfield":
+			return Vector2(432, 288)
 		"supply":
 			return Vector2(100, 80)
 		"power":

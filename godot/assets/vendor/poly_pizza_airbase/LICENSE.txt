@@ -1,0 +1,5 @@
+Asset: Cargo Depot A
+Author: Kay Lousberg
+Source: https://poly.pizza/m/Q8OC84mlJI
+License: CC0 1.0 (https://creativecommons.org/publicdomain/zero/1.0/)
+Downloaded: 2025-12-29

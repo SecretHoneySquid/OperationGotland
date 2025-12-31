@@ -8,6 +8,7 @@ extends Node2D
 @export var unit_spawn_limit := 50
 @export var unit_spawn_spread := 22.0
 @export var max_infantry_pool := 5.0
+@export var max_aircraft_pool := 2.0
 
 @export var starting_p1_credits := 700
 @export var starting_p2_credits := 700
@@ -15,13 +16,19 @@ extends Node2D
 @export var starting_p2_barracks := 1
 @export var starting_p1_factory := 0
 @export var starting_p2_factory := 1
+@export var starting_p1_airfield := 0
+@export var starting_p2_airfield := 0
 @export var starting_p1_supply := 0
 @export var starting_p2_supply := 1
 
 @export var barracks_infantry_rate := 0.6
 @export var factory_vehicle_rate := 0.25
+@export var airfield_aircraft_rate := 0.2
+@export var airfield_aircraft_cap := 3
+@export var airfield_landing_cap := 2
 @export var infantry_unit_cost := 25
 @export var vehicle_unit_cost := 60
+@export var aircraft_unit_cost := 120
 @export var factory_queue_max := 6
 
 @export var unit_speed := 63.0
@@ -48,6 +55,30 @@ extends Node2D
 @export var vehicle_attack_cooldown := 0.9
 @export var vehicle_body_radius := 11.0
 
+@export var aircraft_speed := 110.0
+@export var aircraft_hp := 70.0
+@export var aircraft_damage := 4.5
+@export var aircraft_attack_range := 180.0
+@export var aircraft_attack_cooldown := 0.12
+@export var aircraft_body_radius := 12.0
+@export var aircraft_vision_radius := 280.0
+@export var aircraft_shot_width := 2.6
+@export var aircraft_shot_lifetime := 0.16
+@export var aircraft_gun_ammo := 20
+@export var aircraft_missile_ammo := 2
+@export var aircraft_missile_damage := 32.0
+@export var aircraft_missile_speed := 520.0
+@export var aircraft_missile_turn_rate := 6.0
+@export var aircraft_missile_range := 12000.0
+@export var aircraft_missile_cooldown := 2.4
+@export var aircraft_missile_hit_radius := 16.0
+@export var aircraft_missile_warhead_size := "large"
+@export var aircraft_missile_splash_radius := 80.0
+@export var aircraft_missile_splash_scale := 0.85
+@export var aircraft_missile_lifetime := 24.0
+@export var aircraft_reload_time := 7.0
+@export var aircraft_missile_color := Color(1.0, 0.55, 0.25, 1.0)
+
 @export var collector_speed := 80.0
 @export var collector_capacity := 100.0
 @export var collector_harvest_time := 1.0
@@ -68,6 +99,8 @@ extends Node2D
 @export var p2_unit_color := Color(1.0, 0.3, 0.3, 1.0)
 @export var p1_vehicle_color := Color(0.25, 0.7, 1.0, 1.0)
 @export var p2_vehicle_color := Color(1.0, 0.45, 0.3, 1.0)
+@export var p1_aircraft_color := Color(0.2, 0.65, 1.0, 1.0)
+@export var p2_aircraft_color := Color(1.0, 0.5, 0.3, 1.0)
 @export var p1_hq_color := Color(0.2, 0.35, 0.7, 1.0)
 @export var p2_hq_color := Color(0.7, 0.2, 0.2, 1.0)
 @export var p1_collector_color := Color(0.9, 0.85, 0.2, 1.0)
@@ -95,6 +128,8 @@ var _structures: Node2D
 var _units: Node2D
 var _infantry_pool_p1 := 0.0
 var _infantry_pool_p2 := 0.0
+var _aircraft_pool_p1 := 0.0
+var _aircraft_pool_p2 := 0.0
 var _vehicle_progress_p1 := 0.0
 var _vehicle_progress_p2 := 0.0
 var _factory_queue_p1: Array[Dictionary] = []
@@ -120,6 +155,8 @@ var _p2_build_zone := Rect2()
 var _base_vision: BaseVision
 var _barracks_spawn_index_p1 := 0
 var _barracks_spawn_index_p2 := 0
+var _airfield_spawn_index_p1 := 0
+var _airfield_spawn_index_p2 := 0
 var _supply_spawn_index_p1 := 0
 var _supply_spawn_index_p2 := 0
 var _world_input: Node
@@ -152,6 +189,7 @@ func _process(delta: float) -> void:
 	_update_defenses(delta)
 	_update_infantry(delta)
 	_update_factory_queue(delta)
+	_update_aircraft(delta)
 	_update_ai_queue(delta)
 	_update_state_counters()
 	_update_visibility()
@@ -297,6 +335,10 @@ func _spawn_starting_buildings() -> void:
 		_spawn_building("p1", "factory", _start_p1 + Vector2(260, -120 + i * 120))
 	for i in range(starting_p2_factory):
 		_spawn_building("p2", "factory", _start_p2 + Vector2(-260, -120 + i * 120))
+	for i in range(starting_p1_airfield):
+		_spawn_building("p1", "airfield", _start_p1 + Vector2(340, -80 + i * 140))
+	for i in range(starting_p2_airfield):
+		_spawn_building("p2", "airfield", _start_p2 + Vector2(-340, -80 + i * 140))
 	for i in range(starting_p1_supply):
 		_spawn_building("p1", "supply", _start_p1 + Vector2(120, 140 + i * 90))
 	for i in range(starting_p2_supply):
@@ -317,6 +359,11 @@ func _spawn_building(team_id: String, build_id: String, pos: Vector2) -> void:
 		building.size = Vector2(140, 110)
 		building.fill_color = Color(0.6, 0.45, 0.2, 1.0)
 		building.vehicle_production_type = "mixed"
+	elif build_id == "airfield":
+		building.size = Vector2(432, 288)
+		building.fill_color = Color(0.28, 0.38, 0.55, 1.0)
+		building.set_meta("aircraft_active", 0)
+		building.set_meta("aircraft_landing", 0)
 	elif build_id == "supply":
 		building.size = Vector2(100, 80)
 		building.fill_color = Color(0.7, 0.6, 0.2, 1.0)
@@ -362,6 +409,18 @@ func _update_factory_queue(delta: float) -> void:
 		_vehicle_progress_p2 += GameState.p2_vehicle_prod * delta
 		_vehicle_progress_p2 = _spawn_from_factory_queue("p2", _vehicle_progress_p2)
 
+func _update_aircraft(delta: float) -> void:
+	if GameState.winner != "":
+		return
+	_aircraft_pool_p1 = minf(_aircraft_pool_p1 + GameState.p1_aircraft_prod * delta, max_aircraft_pool)
+	_aircraft_pool_p2 = minf(_aircraft_pool_p2 + GameState.p2_aircraft_prod * delta, max_aircraft_pool)
+	_aircraft_pool_p1 = _spawn_from_aircraft_pool("p1", _aircraft_pool_p1)
+	_aircraft_pool_p2 = _spawn_from_aircraft_pool("p2", _aircraft_pool_p2)
+	GameState.p1_aircraft_pool = _aircraft_pool_p1
+	GameState.p2_aircraft_pool = _aircraft_pool_p2
+	GameState.p1_aircraft_eta = _pool_eta(GameState.p1_aircraft_prod, _aircraft_pool_p1)
+	GameState.p2_aircraft_eta = _pool_eta(GameState.p2_aircraft_prod, _aircraft_pool_p2)
+
 func _update_ai_queue(delta: float) -> void:
 	_ai_queue_timer -= delta
 	if _ai_queue_timer > 0.0:
@@ -391,11 +450,37 @@ func _spawn_from_pool(team_id: String, pool: float) -> float:
 		pool -= 1.0
 	return pool
 
+func _spawn_from_aircraft_pool(team_id: String, pool: float) -> float:
+	if pool < 1.0:
+		return pool
+	if not _hq_alive(_hq_p1) and team_id == "p1":
+		return 0.0
+	if not _hq_alive(_hq_p2) and team_id == "p2":
+		return 0.0
+	while pool >= 1.0:
+		if unit_spawn_limit > 0 and _count_units(team_id) >= unit_spawn_limit:
+			break
+		if not _has_team_credits(team_id, aircraft_unit_cost):
+			break
+		if not _spawn_aircraft(team_id):
+			break
+		_deduct_team_credits(team_id, aircraft_unit_cost)
+		pool -= 1.0
+	return pool
+
 func _spawn_infantry(team_id: String) -> bool:
 	var barracks := _get_barracks_for_spawn(team_id)
 	if barracks == null:
 		return false
 	_spawn_unit(team_id, "infantry", barracks)
+	return true
+
+func _spawn_aircraft(team_id: String) -> bool:
+	var airfield := _get_airfield_for_spawn(team_id)
+	if airfield == null:
+		return false
+	_spawn_unit(team_id, "aircraft", airfield, "f16")
+	_register_airfield_aircraft(airfield)
 	return true
 
 func _spawn_from_factory_queue(team_id: String, progress: float) -> float:
@@ -469,6 +554,66 @@ func _spawn_unit(team_id: String, unit_kind: String, source_building: Building =
 		unit.position = _spawn_at_factory(team_id, factory)
 		unit.visual_scene_path = _get_unit_visual_path("vehicle")
 		unit.visual_base_radius = 14.0
+	elif unit_kind == "aircraft":
+		var airfield := source_building
+		var type_id := _resolve_aircraft_type(unit_type_id)
+		var stats := _get_aircraft_def(type_id)
+		var range_role := str(stats.get("range_role", "long"))
+		var range_mult := float(stats.get("range_multiplier", 1.0))
+		var attack_range := float(stats.get("attack_range", aircraft_attack_range)) * range_mult
+		unit.unit_kind = "aircraft"
+		unit.unit_type = type_id
+		unit.range_role = range_role
+		unit.range_multiplier = range_mult
+		unit.prefers_vehicle = bool(stats.get("prefers_vehicle", true))
+		unit.prefers_infantry = bool(stats.get("prefers_infantry", false))
+		unit.damage_vs_infantry = float(stats.get("damage_vs_infantry", 0.6))
+		unit.damage_vs_vehicle = float(stats.get("damage_vs_vehicle", 1.6))
+		unit.damage_vs_structure = float(stats.get("damage_vs_structure", 1.0))
+		unit.speed = float(stats.get("speed", aircraft_speed))
+		unit.max_hp = float(stats.get("max_hp", aircraft_hp))
+		unit.attack_damage = float(stats.get("damage", aircraft_damage))
+		unit.attack_range = attack_range
+		unit.attack_cooldown = float(stats.get("cooldown", aircraft_attack_cooldown))
+		unit.body_radius = float(stats.get("body_radius", aircraft_body_radius))
+		unit.vision_radius = float(stats.get("vision_radius", aircraft_vision_radius))
+		unit.color = p1_aircraft_color if team_id == "p1" else p2_aircraft_color
+		unit.aggro_range = maxf(320.0, attack_range * 1.1)
+		unit.chase_leash = maxf(420.0, attack_range * 1.2)
+		unit.structure_aggro_range = maxf(360.0, attack_range * 1.15)
+		unit.shot_width = float(stats.get("shot_width", aircraft_shot_width))
+		unit.shot_lifetime = float(stats.get("shot_lifetime", aircraft_shot_lifetime))
+		var shot_color = stats.get("shot_color", Color(1.0, 0.9, 0.8, 0.8))
+		if shot_color is Color:
+			unit.shot_color = shot_color
+		unit.aircraft_gun_capacity = int(stats.get("gun_ammo", aircraft_gun_ammo))
+		unit.aircraft_gun_ammo = unit.aircraft_gun_capacity
+		unit.aircraft_missile_capacity = int(stats.get("missile_ammo", aircraft_missile_ammo))
+		unit.aircraft_missile_ammo = unit.aircraft_missile_capacity
+		unit.aircraft_reload_time = float(stats.get("reload_time", aircraft_reload_time))
+		unit.aircraft_missile_damage = float(stats.get("missile_damage", aircraft_missile_damage))
+		unit.aircraft_missile_speed = float(stats.get("missile_speed", aircraft_missile_speed))
+		unit.aircraft_missile_turn_rate = float(stats.get("missile_turn_rate", aircraft_missile_turn_rate))
+		unit.aircraft_missile_range = float(stats.get("missile_range", aircraft_missile_range))
+		unit.aircraft_missile_cooldown = float(stats.get("missile_cooldown", aircraft_missile_cooldown))
+		unit.aircraft_missile_hit_radius = float(stats.get("missile_hit_radius", aircraft_missile_hit_radius))
+		unit.aircraft_missile_warhead_size = str(stats.get("missile_warhead_size", aircraft_missile_warhead_size))
+		unit.aircraft_missile_splash_radius = float(stats.get("missile_splash_radius", aircraft_missile_splash_radius))
+		unit.aircraft_missile_splash_scale = float(stats.get("missile_splash_scale", aircraft_missile_splash_scale))
+		unit.aircraft_missile_lifetime = float(stats.get("missile_lifetime", aircraft_missile_lifetime))
+		unit.aircraft_landing_cap = airfield_landing_cap
+		var missile_color = stats.get("missile_color", aircraft_missile_color)
+		if missile_color is Color:
+			unit.aircraft_missile_color = missile_color
+		if airfield != null and is_instance_valid(airfield):
+			unit.aircraft_home = airfield
+			unit.aircraft_home_pos = airfield.global_position
+		else:
+			unit.aircraft_home = null
+			unit.aircraft_home_pos = unit.home_pos
+		unit.position = _spawn_at_airfield(team_id, airfield)
+		unit.visual_scene_path = _get_unit_visual_path("aircraft")
+		unit.visual_base_radius = 20.0
 	else:
 		var barracks := source_building
 		var production_type := "mixed"
@@ -527,6 +672,11 @@ func _spawn_at_factory(team_id: String, factory: Building = null) -> Vector2:
 		return _offset_spawn(factory.global_position)
 	return _spawn_at_building(team_id, "factory", _start_p1 if team_id == "p1" else _start_p2)
 
+func _spawn_at_airfield(team_id: String, airfield: Building = null) -> Vector2:
+	if airfield != null and is_instance_valid(airfield):
+		return _offset_spawn(airfield.global_position)
+	return _spawn_at_building(team_id, "airfield", _start_p1 if team_id == "p1" else _start_p2)
+
 func _spawn_at_building(team_id: String, build_id: String, fallback: Vector2) -> Vector2:
 	var group_name := "building_%s_%s" % [build_id, team_id]
 	var buildings := get_tree().get_nodes_in_group(group_name)
@@ -557,6 +707,48 @@ func _get_barracks_for_spawn(team_id: String) -> Building:
 		_barracks_spawn_index_p2 = (index + 1) % barracks_list.size()
 	return chosen
 
+func _get_airfield_for_spawn(team_id: String) -> Building:
+	var group_name := "building_airfield_%s" % team_id
+	var nodes := get_tree().get_nodes_in_group(group_name)
+	var airfield_list: Array[Building] = []
+	for node in nodes:
+		var airfield := node as Building
+		if airfield != null and is_instance_valid(airfield):
+			airfield_list.append(airfield)
+	if airfield_list.is_empty():
+		return null
+	var index := _airfield_spawn_index_p1 if team_id == "p1" else _airfield_spawn_index_p2
+	var total := airfield_list.size()
+	index = index % total
+	var chosen: Building = null
+	for offset in range(total):
+		var idx := (index + offset) % total
+		var candidate := airfield_list[idx]
+		if _airfield_has_capacity(candidate):
+			chosen = candidate
+			if team_id == "p1":
+				_airfield_spawn_index_p1 = (idx + 1) % total
+			else:
+				_airfield_spawn_index_p2 = (idx + 1) % total
+			break
+	if chosen == null:
+		return null
+	return chosen
+
+func _airfield_has_capacity(airfield: Building) -> bool:
+	if airfield == null or not is_instance_valid(airfield):
+		return false
+	if airfield_aircraft_cap <= 0:
+		return true
+	var current = int(airfield.get_meta("aircraft_active", 0))
+	return current < airfield_aircraft_cap
+
+func _register_airfield_aircraft(airfield: Building) -> void:
+	if airfield == null or not is_instance_valid(airfield):
+		return
+	var current = int(airfield.get_meta("aircraft_active", 0))
+	airfield.set_meta("aircraft_active", current + 1)
+
 func _get_wait_point(team_id: String, origin: Vector2) -> Vector2:
 	var zone := _p1_build_zone if team_id == "p1" else _p2_build_zone
 	var enemy_pos := _start_p2 if team_id == "p1" else _start_p1
@@ -586,8 +778,10 @@ func _update_production() -> void:
 	GameState.p2_infantry_prod = GameState.p2_barracks * barracks_infantry_rate
 	GameState.p1_vehicle_prod = GameState.p1_factory * factory_vehicle_rate
 	GameState.p2_vehicle_prod = GameState.p2_factory * factory_vehicle_rate
-	GameState.p1_total_prod = GameState.p1_infantry_prod + GameState.p1_vehicle_prod
-	GameState.p2_total_prod = GameState.p2_infantry_prod + GameState.p2_vehicle_prod
+	GameState.p1_aircraft_prod = GameState.p1_airfield * airfield_aircraft_rate
+	GameState.p2_aircraft_prod = GameState.p2_airfield * airfield_aircraft_rate
+	GameState.p1_total_prod = GameState.p1_infantry_prod + GameState.p1_vehicle_prod + GameState.p1_aircraft_prod
+	GameState.p2_total_prod = GameState.p2_infantry_prod + GameState.p2_vehicle_prod + GameState.p2_aircraft_prod
 
 func _update_income_rate(delta: float) -> void:
 	_income_timer += delta
@@ -845,6 +1039,8 @@ func _increment_building_count(team_id: String, build_id: String) -> void:
 				GameState.p1_barracks += 1
 			"factory":
 				GameState.p1_factory += 1
+			"airfield":
+				GameState.p1_airfield += 1
 			"supply":
 				GameState.p1_supply += 1
 			"power":
@@ -861,6 +1057,8 @@ func _increment_building_count(team_id: String, build_id: String) -> void:
 				GameState.p2_barracks += 1
 			"factory":
 				GameState.p2_factory += 1
+			"airfield":
+				GameState.p2_airfield += 1
 			"supply":
 				GameState.p2_supply += 1
 			"power":
@@ -985,6 +1183,8 @@ func _get_building_hp(build_id: String) -> float:
 			return 220.0
 		"factory":
 			return 260.0
+		"airfield":
+			return 260.0
 		"supply":
 			return 200.0
 		"power":
@@ -1045,6 +1245,13 @@ func _resolve_vehicle_type(requested: String) -> String:
 	if requested in ["tank", "artillery", "ifv"]:
 		return requested
 	return "tank"
+
+func _resolve_aircraft_type(requested: String) -> String:
+	if requested == "" or requested == "mixed":
+		return "f16"
+	if requested == "f16":
+		return "f16"
+	return "f16"
 
 func _get_infantry_def(type_id: String) -> Dictionary:
 	match type_id:
@@ -1141,6 +1348,74 @@ func _get_vehicle_def(type_id: String) -> Dictionary:
 				"damage_vs_structure": 1.1,
 			}
 
+func _get_aircraft_def(type_id: String) -> Dictionary:
+	match type_id:
+		"f16":
+			return {
+				"range_role": "long",
+				"range_multiplier": 1.0,
+				"max_hp": aircraft_hp,
+				"damage": aircraft_damage,
+				"cooldown": aircraft_attack_cooldown,
+				"speed": aircraft_speed,
+				"attack_range": aircraft_attack_range,
+				"body_radius": aircraft_body_radius,
+				"vision_radius": aircraft_vision_radius,
+				"shot_color": Color(1.0, 0.9, 0.75, 0.85),
+				"shot_width": aircraft_shot_width,
+				"shot_lifetime": aircraft_shot_lifetime,
+				"gun_ammo": aircraft_gun_ammo,
+				"missile_ammo": aircraft_missile_ammo,
+				"missile_damage": aircraft_missile_damage,
+				"missile_speed": aircraft_missile_speed,
+				"missile_turn_rate": aircraft_missile_turn_rate,
+				"missile_range": aircraft_missile_range,
+				"missile_cooldown": aircraft_missile_cooldown,
+				"missile_hit_radius": aircraft_missile_hit_radius,
+				"missile_warhead_size": aircraft_missile_warhead_size,
+				"missile_splash_radius": aircraft_missile_splash_radius,
+				"missile_splash_scale": aircraft_missile_splash_scale,
+				"missile_lifetime": aircraft_missile_lifetime,
+				"reload_time": aircraft_reload_time,
+				"missile_color": aircraft_missile_color,
+				"prefers_vehicle": true,
+				"damage_vs_infantry": 0.6,
+				"damage_vs_vehicle": 1.6,
+				"damage_vs_structure": 1.1,
+			}
+	return {
+		"range_role": "long",
+		"range_multiplier": 1.0,
+		"max_hp": aircraft_hp,
+		"damage": aircraft_damage,
+		"cooldown": aircraft_attack_cooldown,
+		"speed": aircraft_speed,
+		"attack_range": aircraft_attack_range,
+		"body_radius": aircraft_body_radius,
+		"vision_radius": aircraft_vision_radius,
+		"shot_color": Color(1.0, 0.9, 0.75, 0.85),
+		"shot_width": aircraft_shot_width,
+		"shot_lifetime": aircraft_shot_lifetime,
+		"gun_ammo": aircraft_gun_ammo,
+		"missile_ammo": aircraft_missile_ammo,
+		"missile_damage": aircraft_missile_damage,
+		"missile_speed": aircraft_missile_speed,
+		"missile_turn_rate": aircraft_missile_turn_rate,
+		"missile_range": aircraft_missile_range,
+		"missile_cooldown": aircraft_missile_cooldown,
+		"missile_hit_radius": aircraft_missile_hit_radius,
+		"missile_warhead_size": aircraft_missile_warhead_size,
+		"missile_splash_radius": aircraft_missile_splash_radius,
+		"missile_splash_scale": aircraft_missile_splash_scale,
+		"missile_lifetime": aircraft_missile_lifetime,
+		"reload_time": aircraft_reload_time,
+		"missile_color": aircraft_missile_color,
+		"prefers_vehicle": true,
+		"damage_vs_infantry": 0.6,
+		"damage_vs_vehicle": 1.6,
+		"damage_vs_structure": 1.1,
+	}
+
 func get_infantry_type_options() -> Array:
 	return [
 		{"id": "mixed", "name": "Mixed"},
@@ -1163,6 +1438,8 @@ func _get_unit_visual_path(unit_kind: String) -> String:
 			return "res://scenes/units/infantry_visual.tscn"
 		"vehicle":
 			return "res://scenes/units/vehicle_visual.tscn"
+		"aircraft":
+			return "res://scenes/units/aircraft_visual.tscn"
 		"collector":
 			return "res://scenes/units/collector_visual.tscn"
 	return ""
@@ -1173,6 +1450,8 @@ func _get_building_visual_path(build_id: String) -> String:
 			return "res://scenes/buildings/barracks_visual.tscn"
 		"factory":
 			return "res://scenes/buildings/factory_visual.tscn"
+		"airfield":
+			return "res://scenes/buildings/airfield_visual.tscn"
 		"supply":
 			return "res://scenes/buildings/supply_visual.tscn"
 		"power":
@@ -1192,6 +1471,8 @@ func _get_building_visual_base_size(build_id: String) -> Vector2:
 			return Vector2(100, 90)
 		"factory":
 			return Vector2(140, 110)
+		"airfield":
+			return Vector2(432, 288)
 		"supply":
 			return Vector2(100, 80)
 		"power":

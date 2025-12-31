@@ -62,6 +62,8 @@ func _exit_tree() -> void:
 				GameState.p1_barracks = maxi(0, GameState.p1_barracks - 1)
 			"factory":
 				GameState.p1_factory = maxi(0, GameState.p1_factory - 1)
+			"airfield":
+				GameState.p1_airfield = maxi(0, GameState.p1_airfield - 1)
 			"supply":
 				GameState.p1_supply = maxi(0, GameState.p1_supply - 1)
 			"power":
@@ -78,6 +80,8 @@ func _exit_tree() -> void:
 				GameState.p2_barracks = maxi(0, GameState.p2_barracks - 1)
 			"factory":
 				GameState.p2_factory = maxi(0, GameState.p2_factory - 1)
+			"airfield":
+				GameState.p2_airfield = maxi(0, GameState.p2_airfield - 1)
 			"supply":
 				GameState.p2_supply = maxi(0, GameState.p2_supply - 1)
 			"power":

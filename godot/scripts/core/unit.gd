@@ -41,6 +41,35 @@ signal shot_fired(start_pos: Vector2, end_pos: Vector2, color: Color, width: flo
 @export var visual_offset := Vector2.ZERO
 @export var render_2d := true
 
+@export var aircraft_missile_capacity := 2
+@export var aircraft_gun_capacity := 20
+@export var aircraft_reload_time := 7.0
+@export var aircraft_missile_range := 12000.0
+@export var aircraft_missile_speed := 520.0
+@export var aircraft_missile_turn_rate := 6.0
+@export var aircraft_missile_damage := 32.0
+@export var aircraft_missile_cooldown := 2.4
+@export var aircraft_missile_color := Color(1.0, 0.55, 0.25, 1.0)
+@export var aircraft_missile_warhead_size := "large"
+@export var aircraft_missile_hit_radius := 12.0
+@export var aircraft_missile_splash_radius := 80.0
+@export var aircraft_missile_splash_scale := 0.85
+@export var aircraft_missile_lifetime := 24.0
+@export var aircraft_reload_radius := 18.0
+@export var aircraft_loiter_radius := 120.0
+@export var aircraft_loiter_orbit_speed := 0.4
+@export var aircraft_orbit_radius_scale := 4.0
+@export var aircraft_orbit_wobble_ratio := 0.08
+@export var aircraft_orbit_wobble_speed := 3.0
+@export var aircraft_perimeter_padding := 60.0
+@export var aircraft_loiter_reload_delay := 5.0
+@export var aircraft_landing_radius := 2.0
+@export var aircraft_landing_path_length := 720.0
+@export var aircraft_landing_path_entry_radius := 18.0
+@export var aircraft_runway_offset_ratio := 0.18
+@export var aircraft_landing_cap := 2
+@export var aircraft_queue_radius := 0.0
+
 var hp := 0.0
 var unit_kind := "infantry"
 var home_pos := Vector2.ZERO
@@ -63,6 +92,21 @@ var _hold_timer := 0.0
 var _hold_pos := Vector2.ZERO
 var _hold_reached := false
 var _visual_node: Node2D
+var aircraft_home: Node2D
+var aircraft_home_pos := Vector2.ZERO
+var aircraft_loiter_pos := Vector2.ZERO
+var aircraft_missile_ammo := 0
+var aircraft_gun_ammo := 0
+var _aircraft_missile_timer := 0.0
+var _aircraft_reloading := false
+var _aircraft_reload_timer := 0.0
+var _aircraft_loiter_angle := 0.0
+var _aircraft_orbit_phase := 0.0
+var aircraft_altitude_factor := 1.0
+var _aircraft_no_missile_timer := 0.0
+var _aircraft_force_reload := false
+var _aircraft_landing_reserved := false
+var _aircraft_landing_on_path := false
 
 func _ready() -> void:
 	hp = max_hp
@@ -70,14 +114,28 @@ func _ready() -> void:
 	add_to_group("units_%s" % team_id)
 	GameState.unit_count += 1
 	_combat_rng.randomize()
+	_aircraft_orbit_phase = _combat_rng.randf_range(0.0, TAU)
 	if team_id == "p1" and vision_radius > 0.0:
 		add_to_group("vision_p1")
 		var light := VisionHelper.create_light(vision_radius)
 		add_child(light)
+	if unit_kind == "aircraft":
+		if aircraft_missile_ammo <= 0:
+			aircraft_missile_ammo = maxi(0, aircraft_missile_capacity)
+		if aircraft_gun_ammo <= 0:
+			aircraft_gun_ammo = maxi(0, aircraft_gun_capacity)
+		if aircraft_loiter_pos == Vector2.ZERO:
+			if rally_target != Vector2.ZERO:
+				aircraft_loiter_pos = rally_target
+			else:
+				aircraft_loiter_pos = _get_aircraft_home_pos()
 	_setup_visual()
 
 func _exit_tree() -> void:
 	GameState.unit_count = maxi(0, GameState.unit_count - 1)
+	if unit_kind == "aircraft":
+		_release_landing_slot()
+		_release_airfield_slot()
 
 func take_damage(amount: float) -> void:
 	hp = maxf(0.0, hp - amount)
@@ -91,7 +149,12 @@ func _process(delta: float) -> void:
 	if hp <= 0.0:
 		return
 	_cooldown = maxf(0.0, _cooldown - delta)
+	if unit_kind == "aircraft":
+		_aircraft_missile_timer = maxf(0.0, _aircraft_missile_timer - delta)
 	_update_hold(delta)
+	if unit_kind == "aircraft":
+		_update_aircraft_state(delta)
+		return
 	if not manual_active and not _hold_active:
 		_update_chase_target()
 		_update_structure_target()
@@ -170,6 +233,229 @@ func _sync_visual_rotation() -> void:
 	if _visual_node == null:
 		return
 	_visual_node.rotation = _facing.angle()
+
+func _update_aircraft_state(delta: float) -> void:
+	var missile_target := _find_aircraft_missile_target()
+	var gun_target := _find_attack_target()
+	_update_aircraft_loiter_reload(delta, missile_target, gun_target)
+	if _update_aircraft_reload(delta):
+		_sync_visual_rotation()
+		return
+	aircraft_altitude_factor = 1.0
+	_aircraft_landing_on_path = false
+	var fired := false
+	if missile_target != null:
+		_face_toward(missile_target.global_position)
+		if _can_fire_aircraft_missile():
+			_fire_aircraft_missile(missile_target)
+			fired = true
+	if not fired and gun_target != null and aircraft_gun_ammo > 0:
+		_face_toward(gun_target.global_position)
+		_fire_aircraft_gun(gun_target)
+		fired = true
+	if manual_active or _hold_active:
+		_move_toward_target(delta)
+	elif missile_target == null and gun_target == null:
+		_move_toward_aircraft_perimeter(delta)
+	elif gun_target != null and aircraft_gun_ammo > 0:
+		if global_position.distance_to(gun_target.global_position) > attack_range * 0.9:
+			_move_toward_position(gun_target.global_position, delta)
+	elif missile_target != null and aircraft_gun_ammo > 0 and aircraft_missile_ammo <= 0:
+		_move_toward_position(missile_target.global_position, delta)
+	else:
+		_move_toward_aircraft_loiter(delta)
+	_sync_visual_rotation()
+
+func _update_aircraft_reload(delta: float) -> bool:
+	var needs_reload := _aircraft_force_reload or (aircraft_missile_ammo <= 0 and aircraft_gun_ammo <= 0)
+	if not _aircraft_reloading and not needs_reload:
+		return false
+	if not _aircraft_reloading:
+		_aircraft_reloading = true
+		_aircraft_reload_timer = 0.0
+		_aircraft_landing_on_path = false
+		manual_active = false
+		manual_target = Vector2.ZERO
+		_hold_active = false
+		_hold_timer = 0.0
+		_hold_pos = Vector2.ZERO
+	var home := _get_aircraft_home_pos()
+	var distance := global_position.distance_to(home)
+	if aircraft_home != null and is_instance_valid(aircraft_home) and aircraft_landing_cap > 0:
+		if not _aircraft_landing_reserved:
+			if not _reserve_landing_slot():
+				aircraft_altitude_factor = 1.0
+				_move_toward_aircraft_queue(delta, home, _get_airfield_queue_radius())
+				return true
+	var landing_path := _get_airfield_landing_path(home)
+	var touchdown: Vector2 = landing_path.get("touchdown", home) as Vector2
+	var start: Vector2 = landing_path.get("start", home) as Vector2
+	var path_dir: Vector2 = landing_path.get("dir", Vector2.RIGHT) as Vector2
+	var path_length := float(landing_path.get("length", aircraft_landing_path_length))
+	var entry_radius := maxf(aircraft_landing_path_entry_radius, aircraft_landing_radius * 2.0)
+	manual_active = false
+	manual_target = Vector2.ZERO
+	if not _aircraft_landing_on_path:
+		if global_position.distance_to(start) > entry_radius:
+			aircraft_altitude_factor = 1.0
+			_move_toward_position(start, delta)
+			return true
+		_aircraft_landing_on_path = true
+	_move_toward_position(touchdown, delta)
+	var remaining := maxf(0.0, (global_position - touchdown).dot(path_dir))
+	aircraft_altitude_factor = clampf(remaining / maxf(1.0, path_length), 0.0, 1.0)
+	var landing_radius := maxf(0.5, aircraft_landing_radius)
+	if global_position.distance_to(touchdown) > landing_radius:
+		_aircraft_reload_timer = 0.0
+		return true
+	aircraft_altitude_factor = 0.0
+	if _aircraft_reload_timer <= 0.0:
+		_aircraft_reload_timer = aircraft_reload_time
+	_aircraft_reload_timer -= delta
+	if _aircraft_reload_timer <= 0.0:
+		_reload_aircraft_ammo()
+		_aircraft_reloading = false
+		_aircraft_reload_timer = 0.0
+		_aircraft_force_reload = false
+		_aircraft_no_missile_timer = 0.0
+		_aircraft_landing_on_path = false
+		_release_landing_slot()
+		_reached_rally = false
+	return true
+
+func _get_aircraft_home_pos() -> Vector2:
+	if aircraft_home != null and is_instance_valid(aircraft_home):
+		return aircraft_home.global_position
+	if aircraft_home_pos != Vector2.ZERO:
+		return aircraft_home_pos
+	return home_pos
+
+func _reload_aircraft_ammo() -> void:
+	aircraft_missile_ammo = maxi(0, aircraft_missile_capacity)
+	aircraft_gun_ammo = maxi(0, aircraft_gun_capacity)
+	_aircraft_force_reload = false
+	_aircraft_no_missile_timer = 0.0
+
+func _update_aircraft_loiter_reload(delta: float, missile_target: Node2D, gun_target: Node2D) -> void:
+	if _aircraft_reloading:
+		_aircraft_no_missile_timer = 0.0
+		_aircraft_force_reload = false
+		return
+	if aircraft_missile_ammo > 0:
+		_aircraft_no_missile_timer = 0.0
+		_aircraft_force_reload = false
+		return
+	if manual_active or _hold_active:
+		_aircraft_no_missile_timer = 0.0
+		_aircraft_force_reload = false
+		return
+	if missile_target != null or gun_target != null:
+		_aircraft_no_missile_timer = 0.0
+		return
+	if aircraft_loiter_reload_delay <= 0.0:
+		_aircraft_force_reload = true
+		return
+	_aircraft_no_missile_timer += delta
+	if _aircraft_no_missile_timer >= aircraft_loiter_reload_delay:
+		_aircraft_force_reload = true
+
+func _find_aircraft_missile_target() -> Node2D:
+	if aircraft_missile_ammo <= 0:
+		return null
+	var range := aircraft_missile_range
+	var range_sq := range * range if range > 0.0 else INF
+	var best: Node2D = null
+	var best_priority := 999
+	var best_dist := range_sq
+	var groups := ["units", "building", "hq"]
+	for group_name in groups:
+		for node in get_tree().get_nodes_in_group(group_name):
+			if node == null or not is_instance_valid(node):
+				continue
+			if node is not Node2D:
+				continue
+			if node is Unit and (node as Unit).team_id == team_id:
+				continue
+			if node is Building and (node as Building).team_id == team_id:
+				continue
+			if node is HQ and (node as HQ).team_id == team_id:
+				continue
+			if node is CanvasItem and not (node as CanvasItem).visible:
+				continue
+			var dist := global_position.distance_squared_to((node as Node2D).global_position)
+			if range > 0.0 and dist > range_sq:
+				continue
+			var priority := _aircraft_target_priority(node as Node2D)
+			if priority < best_priority or (priority == best_priority and dist < best_dist):
+				best_priority = priority
+				best_dist = dist
+				best = node as Node2D
+	return best
+
+func _aircraft_target_priority(target: Node2D) -> int:
+	if target is Unit:
+		var enemy := target as Unit
+		if enemy.unit_kind == "vehicle":
+			return 0
+		if enemy.unit_kind == "aircraft":
+			return 1
+		return 2
+	if target is HQ:
+		return 1
+	if target is Building:
+		return 1
+	return 3
+
+func _can_fire_aircraft_missile() -> bool:
+	return aircraft_missile_ammo > 0 and _aircraft_missile_timer <= 0.0
+
+func _fire_aircraft_missile(target: Node2D) -> void:
+	if target == null or not is_instance_valid(target):
+		return
+	var missile := Missile.new()
+	missile.speed = aircraft_missile_speed
+	missile.damage = aircraft_missile_damage
+	missile.turn_rate = aircraft_missile_turn_rate
+	missile.lifetime = aircraft_missile_lifetime
+	missile.warhead_size = aircraft_missile_warhead_size
+	if aircraft_missile_hit_radius > 0.0:
+		missile.hit_radius = aircraft_missile_hit_radius
+	if aircraft_missile_splash_radius > 0.0:
+		missile.splash_radius = aircraft_missile_splash_radius
+	missile.splash_damage_scale = aircraft_missile_splash_scale
+	if aircraft_missile_range > 0.0:
+		missile.range = aircraft_missile_range
+		missile.max_distance = aircraft_missile_range
+	missile.team_id = team_id
+	missile.color = aircraft_missile_color
+	missile.target = target
+	missile.global_position = global_position + (_facing * (body_radius + 6.0))
+	missile.set_origin(global_position)
+	if get_parent() != null:
+		get_parent().add_child(missile)
+	aircraft_missile_ammo = maxi(0, aircraft_missile_ammo - 1)
+	_aircraft_missile_timer = aircraft_missile_cooldown
+
+func _fire_aircraft_gun(target: Node) -> void:
+	if aircraft_gun_ammo <= 0 or _cooldown > 0.0:
+		return
+	if target.has_method("take_damage"):
+		var final_damage := attack_damage
+		if target is Unit:
+			var enemy := target as Unit
+			if enemy.unit_kind == "vehicle" or enemy.unit_kind == "aircraft":
+				final_damage *= damage_vs_vehicle
+			else:
+				final_damage *= damage_vs_infantry
+		elif target is Building or target is HQ:
+			final_damage *= damage_vs_structure
+		target.take_damage(final_damage)
+	if shot_tracer_enabled and target is Node2D:
+		var target_pos: Vector2 = (target as Node2D).global_position
+		_spawn_tracer(target_pos)
+		emit_signal("shot_fired", global_position, target_pos, shot_color, shot_width, shot_lifetime)
+	_cooldown = attack_cooldown
+	aircraft_gun_ammo = maxi(0, aircraft_gun_ammo - 1)
 
 func _set_canvas_children_visible(value: bool) -> void:
 	for child in get_children():
@@ -306,7 +592,7 @@ func _attack(target: Node) -> void:
 		var final_damage := attack_damage
 		if target is Unit:
 			var enemy := target as Unit
-			if enemy.unit_kind == "vehicle":
+			if enemy.unit_kind == "vehicle" or enemy.unit_kind == "aircraft":
 				final_damage *= damage_vs_vehicle
 			else:
 				final_damage *= damage_vs_infantry
@@ -332,6 +618,9 @@ func _move_toward_target(delta: float) -> void:
 	var target := _resolve_target()
 	if target == Vector2.ZERO:
 		return
+	_move_toward_position(target, delta)
+
+func _move_toward_position(target: Vector2, delta: float) -> void:
 	var delta_vec := target - global_position
 	if delta_vec.length() <= 1.0:
 		if _hold_active:
@@ -347,6 +636,172 @@ func _move_toward_target(delta: float) -> void:
 	var direction := delta_vec.normalized()
 	global_position += direction * speed * delta
 	_facing = direction
+
+func _move_toward_aircraft_loiter(delta: float) -> void:
+	_move_toward_aircraft_orbit(aircraft_loiter_pos, aircraft_loiter_radius, delta)
+
+func _move_toward_aircraft_perimeter(delta: float) -> void:
+	var perimeter: Dictionary = _get_team_vision_perimeter()
+	if not perimeter.is_empty():
+		var center_value = perimeter.get("center", Vector2.ZERO)
+		var radius_value = perimeter.get("radius", 0.0)
+		if center_value is Vector2 and (radius_value is float or radius_value is int):
+			var center: Vector2 = center_value
+			var radius := float(radius_value)
+			_move_toward_aircraft_orbit(center, radius, delta)
+			return
+	_move_toward_aircraft_loiter(delta)
+
+func _move_toward_aircraft_orbit(center: Vector2, radius: float, delta: float) -> void:
+	if center == Vector2.ZERO:
+		return
+	var use_radius := maxf(0.0, radius) * maxf(0.1, aircraft_orbit_radius_scale)
+	_aircraft_loiter_angle = fmod(_aircraft_loiter_angle + (aircraft_loiter_orbit_speed * delta), TAU)
+	var angle := _aircraft_loiter_angle
+	var wobble_amp := use_radius * maxf(0.0, aircraft_orbit_wobble_ratio)
+	var wobble := 0.0
+	if wobble_amp > 0.0 and aircraft_orbit_wobble_speed > 0.0:
+		wobble = sin((angle * aircraft_orbit_wobble_speed) + _aircraft_orbit_phase) * wobble_amp
+	var orbit_target := center + Vector2(cos(angle), sin(angle)) * (use_radius + wobble)
+	_move_toward_position(orbit_target, delta)
+
+func _move_toward_aircraft_queue(delta: float, center: Vector2, radius: float) -> void:
+	if center == Vector2.ZERO:
+		return
+	var use_radius := maxf(0.0, radius)
+	_aircraft_loiter_angle = fmod(_aircraft_loiter_angle + (aircraft_loiter_orbit_speed * delta), TAU)
+	var orbit_target := center + Vector2(cos(_aircraft_loiter_angle), sin(_aircraft_loiter_angle)) * use_radius
+	_move_toward_position(orbit_target, delta)
+
+func _get_airfield_queue_radius() -> float:
+	if aircraft_queue_radius > 0.0:
+		return aircraft_queue_radius
+	if aircraft_home != null and is_instance_valid(aircraft_home):
+		var size_value: Variant = aircraft_home.get("size")
+		if size_value is Vector2:
+			var size: Vector2 = size_value
+			return maxf(size.x, size.y) * 0.65
+	return maxf(aircraft_reload_radius * 1.2, aircraft_loiter_radius)
+
+func _get_team_vision_perimeter() -> Dictionary:
+	var group_name := ""
+	if team_id == "p1":
+		group_name = "vision_p1"
+	if group_name == "":
+		return {}
+	var nodes: Array = get_tree().get_nodes_in_group(group_name)
+	if nodes.is_empty():
+		return {}
+	var center := Vector2.ZERO
+	var count := 0
+	var base_center := Vector2.ZERO
+	var base_radius := 0.0
+	for node in nodes:
+		if node is BaseVision:
+			base_center = (node as BaseVision).global_position
+			var base_value = (node as BaseVision).get_vision_radius()
+			if base_value is float or base_value is int:
+				base_radius = float(base_value)
+			break
+	for node in nodes:
+		if node is Node2D and node.has_method("get_vision_radius"):
+			center += (node as Node2D).global_position
+			count += 1
+	if count <= 0:
+		return {}
+	center /= float(count)
+	if base_center != Vector2.ZERO:
+		center = base_center
+	var max_radius := base_radius
+	for node in nodes:
+		if node is Node2D and node.has_method("get_vision_radius"):
+			var radius_value = node.get_vision_radius()
+			var radius := 0.0
+			if radius_value is float or radius_value is int:
+				radius = float(radius_value)
+			var pos: Vector2 = (node as Node2D).global_position
+			var dist := center.distance_to(pos)
+			max_radius = maxf(max_radius, dist + radius)
+	if max_radius <= 0.0:
+		return {}
+	max_radius += maxf(0.0, aircraft_perimeter_padding)
+	return {
+		"center": center,
+		"radius": max_radius,
+	}
+
+func _get_airfield_size() -> Vector2:
+	if aircraft_home != null and is_instance_valid(aircraft_home):
+		var size_value: Variant = aircraft_home.get("size")
+		if size_value is Vector2:
+			return size_value
+	return Vector2.ZERO
+
+func _get_airfield_runway_dir() -> Vector2:
+	if team_id == "p2":
+		return Vector2(-1.0, 0.0)
+	return Vector2(1.0, 0.0)
+
+func _get_airfield_runway_offset(size2d: Vector2) -> Vector2:
+	if size2d == Vector2.ZERO:
+		return Vector2.ZERO
+	var runway_dir := _get_airfield_runway_dir()
+	if runway_dir.length_squared() <= 0.0:
+		runway_dir = Vector2.RIGHT
+	var lateral := Vector2(-runway_dir.y, runway_dir.x).normalized()
+	return lateral * (size2d.y * aircraft_runway_offset_ratio)
+
+func _get_airfield_landing_path(home: Vector2) -> Dictionary:
+	var size2d := _get_airfield_size()
+	var runway_dir := _get_airfield_runway_dir().normalized()
+	if runway_dir.length_squared() <= 0.0:
+		runway_dir = Vector2.RIGHT
+	var offset := _get_airfield_runway_offset(size2d)
+	var touchdown := home + offset
+	var base_length := aircraft_landing_path_length
+	if size2d != Vector2.ZERO:
+		base_length = maxf(base_length, size2d.x * 1.4)
+	var start := touchdown + runway_dir * base_length
+	return {
+		"start": start,
+		"touchdown": touchdown,
+		"dir": runway_dir,
+		"length": base_length,
+	}
+
+func _reserve_landing_slot() -> bool:
+	if _aircraft_landing_reserved:
+		return true
+	if aircraft_landing_cap <= 0:
+		_aircraft_landing_reserved = true
+		return true
+	if aircraft_home == null or not is_instance_valid(aircraft_home):
+		_aircraft_landing_reserved = true
+		return true
+	var current = int(aircraft_home.get_meta("aircraft_landing", 0))
+	if current >= aircraft_landing_cap:
+		return false
+	aircraft_home.set_meta("aircraft_landing", current + 1)
+	_aircraft_landing_reserved = true
+	return true
+
+func _release_landing_slot() -> void:
+	if not _aircraft_landing_reserved:
+		return
+	_aircraft_landing_reserved = false
+	if aircraft_home == null or not is_instance_valid(aircraft_home):
+		return
+	var current = int(aircraft_home.get_meta("aircraft_landing", 0))
+	if current > 0:
+		aircraft_home.set_meta("aircraft_landing", current - 1)
+
+func _release_airfield_slot() -> void:
+	if aircraft_home == null or not is_instance_valid(aircraft_home):
+		return
+	var current = int(aircraft_home.get_meta("aircraft_active", 0))
+	if current <= 0:
+		return
+	aircraft_home.set_meta("aircraft_active", current - 1)
 
 func _resolve_target() -> Vector2:
 	if manual_active and manual_target != Vector2.ZERO:
@@ -371,6 +826,8 @@ func _resolve_target() -> Vector2:
 func issue_move(target: Vector2) -> void:
 	manual_target = target
 	manual_active = true
+	if unit_kind == "aircraft":
+		aircraft_loiter_pos = target
 	_hold_active = false
 	_hold_timer = 0.0
 	_hold_pos = Vector2.ZERO
@@ -421,7 +878,7 @@ func _target_priority(enemy: Unit) -> int:
 			priority = 2
 		else:
 			priority = 0
-	if prefers_vehicle and enemy.unit_kind == "vehicle":
+	if prefers_vehicle and (enemy.unit_kind == "vehicle" or enemy.unit_kind == "aircraft"):
 		priority -= 2
 	if prefers_infantry and enemy.unit_kind == "infantry":
 		priority -= 2

@@ -10,7 +10,7 @@ func _process(delta: float) -> void:
 		return
 	_accum = 0.0
 	var fps := Engine.get_frames_per_second()
-	text = "FPS: %d\nP1 Credits: %d  P2 Credits: %d\nP1 Income/s: %.1f  P2 Income/s: %.1f\nUnits: %d\nP1 Buildings: %d  P2 Buildings: %d\nP1 Inf Prod: %.2f  P2 Inf Prod: %.2f\nP1 Veh Prod: %.2f  P2 Veh Prod: %.2f\nP1 Total Prod: %.2f  P2 Total Prod: %.2f\nP1 Queue: %d  P2 Queue: %d\nP1 Collectors: %d  P2 Collectors: %d\nSupply Remaining: %.0f\nHQ P1: %d  HQ P2: %d" % [
+	text = "FPS: %d\nP1 Credits: %d  P2 Credits: %d\nP1 Income/s: %.1f  P2 Income/s: %.1f\nUnits: %d\nP1 Buildings: %d  P2 Buildings: %d\nP1 Inf Prod: %.2f  P2 Inf Prod: %.2f\nP1 Veh Prod: %.2f  P2 Veh Prod: %.2f\nP1 Air Prod: %.2f  P2 Air Prod: %.2f\nP1 Total Prod: %.2f  P2 Total Prod: %.2f\nP1 Queue: %d  P2 Queue: %d\nP1 Collectors: %d  P2 Collectors: %d\nSupply Remaining: %.0f\nHQ P1: %d  HQ P2: %d" % [
 		fps,
 		GameState.p1_credits,
 		GameState.p2_credits,
@@ -23,6 +23,8 @@ func _process(delta: float) -> void:
 		GameState.p2_infantry_prod,
 		GameState.p1_vehicle_prod,
 		GameState.p2_vehicle_prod,
+		GameState.p1_aircraft_prod,
+		GameState.p2_aircraft_prod,
 		GameState.p1_total_prod,
 		GameState.p2_total_prod,
 		GameState.p1_factory_queue,

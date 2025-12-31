@@ -83,7 +83,7 @@ func _find_target() -> Node2D:
 
 func _target_priority(enemy: Unit) -> int:
 	var priority := 0
-	if prefers_vehicle and enemy.unit_kind == "vehicle":
+	if prefers_vehicle and (enemy.unit_kind == "vehicle" or enemy.unit_kind == "aircraft"):
 		priority -= 2
 	if prefers_infantry and enemy.unit_kind == "infantry":
 		priority -= 2
@@ -97,7 +97,7 @@ func _fire_missile() -> void:
 	var final_damage := damage
 	if _target is Unit:
 		var enemy := _target as Unit
-		if enemy.unit_kind == "vehicle":
+		if enemy.unit_kind == "vehicle" or enemy.unit_kind == "aircraft":
 			final_damage *= damage_vs_vehicle
 		else:
 			final_damage *= damage_vs_infantry
@@ -127,7 +127,7 @@ func _fire_hitscan() -> void:
 	var final_damage := damage
 	if _target is Unit:
 		var enemy := _target as Unit
-		if enemy.unit_kind == "vehicle":
+		if enemy.unit_kind == "vehicle" or enemy.unit_kind == "aircraft":
 			final_damage *= damage_vs_vehicle
 		else:
 			final_damage *= damage_vs_infantry

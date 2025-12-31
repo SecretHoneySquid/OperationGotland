@@ -2,6 +2,11 @@ extends Node3D
 
 @export var unit_height := 6.0
 @export var vehicle_height := 10.0
+@export var aircraft_height := 160.0
+@export var aircraft_model_path := "res://gripen.glb"
+@export var aircraft_model_scale := 1.0
+@export var aircraft_model_rotation := Vector3(0.0, 90.0, 0.0)
+@export var aircraft_model_offset := Vector3.ZERO
 @export var collector_height := 7.0
 @export var turret_height := 9.0
 @export var building_height := 18.0
@@ -10,7 +15,7 @@ extends Node3D
 @export var health_bar_offset := 8.0
 @export var health_bar_color := Color(0.2, 0.85, 0.25, 0.9)
 @export var health_bar_back := Color(0.12, 0.12, 0.12, 0.8)
-@export var barracks_model_path := "res://assets/vendor/quaternius_ultimate_buildings/Models with Materials/FBX/2Story_Sidehouse_Mat.fbx"
+@export var barracks_model_path := "res://barracks.glb"
 @export var barracks_model_scale := 1.0
 @export var barracks_compound_enabled := false
 @export var barracks_compound_rows := 3
@@ -28,8 +33,12 @@ extends Node3D
 	"res://assets/vendor/quaternius_ultimate_buildings/Models with Materials/FBX/2Story_Columns_Mat.fbx",
 	"res://assets/vendor/quaternius_ultimate_buildings/Models with Materials/FBX/1Story_RoundRoof_Mat.fbx",
 ])
-@export var factory_model_path := "res://assets/vendor/quaternius_ultimate_buildings/Models with Materials/FBX/2Story_Double_Mat.fbx"
-@export var factory_model_scale := 0.9
+@export var factory_model_path := "res://factory.glb"
+@export var factory_model_scale := 1.0
+@export var airfield_model_path := "res://airfield.glb"
+@export var airfield_model_scale := 1.0
+@export var airfield_runway_color := Color(0.12, 0.12, 0.14, 1.0)
+@export var airfield_marking_color := Color(0.9, 0.9, 0.9, 0.85)
 @export var supply_model_path := "res://assets/vendor/kenney_city-kit-industrial/Models/GLB format/building-r.glb"
 @export var supply_model_scale := 1.0
 @export var power_model_path := "res://assets/vendor/kenney_city-kit-industrial/Models/GLB format/building-l.glb"
@@ -302,6 +311,52 @@ func _build_unit_proxy(proxy: Node3D, unit) -> void:
 			var bar_height := hull_height + turret_section + (radius * 0.6)
 			_attach_health_bar(proxy, bar_width, bar_height, unit_health_height, unit_health_offset)
 		_attach_selection_ring(proxy, radius * selection_ring_vehicle_scale, base_color)
+	elif unit_kind == "aircraft":
+		var body_length := radius * 3.4
+		var body_height := maxf(1.4, radius * 0.7)
+		var body_width := radius * 0.6
+		var wing_span := radius * 3.6
+		var wing_depth := radius * 1.5
+		var model_height := 0.0
+		if aircraft_model_path != "" and ResourceLoader.exists(aircraft_model_path):
+			var target_size := Vector2(wing_span, body_length)
+			model_height = _add_scene_model(
+				proxy,
+				aircraft_model_path,
+				target_size,
+				0.0,
+				aircraft_model_scale,
+				aircraft_model_offset,
+				aircraft_model_rotation
+			)
+		if model_height <= 0.0:
+			var fuselage := _make_box(Vector3(body_width, body_height, body_length), base_color)
+			fuselage.position = Vector3(0, body_height * 0.5, 0)
+			proxy.add_child(fuselage)
+			var nose := _make_cone(body_width * 0.55, body_height * 1.3, base_color.lightened(0.2))
+			nose.rotation_degrees = Vector3(90.0, 0.0, 0.0)
+			nose.position = Vector3(0, body_height * 0.5, -body_length * 0.5 - body_height * 0.65)
+			proxy.add_child(nose)
+			var wing := _make_box(Vector3(wing_span, body_height * 0.15, wing_depth), base_color.lightened(0.1))
+			wing.position = Vector3(0, body_height * 0.35, -body_length * 0.05)
+			proxy.add_child(wing)
+			var tail_span := wing_span * 0.35
+			var tail_depth := wing_depth * 0.55
+			var tail := _make_box(Vector3(tail_span, body_height * 0.12, tail_depth), base_color.lightened(0.15))
+			tail.position = Vector3(0, body_height * 0.55, body_length * 0.35)
+			proxy.add_child(tail)
+			var fin := _make_box(Vector3(body_width * 0.35, body_height * 0.9, body_width * 0.6), base_color.darkened(0.05))
+			fin.position = Vector3(0, body_height * 0.5 + body_height * 0.45, body_length * 0.32)
+			proxy.add_child(fin)
+			var engine := _make_cylinder(body_width * 0.3, body_height * 0.6, base_color.darkened(0.2))
+			engine.rotation_degrees = Vector3(90.0, 0.0, 0.0)
+			engine.position = Vector3(0, body_height * 0.45, body_length * 0.45)
+			proxy.add_child(engine)
+		if show_unit_health:
+			var bar_width := maxf(14.0, radius * unit_health_width_scale * 1.1)
+			var bar_height := model_height if model_height > 0.0 else body_height + body_height * 1.2
+			_attach_health_bar(proxy, bar_width, bar_height, unit_health_height, unit_health_offset)
+		_attach_selection_ring(proxy, radius * selection_ring_vehicle_scale * 1.2, base_color)
 	else:
 		var body_radius := radius * 0.35
 		var body_height := maxf(2.0, unit_height * 0.6)
@@ -421,6 +476,15 @@ func _build_building_proxy(proxy: Node3D, building) -> void:
 			_add_building_props(proxy, build_id, size2d, maxf(height, factory_height), base_color)
 			_attach_health_bar(proxy, size2d.x, factory_height, health_bar_height, health_bar_offset)
 			return
+	elif build_id == "airfield":
+		var airfield_height := 0.0
+		if airfield_model_path != "" and ResourceLoader.exists(airfield_model_path):
+			airfield_height = _add_scene_model(proxy, airfield_model_path, size2d, 0.0, airfield_model_scale)
+		if airfield_height <= 0.0:
+			airfield_height = _build_airfield_base(proxy, size2d, height, base_color)
+		_add_building_props(proxy, build_id, size2d, maxf(height, airfield_height), base_color)
+		_attach_health_bar(proxy, size2d.x, airfield_height, health_bar_height, health_bar_offset)
+		return
 	elif build_id == "supply":
 		var supply_height := 0.0
 		if supply_model_path != "" and ResourceLoader.exists(supply_model_path):
@@ -537,6 +601,11 @@ func _update_proxy(node, proxy: Node3D, group_name: String) -> void:
 		var pos2: Vector2 = node.global_position
 		var ground_y := _get_ground_height(pos2)
 		var y_offset := terrain_height_bias
+		if group_name == "units":
+			var unit_kind := str(_get_value(node, "unit_kind", "infantry"))
+			if unit_kind == "aircraft":
+				var altitude := _get_float(node, "aircraft_altitude_factor", 1.0)
+				y_offset += aircraft_height * clampf(altitude, 0.0, 1.0)
 		if group_name == "missiles":
 			y_offset += missile_height * _get_missile_scale(node)
 		proxy.position = Vector3(pos2.x, ground_y + y_offset, pos2.y)
@@ -1099,6 +1168,47 @@ func _tint_model(root: Node3D, base_color: Color) -> void:
 		elif part.find("exhaust") >= 0:
 			part_color = base_color.lightened(0.4)
 		mesh_instance.material_override = _make_material(part_color)
+
+func _build_airfield_base(proxy: Node3D, size2d: Vector2, height: float, base_color: Color) -> float:
+	var pad_height := maxf(0.2, height * 0.06)
+	var pad := _make_box(Vector3(size2d.x * 0.98, pad_height, size2d.y * 0.62), base_color.darkened(0.2))
+	pad.position = Vector3(0.0, pad_height * 0.5, size2d.y * 0.08)
+	proxy.add_child(pad)
+	var runway_height := maxf(0.15, height * 0.04)
+	var runway := _make_box(Vector3(size2d.x * 0.9, runway_height, size2d.y * 0.28), airfield_runway_color)
+	runway.position = Vector3(0.0, pad_height + runway_height * 0.5, size2d.y * 0.18)
+	proxy.add_child(runway)
+	var stripe_height := runway_height * 0.6
+	var stripe_size := Vector3(size2d.x * 0.08, stripe_height, size2d.y * 0.03)
+	var stripe_y := pad_height + runway_height * 0.5 + stripe_height * 0.5
+	for i in range(4):
+		var z := size2d.y * 0.18 + (float(i) - 1.5) * (size2d.y * 0.07)
+		var stripe := _make_box(stripe_size, airfield_marking_color)
+		stripe.position = Vector3(0.0, stripe_y, z)
+		proxy.add_child(stripe)
+	var hangar_height := height * 0.42
+	var hangar_size := Vector3(size2d.x * 0.4, hangar_height, size2d.y * 0.32)
+	var hangar := _make_box(hangar_size, base_color)
+	hangar.position = Vector3(-size2d.x * 0.22, hangar_height * 0.5, -size2d.y * 0.18)
+	proxy.add_child(hangar)
+	var roof_height := hangar_height * 0.25
+	var roof := _make_box(Vector3(hangar_size.x * 1.02, roof_height, hangar_size.z * 1.05), base_color.lightened(0.18))
+	roof.position = Vector3(hangar.position.x, hangar_height + roof_height * 0.5, hangar.position.z)
+	proxy.add_child(roof)
+	var tower_height := height * 0.7
+	var tower_size := Vector3(size2d.x * 0.12, tower_height, size2d.y * 0.12)
+	var tower := _make_box(tower_size, base_color.lightened(0.12))
+	tower.position = Vector3(size2d.x * 0.36, tower_height * 0.5, -size2d.y * 0.2)
+	proxy.add_child(tower)
+	var cabin_height := height * 0.18
+	var cabin := _make_box(Vector3(tower_size.x * 1.6, cabin_height, tower_size.z * 1.6), base_color.lightened(0.22))
+	cabin.position = Vector3(tower.position.x, tower_height + cabin_height * 0.5, tower.position.z)
+	proxy.add_child(cabin)
+	var radar := _make_cylinder(size2d.x * 0.05, height * 0.12, base_color.lightened(0.3))
+	radar.position = Vector3(tower.position.x, tower_height + cabin_height + height * 0.08, tower.position.z)
+	proxy.add_child(radar)
+	var max_height := maxf(hangar_height + roof_height, tower_height + cabin_height + height * 0.12)
+	return maxf(max_height, runway_height + pad_height)
 
 func _build_defense_base(proxy: Node3D, build_id: String, size2d: Vector2, height: float, base_color: Color) -> float:
 	var accent := base_color.lightened(0.2)
