@@ -55,7 +55,7 @@ extends Node2D
 @export var vehicle_attack_cooldown := 0.9
 @export var vehicle_body_radius := 11.0
 
-@export var aircraft_speed := 110.0
+@export var aircraft_speed := 125.0
 @export var aircraft_hp := 70.0
 @export var aircraft_damage := 4.5
 @export var aircraft_attack_range := 180.0
@@ -78,6 +78,8 @@ extends Node2D
 @export var aircraft_missile_lifetime := 24.0
 @export var aircraft_reload_time := 7.0
 @export var aircraft_missile_color := Color(1.0, 0.55, 0.25, 1.0)
+@export var f35_cost := 100
+@export var f35_airfield_cap := 1
 
 @export var collector_speed := 80.0
 @export var collector_capacity := 100.0
@@ -255,6 +257,34 @@ func queue_vehicle(team_id: String, vehicle_type: String = "mixed", factory: Bui
 		_factory_queue_p1.append(entry)
 	else:
 		_factory_queue_p2.append(entry)
+	return true
+
+func buy_airfield_f35(team_id: String, airfield: Building) -> bool:
+	if airfield == null or not is_instance_valid(airfield):
+		return false
+	if airfield.build_id != "airfield" or airfield.team_id != team_id:
+		return false
+	if not _has_team_credits(team_id, f35_cost):
+		return false
+	if unit_spawn_limit > 0 and _count_units(team_id) >= unit_spawn_limit:
+		return false
+	if f35_airfield_cap > 0:
+		var current_id := int(airfield.get_meta("f35_active", 0))
+		if current_id > 0:
+			var inst = instance_from_id(current_id)
+			if inst != null and is_instance_valid(inst):
+				return false
+			airfield.set_meta("f35_active", 0)
+	if airfield_aircraft_cap > 0:
+		var current_aircraft := int(airfield.get_meta("aircraft_active", 0))
+		if current_aircraft >= airfield_aircraft_cap:
+			return false
+	_deduct_team_credits(team_id, f35_cost)
+	var unit := _spawn_unit(team_id, "aircraft", airfield, "f35")
+	if unit == null:
+		return false
+	_register_airfield_aircraft(airfield)
+	airfield.set_meta("f35_active", unit.get_instance_id())
 	return true
 
 func deposit_credits(team_id: String, amount: int) -> void:
@@ -513,7 +543,7 @@ func _pool_eta(rate: float, pool: float) -> float:
 		return 0.0
 	return maxf(0.0, (1.0 - pool) / rate)
 
-func _spawn_unit(team_id: String, unit_kind: String, source_building: Building = null, unit_type_id: String = "") -> void:
+func _spawn_unit(team_id: String, unit_kind: String, source_building: Building = null, unit_type_id: String = "") -> Unit:
 	var unit := Unit.new()
 	unit.team_id = team_id
 	unit.home_pos = _start_p1 if team_id == "p1" else _start_p2
@@ -661,6 +691,7 @@ func _spawn_unit(team_id: String, unit_kind: String, source_building: Building =
 	unit.enemy_hq = _hq_p2 if team_id == "p1" else _hq_p1
 	unit.rally_target = _rally_p1 if team_id == "p1" else _rally_p2
 	_units.add_child(unit)
+	return unit
 
 func _spawn_at_barracks(team_id: String, barracks: Building = null) -> Vector2:
 	if barracks != null and is_instance_valid(barracks):
@@ -1251,6 +1282,8 @@ func _resolve_aircraft_type(requested: String) -> String:
 		return "f16"
 	if requested == "f16":
 		return "f16"
+	if requested == "f35":
+		return "f35"
 	return "f16"
 
 func _get_infantry_def(type_id: String) -> Dictionary:
@@ -1350,6 +1383,39 @@ func _get_vehicle_def(type_id: String) -> Dictionary:
 
 func _get_aircraft_def(type_id: String) -> Dictionary:
 	match type_id:
+		"f35":
+			return {
+				"range_role": "long",
+				"range_multiplier": 1.0,
+				"max_hp": aircraft_hp,
+				"damage": aircraft_damage,
+				"cooldown": aircraft_attack_cooldown,
+				"speed": aircraft_speed,
+				"attack_range": aircraft_attack_range,
+				"body_radius": aircraft_body_radius,
+				"vision_radius": aircraft_vision_radius,
+				"shot_color": Color(1.0, 0.9, 0.75, 0.85),
+				"shot_width": aircraft_shot_width,
+				"shot_lifetime": aircraft_shot_lifetime,
+				"gun_ammo": aircraft_gun_ammo,
+				"missile_ammo": aircraft_missile_ammo,
+				"missile_damage": aircraft_missile_damage,
+				"missile_speed": aircraft_missile_speed,
+				"missile_turn_rate": aircraft_missile_turn_rate,
+				"missile_range": aircraft_missile_range,
+				"missile_cooldown": aircraft_missile_cooldown,
+				"missile_hit_radius": aircraft_missile_hit_radius,
+				"missile_warhead_size": aircraft_missile_warhead_size,
+				"missile_splash_radius": aircraft_missile_splash_radius,
+				"missile_splash_scale": aircraft_missile_splash_scale,
+				"missile_lifetime": aircraft_missile_lifetime,
+				"reload_time": aircraft_reload_time,
+				"missile_color": aircraft_missile_color,
+				"prefers_vehicle": true,
+				"damage_vs_infantry": 0.6,
+				"damage_vs_vehicle": 1.6,
+				"damage_vs_structure": 1.1,
+			}
 		"f16":
 			return {
 				"range_role": "long",

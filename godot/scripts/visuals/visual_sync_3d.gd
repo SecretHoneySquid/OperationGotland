@@ -3,10 +3,32 @@ extends Node3D
 @export var unit_height := 6.0
 @export var vehicle_height := 10.0
 @export var aircraft_height := 160.0
+@export var aircraft_height_smooth := 4.0
 @export var aircraft_model_path := "res://gripen.glb"
 @export var aircraft_model_scale := 1.0
 @export var aircraft_model_rotation := Vector3(0.0, 90.0, 0.0)
 @export var aircraft_model_offset := Vector3.ZERO
+@export var aircraft_model_path_f35 := "res://f-35_lightning_ii_-_fighter_jet_-_free.glb"
+@export var aircraft_model_scale_f35 := 1.0
+@export var aircraft_model_rotation_f35 := Vector3(0.0, 90.0, 0.0)
+@export var aircraft_model_offset_f35 := Vector3.ZERO
+@export var aircraft_bank_enabled := true
+@export var aircraft_bank_max_deg := 32.0
+@export var aircraft_bank_strength := 0.45
+@export var aircraft_bank_smooth := 6.0
+@export var aircraft_roll_enabled := true
+@export var aircraft_roll_interval_min := 10.0
+@export var aircraft_roll_interval_max := 20.0
+@export var aircraft_roll_duration := 1.6
+@export var aircraft_roll_min_altitude := 0.4
+@export var aircraft_afterburner_smoke_enabled := true
+@export var aircraft_afterburner_smoke_interval := 0.12
+@export var aircraft_afterburner_smoke_color := Color(0.9, 0.9, 0.95, 0.5)
+@export var aircraft_afterburner_smoke_size := 1.1
+@export var aircraft_afterburner_smoke_duration := 0.6
+@export var aircraft_afterburner_smoke_spread := 1.0
+@export var aircraft_afterburner_smoke_offset := 8.0
+@export var aircraft_afterburner_smoke_height_offset := -1.5
 @export var collector_height := 7.0
 @export var turret_height := 9.0
 @export var building_height := 18.0
@@ -17,6 +39,7 @@ extends Node3D
 @export var health_bar_back := Color(0.12, 0.12, 0.12, 0.8)
 @export var barracks_model_path := "res://barracks.glb"
 @export var barracks_model_scale := 1.0
+@export var barracks_model_rotation := Vector3(0.0, -90.0, 0.0)
 @export var barracks_compound_enabled := false
 @export var barracks_compound_rows := 3
 @export var barracks_compound_cols := 4
@@ -107,15 +130,24 @@ extends Node3D
 @export var missile_large_scale := 1.7
 @export var missile_model_path := "res://scenes/props/missile_visual.tscn"
 @export var missile_model_scale := 1.0
-@export var missile_impact_flash_size := 2.4
-@export var missile_impact_duration := 0.22
+@export var missile_impact_flash_size := 3.2
+@export var missile_impact_duration := 0.3
+@export var aircraft_missile_impact_scale := 1.8
+@export var aircraft_missile_impact_duration := 0.45
+@export var aircraft_missile_shockwave_size := 2.6
+@export var aircraft_missile_shockwave_duration := 0.4
+@export var aircraft_missile_smoke_burst := 7
+@export var aircraft_missile_smoke_color := Color(0.2, 0.2, 0.2, 0.6)
+@export var aircraft_missile_smoke_size := 2.4
+@export var aircraft_missile_smoke_duration := 0.9
+@export var aircraft_missile_smoke_spread := 2.2
 @export var missile_smoke_enabled := true
 @export var missile_smoke_color := Color(0.9, 0.9, 0.9, 0.35)
-@export var missile_smoke_size := 1.0
+@export var missile_smoke_size := 1.4
 @export var missile_smoke_duration := 0.25
 @export var missile_smoke_interval := 0.05
 @export var missile_smoke_spread := 0.35
-@export var missile_smoke_grow := 1.6
+@export var missile_smoke_grow := 2.0
 @export var missile_smoke_height_offset := 0.0
 @export var missile_smoke_use_warhead_scale := true
 @export var building_pad_enabled := true
@@ -154,6 +186,7 @@ var _live_ids: Dictionary[int, bool] = {}
 var _shot_connected: Dictionary[int, bool] = {}
 var _missile_connected: Dictionary[int, bool] = {}
 var _missile_trails: Dictionary[int, Dictionary] = {}
+var _aircraft_visual_state: Dictionary[int, Dictionary] = {}
 var _hidden_2d := false
 var _ghost_root: Node3D
 var _ghost_mesh: MeshInstance3D
@@ -179,9 +212,11 @@ var _fog_timer := 0.0
 var _ground: Node
 var _frame_delta := 0.0
 var _smoke_rng := RandomNumberGenerator.new()
+var _aircraft_rng := RandomNumberGenerator.new()
 
 func _ready() -> void:
 	_smoke_rng.randomize()
+	_aircraft_rng.randomize()
 
 func _process(delta: float) -> void:
 	_frame_delta = delta
@@ -236,6 +271,8 @@ func _cleanup() -> void:
 			_missile_connected.erase(id)
 		if _missile_trails.has(id):
 			_missile_trails.erase(id)
+		if _aircraft_visual_state.has(id):
+			_aircraft_visual_state.erase(id)
 
 func _hide_2d_world_nodes() -> void:
 	if not hide_2d_world or _hidden_2d:
@@ -312,46 +349,60 @@ func _build_unit_proxy(proxy: Node3D, unit) -> void:
 			_attach_health_bar(proxy, bar_width, bar_height, unit_health_height, unit_health_offset)
 		_attach_selection_ring(proxy, radius * selection_ring_vehicle_scale, base_color)
 	elif unit_kind == "aircraft":
+		var airframe := Node3D.new()
+		airframe.name = "Airframe"
+		proxy.add_child(airframe)
+		proxy.set_meta("airframe", airframe)
+		var type_id := str(_get_value(unit, "unit_type", ""))
+		var model_path := aircraft_model_path
+		var model_scale := aircraft_model_scale
+		var model_rotation := aircraft_model_rotation
+		var model_offset := aircraft_model_offset
+		if type_id == "f35" and aircraft_model_path_f35 != "":
+			model_path = aircraft_model_path_f35
+			model_scale = aircraft_model_scale_f35
+			model_rotation = aircraft_model_rotation_f35
+			model_offset = aircraft_model_offset_f35
 		var body_length := radius * 3.4
 		var body_height := maxf(1.4, radius * 0.7)
 		var body_width := radius * 0.6
 		var wing_span := radius * 3.6
 		var wing_depth := radius * 1.5
 		var model_height := 0.0
-		if aircraft_model_path != "" and ResourceLoader.exists(aircraft_model_path):
+		if model_path != "" and ResourceLoader.exists(model_path):
 			var target_size := Vector2(wing_span, body_length)
 			model_height = _add_scene_model(
-				proxy,
-				aircraft_model_path,
+				airframe,
+				model_path,
 				target_size,
 				0.0,
-				aircraft_model_scale,
-				aircraft_model_offset,
-				aircraft_model_rotation
+				model_scale,
+				model_offset,
+				model_rotation
 			)
 		if model_height <= 0.0:
 			var fuselage := _make_box(Vector3(body_width, body_height, body_length), base_color)
 			fuselage.position = Vector3(0, body_height * 0.5, 0)
-			proxy.add_child(fuselage)
+			airframe.add_child(fuselage)
 			var nose := _make_cone(body_width * 0.55, body_height * 1.3, base_color.lightened(0.2))
 			nose.rotation_degrees = Vector3(90.0, 0.0, 0.0)
 			nose.position = Vector3(0, body_height * 0.5, -body_length * 0.5 - body_height * 0.65)
-			proxy.add_child(nose)
+			airframe.add_child(nose)
 			var wing := _make_box(Vector3(wing_span, body_height * 0.15, wing_depth), base_color.lightened(0.1))
 			wing.position = Vector3(0, body_height * 0.35, -body_length * 0.05)
-			proxy.add_child(wing)
+			airframe.add_child(wing)
 			var tail_span := wing_span * 0.35
 			var tail_depth := wing_depth * 0.55
 			var tail := _make_box(Vector3(tail_span, body_height * 0.12, tail_depth), base_color.lightened(0.15))
 			tail.position = Vector3(0, body_height * 0.55, body_length * 0.35)
-			proxy.add_child(tail)
+			airframe.add_child(tail)
 			var fin := _make_box(Vector3(body_width * 0.35, body_height * 0.9, body_width * 0.6), base_color.darkened(0.05))
 			fin.position = Vector3(0, body_height * 0.5 + body_height * 0.45, body_length * 0.32)
-			proxy.add_child(fin)
+			airframe.add_child(fin)
 			var engine := _make_cylinder(body_width * 0.3, body_height * 0.6, base_color.darkened(0.2))
 			engine.rotation_degrees = Vector3(90.0, 0.0, 0.0)
 			engine.position = Vector3(0, body_height * 0.45, body_length * 0.45)
-			proxy.add_child(engine)
+			airframe.add_child(engine)
 		if show_unit_health:
 			var bar_width := maxf(14.0, radius * unit_health_width_scale * 1.1)
 			var bar_height := model_height if model_height > 0.0 else body_height + body_height * 1.2
@@ -461,7 +512,15 @@ func _build_building_proxy(proxy: Node3D, building) -> void:
 		if barracks_compound_enabled and not barracks_compound_models.is_empty():
 			model_height = _add_barracks_compound(proxy, size2d, height)
 		elif barracks_model_path != "" and ResourceLoader.exists(barracks_model_path):
-			model_height = _add_scene_model(proxy, barracks_model_path, size2d, 0.0, barracks_model_scale)
+			model_height = _add_scene_model(
+				proxy,
+				barracks_model_path,
+				size2d,
+				0.0,
+				barracks_model_scale,
+				Vector3.ZERO,
+				barracks_model_rotation
+			)
 		if model_height > 0.0:
 			_add_building_props(proxy, build_id, size2d, maxf(height, model_height), base_color)
 			_attach_health_bar(proxy, size2d.x, model_height, health_bar_height, health_bar_offset)
@@ -599,16 +658,34 @@ func _update_proxy(node, proxy: Node3D, group_name: String) -> void:
 	var id := int(node.get_instance_id())
 	if node is Node2D:
 		var pos2: Vector2 = node.global_position
-		var ground_y := _get_ground_height(pos2)
-		var y_offset := terrain_height_bias
+		var ground_y: float = _get_ground_height(pos2)
+		var y_offset: float = terrain_height_bias
+		var unit_kind := ""
 		if group_name == "units":
-			var unit_kind := str(_get_value(node, "unit_kind", "infantry"))
+			unit_kind = str(_get_value(node, "unit_kind", "infantry"))
 			if unit_kind == "aircraft":
-				var altitude := _get_float(node, "aircraft_altitude_factor", 1.0)
-				y_offset += aircraft_height * clampf(altitude, 0.0, 1.0)
+				var altitude: float = clampf(_get_float(node, "aircraft_altitude_factor", 1.0), 0.0, 1.0)
+				y_offset += aircraft_height * altitude
 		if group_name == "missiles":
 			y_offset += missile_height * _get_missile_scale(node)
-		proxy.position = Vector3(pos2.x, ground_y + y_offset, pos2.y)
+			var source_kind := str(_get_value(node, "source_kind", ""))
+			if source_kind == "aircraft":
+				var altitude := clampf(_get_float(node, "source_altitude", 1.0), 0.0, 1.0)
+				y_offset += aircraft_height * altitude
+		var target_y: float = ground_y + y_offset
+		if group_name == "units" and unit_kind == "aircraft" and aircraft_height_smooth > 0.0:
+			var altitude: float = clampf(_get_float(node, "aircraft_altitude_factor", 1.0), 0.0, 1.0)
+			var state: Dictionary = _aircraft_visual_state.get(id, {})
+			var smoothed_y: float = float(state.get("altitude_y", target_y))
+			if altitude <= 0.01:
+				smoothed_y = target_y
+			else:
+				var t: float = clampf(aircraft_height_smooth * _frame_delta, 0.0, 1.0)
+				smoothed_y = lerpf(smoothed_y, target_y, t)
+			state["altitude_y"] = smoothed_y
+			_aircraft_visual_state[id] = state
+			target_y = smoothed_y
+		proxy.position = Vector3(pos2.x, target_y, pos2.y)
 		if group_name in ["units", "collectors", "defense_turret", "missiles"]:
 			var facing: Variant = node.get("_facing")
 			if group_name == "missiles":
@@ -620,6 +697,9 @@ func _update_proxy(node, proxy: Node3D, group_name: String) -> void:
 			elif facing is Vector2 and facing.length() > 0.1:
 				var target := proxy.global_position + Vector3(facing.x, 0.0, facing.y)
 				proxy.look_at(target, Vector3.UP)
+				if group_name == "units" and unit_kind == "aircraft":
+					_apply_aircraft_bank_and_roll(node, proxy, id, facing)
+					_update_aircraft_afterburner(node, proxy, id, facing)
 		if group_name == "defense_turret":
 			_update_turret_range(proxy, node)
 		elif group_name in ["building", "hq"]:
@@ -633,6 +713,120 @@ func _update_proxy(node, proxy: Node3D, group_name: String) -> void:
 				if unit_health_selected_only and not is_selected:
 					allow = false
 				_update_health_bar(node, proxy, allow)
+
+func _get_airframe_node(proxy: Node3D) -> Node3D:
+	if proxy == null:
+		return null
+	if proxy.has_meta("airframe"):
+		var airframe: Node3D = proxy.get_meta("airframe") as Node3D
+		if airframe != null and is_instance_valid(airframe):
+			return airframe
+	return proxy
+
+func _apply_aircraft_bank_and_roll(node, proxy: Node3D, id: int, facing: Vector2) -> void:
+	if not aircraft_bank_enabled and not aircraft_roll_enabled:
+		return
+	var airframe := _get_airframe_node(proxy)
+	if airframe == null:
+		return
+	var state: Dictionary = _aircraft_visual_state.get(id, {})
+	var prev_facing_value: Variant = state.get("facing", facing)
+	var prev_facing: Vector2 = facing
+	if prev_facing_value is Vector2:
+		prev_facing = prev_facing_value
+	var yaw := atan2(facing.x, facing.y)
+	var prev_yaw := float(state.get("yaw", yaw))
+	var delta_yaw := wrapf(yaw - prev_yaw, -PI, PI)
+	var turn_sign: float = sign(prev_facing.cross(facing))
+	var yaw_rate := delta_yaw / maxf(0.001, _frame_delta)
+	var altitude := clampf(_get_float(node, "aircraft_altitude_factor", 1.0), 0.0, 1.0)
+	var target_bank := 0.0
+	if aircraft_bank_enabled:
+		var bank_mag := clampf(rad_to_deg(absf(yaw_rate)) * aircraft_bank_strength, 0.0, aircraft_bank_max_deg)
+		target_bank = bank_mag * turn_sign * altitude
+	var current_bank := float(state.get("bank", 0.0))
+	var bank_t := clampf(aircraft_bank_smooth * _frame_delta, 0.0, 1.0)
+	current_bank = lerpf(current_bank, target_bank, bank_t)
+	var roll_angle := 0.0
+	var roll_active := bool(state.get("roll_active", false))
+	var roll_progress := float(state.get("roll_progress", 0.0))
+	var roll_dir := float(state.get("roll_dir", 1.0))
+	var roll_timer := float(state.get("roll_timer", -1.0))
+	if aircraft_roll_enabled:
+		var min_interval := maxf(0.1, aircraft_roll_interval_min)
+		var max_interval := maxf(min_interval, aircraft_roll_interval_max)
+		if roll_timer < 0.0:
+			roll_timer = _aircraft_rng.randf_range(min_interval, max_interval)
+		var reloading := bool(_get_value(node, "_aircraft_reloading", false))
+		var manual := bool(_get_value(node, "manual_active", false))
+		var hold := bool(_get_value(node, "_hold_active", false))
+		var circulating := bool(_get_value(node, "aircraft_circulating", false))
+		if roll_active:
+			roll_progress += _frame_delta / maxf(0.1, aircraft_roll_duration)
+			if roll_progress >= 1.0:
+				roll_active = false
+				roll_progress = 0.0
+				roll_timer = _aircraft_rng.randf_range(min_interval, max_interval)
+			else:
+				roll_angle = roll_dir * TAU * roll_progress
+		else:
+			var can_roll := circulating and not reloading and not manual and not hold and altitude >= aircraft_roll_min_altitude
+			if can_roll:
+				roll_timer -= _frame_delta
+				if roll_timer <= 0.0:
+					roll_active = true
+					roll_progress = 0.0
+					roll_dir = -1.0 if _aircraft_rng.randf() < 0.5 else 1.0
+					roll_timer = _aircraft_rng.randf_range(min_interval, max_interval)
+		if roll_active:
+			roll_angle = roll_dir * TAU * roll_progress
+	airframe.rotation = Vector3.ZERO
+	var total_roll := deg_to_rad(current_bank) + roll_angle
+	if absf(total_roll) > 0.0001:
+		airframe.rotate_object_local(Vector3.FORWARD, total_roll)
+	state["facing"] = facing
+	state["yaw"] = yaw
+	state["bank"] = current_bank
+	state["roll_active"] = roll_active
+	state["roll_progress"] = roll_progress
+	state["roll_dir"] = roll_dir
+	state["roll_timer"] = roll_timer
+	_aircraft_visual_state[id] = state
+
+func _update_aircraft_afterburner(node, proxy: Node3D, id: int, facing: Vector2) -> void:
+	if not aircraft_afterburner_smoke_enabled:
+		return
+	var active := bool(_get_value(node, "aircraft_afterburner_active", false))
+	if not active:
+		var inactive_state: Dictionary = _aircraft_visual_state.get(id, {})
+		inactive_state["afterburner_timer"] = 0.0
+		_aircraft_visual_state[id] = inactive_state
+		return
+	var altitude := clampf(_get_float(node, "aircraft_altitude_factor", 1.0), 0.0, 1.0)
+	if altitude <= 0.01:
+		return
+	var state: Dictionary = _aircraft_visual_state.get(id, {})
+	var timer: float = float(state.get("afterburner_timer", 0.0)) - _frame_delta
+	if timer > 0.0:
+		state["afterburner_timer"] = timer
+		_aircraft_visual_state[id] = state
+		return
+	timer = maxf(0.02, aircraft_afterburner_smoke_interval)
+	state["afterburner_timer"] = timer
+	_aircraft_visual_state[id] = state
+	var back := -facing
+	if back.length_squared() <= 0.01:
+		back = Vector2(0.0, -1.0)
+	var pos := proxy.global_position + Vector3(back.x, 0.0, back.y) * aircraft_afterburner_smoke_offset
+	pos.y += aircraft_afterburner_smoke_height_offset
+	if aircraft_afterburner_smoke_spread > 0.0:
+		var jitter := Vector3(
+			_smoke_rng.randf_range(-aircraft_afterburner_smoke_spread, aircraft_afterburner_smoke_spread),
+			_smoke_rng.randf_range(-aircraft_afterburner_smoke_spread, aircraft_afterburner_smoke_spread) * 0.2,
+			_smoke_rng.randf_range(-aircraft_afterburner_smoke_spread, aircraft_afterburner_smoke_spread)
+		)
+		pos += jitter
+	_spawn_smoke(pos, aircraft_afterburner_smoke_color, aircraft_afterburner_smoke_size, aircraft_afterburner_smoke_duration)
 
 func _get_ground_height(pos: Vector2) -> float:
 	if not terrain_follow_enabled:
@@ -1609,8 +1803,8 @@ func _on_unit_shot(start_pos: Vector2, end_pos: Vector2, color: Color, width: fl
 	_spawn_tracer(start_pos, end_pos, color, width, lifetime)
 	_spawn_impact(end_pos, color, width)
 
-func _on_missile_impact(pos: Vector2, color: Color, warhead_size: String) -> void:
-	_spawn_missile_impact(pos, color, warhead_size)
+func _on_missile_impact(pos: Vector2, color: Color, warhead_size: String, source_kind: String) -> void:
+	_spawn_missile_impact(pos, color, warhead_size, source_kind)
 
 func _spawn_tracer(start_pos: Vector2, end_pos: Vector2, color: Color, width: float, lifetime: float) -> void:
 	var start_y := tracer_height
@@ -1671,12 +1865,33 @@ func _update_tracers(delta: float) -> void:
 func _spawn_impact(end_pos: Vector2, color: Color, width: float) -> void:
 	_spawn_impact_custom(end_pos, color, width, impact_flash_duration, impact_flash_size)
 
-func _spawn_missile_impact(end_pos: Vector2, color: Color, warhead_size: String) -> void:
-	var scale := _warhead_scale(warhead_size)
-	var flash_width := missile_impact_flash_size * scale * 6.0
-	var flash_color := color.lightened(0.35)
+func _spawn_missile_impact(end_pos: Vector2, color: Color, warhead_size: String, source_kind: String) -> void:
+	var scale: float = _warhead_scale(warhead_size)
+	var flash_width: float = missile_impact_flash_size * scale * 6.0
+	var flash_color: Color = color.lightened(0.35)
 	flash_color.a = clampf(color.a, 0.5, 0.95)
 	_spawn_impact_custom(end_pos, flash_color, flash_width, missile_impact_duration, missile_impact_flash_size * scale)
+	if source_kind != "aircraft":
+		return
+	var boost_scale: float = maxf(0.1, aircraft_missile_impact_scale)
+	var effect_scale: float = scale * boost_scale
+	var hot_color: Color = color.lightened(0.55)
+	hot_color.a = clampf(color.a, 0.55, 0.95)
+	var hot_width: float = missile_impact_flash_size * effect_scale * 8.5
+	_spawn_impact_custom(end_pos, hot_color, hot_width, aircraft_missile_impact_duration, missile_impact_flash_size * effect_scale)
+	var shock_color: Color = color.lightened(0.2)
+	shock_color.a = clampf(color.a * 0.75, 0.35, 0.85)
+	var shock_width: float = aircraft_missile_shockwave_size * effect_scale * 7.5
+	_spawn_impact_custom(end_pos, shock_color, shock_width, aircraft_missile_shockwave_duration, aircraft_missile_shockwave_size * effect_scale)
+	var impact_y := impact_height
+	if impact_follow_terrain:
+		impact_y += _get_ground_height(end_pos)
+	var smoke_pos := Vector3(end_pos.x, impact_y + 0.25, end_pos.y)
+	var burst: int = maxi(0, aircraft_missile_smoke_burst)
+	if burst > 0:
+		var spread: float = aircraft_missile_smoke_spread * effect_scale
+		_spawn_smoke_burst(smoke_pos, burst, aircraft_missile_smoke_color, aircraft_missile_smoke_size * effect_scale, aircraft_missile_smoke_duration, spread)
+	_spawn_smoke(smoke_pos, aircraft_missile_smoke_color, aircraft_missile_smoke_size * effect_scale * 1.4, aircraft_missile_smoke_duration * 1.15)
 
 func _spawn_impact_custom(
 	end_pos: Vector2,
@@ -1767,6 +1982,20 @@ func _spawn_smoke(pos: Vector3, color: Color, size: float, duration: float) -> v
 		"start_scale": maxf(0.1, size),
 	}
 	_smokes.append(smoke)
+
+func _spawn_smoke_burst(pos: Vector3, count: int, color: Color, size: float, duration: float, spread: float) -> void:
+	if count <= 0 or duration <= 0.0:
+		return
+	var spread_radius: float = maxf(0.0, spread)
+	for i in range(count):
+		var offset := Vector3.ZERO
+		if spread_radius > 0.0:
+			offset = Vector3(
+				_smoke_rng.randf_range(-spread_radius, spread_radius),
+				_smoke_rng.randf_range(-spread_radius, spread_radius) * 0.2,
+				_smoke_rng.randf_range(-spread_radius, spread_radius)
+			)
+		_spawn_smoke(pos + offset, color, size, duration)
 
 func _update_smokes(delta: float) -> void:
 	if _smokes.is_empty():

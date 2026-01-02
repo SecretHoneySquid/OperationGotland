@@ -1,7 +1,7 @@
 class_name Missile
 extends Node2D
 
-signal impact(pos: Vector2, color: Color, warhead_size: String)
+signal impact(pos: Vector2, color: Color, warhead_size: String, source_kind: String)
 
 @export var speed := 260.0
 @export var range := 0.0
@@ -16,6 +16,8 @@ signal impact(pos: Vector2, color: Color, warhead_size: String)
 @export var warhead_size := "medium"
 @export var render_2d := true
 @export var team_id := ""
+@export var source_kind := ""
+@export var source_altitude := 0.0
 @export var splash_enabled := true
 @export var splash_damage_scale := 0.6
 @export var splash_radius := 0.0
@@ -70,7 +72,7 @@ func _check_hit(target_node: Node2D) -> void:
 		if target_node.has_method("take_damage"):
 			target_node.take_damage(damage)
 		_apply_splash_damage(target_node)
-		emit_signal("impact", global_position, color, warhead_size)
+		emit_signal("impact", global_position, color, warhead_size, source_kind)
 		queue_free()
 
 func _draw() -> void:

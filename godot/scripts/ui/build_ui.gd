@@ -32,6 +32,10 @@ var _factory_type_ids: Array[String] = []
 var _factory_type_index := {}
 var _selected_factory: Building
 var _factory_updating := false
+var _airfield_panel: VBoxContainer
+var _airfield_name_label: Label
+var _airfield_f35_button: Button
+var _selected_airfield: Building
 
 func _ready() -> void:
 	_controller = get_node_or_null(build_controller_path) as BuildController
@@ -105,6 +109,8 @@ func _process(_delta: float) -> void:
 		_update_barracks_panel()
 	if _factory_panel != null:
 		_update_factory_panel()
+	if _airfield_panel != null:
+		_update_airfield_panel()
 
 func _build_ui() -> void:
 	var panel := PanelContainer.new()
@@ -112,11 +118,11 @@ func _build_ui() -> void:
 	panel.anchor_left = 0.0
 	panel.anchor_top = 0.0
 	panel.anchor_right = 0.0
-	panel.anchor_bottom = 0.0
+	panel.anchor_bottom = 1.0
 	panel.offset_left = 12.0
 	panel.offset_top = 110.0
 	panel.offset_right = 260.0
-	panel.offset_bottom = 860.0
+	panel.offset_bottom = -12.0
 	add_child(panel)
 
 	var margin := MarginContainer.new()
@@ -126,9 +132,16 @@ func _build_ui() -> void:
 	margin.add_theme_constant_override("margin_bottom", 10)
 	panel.add_child(margin)
 
+	var scroll := ScrollContainer.new()
+	scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	margin.add_child(scroll)
+
 	var vbox := VBoxContainer.new()
+	vbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	vbox.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	vbox.add_theme_constant_override("separation", 6)
-	margin.add_child(vbox)
+	scroll.add_child(vbox)
 
 	var title := Label.new()
 	title.text = "Build Menu"
@@ -316,6 +329,33 @@ func _build_ui() -> void:
 
 	_setup_factory_options()
 
+	var airfield_spacer := HSeparator.new()
+	vbox.add_child(airfield_spacer)
+
+	_airfield_panel = VBoxContainer.new()
+	_airfield_panel.visible = false
+	_airfield_panel.add_theme_constant_override("separation", 4)
+	vbox.add_child(_airfield_panel)
+
+	var airfield_title := Label.new()
+	airfield_title.text = "Airfield Control"
+	_airfield_panel.add_child(airfield_title)
+
+	_airfield_name_label = Label.new()
+	_airfield_name_label.text = "No airfield selected"
+	_airfield_panel.add_child(_airfield_name_label)
+
+	_airfield_f35_button = Button.new()
+	_airfield_f35_button.text = "Buy F-35"
+	_airfield_f35_button.pressed.connect(func():
+		if _game_controller == null:
+			return
+		if _selected_airfield == null or not is_instance_valid(_selected_airfield):
+			return
+		_game_controller.buy_airfield_f35("p1", _selected_airfield)
+	)
+	_airfield_panel.add_child(_airfield_f35_button)
+
 func _on_build_mode_changed(active_id: String) -> void:
 	if _status_label == null:
 		return
@@ -382,35 +422,38 @@ func _on_building_selected(building: Building) -> void:
 	if building == null or not is_instance_valid(building):
 		_selected_barracks = null
 		_selected_factory = null
+		_selected_airfield = null
 		if _barracks_panel != null:
 			_barracks_panel.visible = false
 		if _factory_panel != null:
 			_factory_panel.visible = false
+		if _airfield_panel != null:
+			_airfield_panel.visible = false
 		return
-	if building.build_id != "barracks":
-		if building.build_id == "factory":
-			_selected_factory = building
-			_selected_barracks = null
-			if _barracks_panel != null:
-				_barracks_panel.visible = false
-			if _factory_panel != null:
-				_factory_panel.visible = true
-				_update_factory_panel()
-		else:
-			_selected_barracks = null
-			_selected_factory = null
-			if _barracks_panel != null:
-				_barracks_panel.visible = false
-			if _factory_panel != null:
-				_factory_panel.visible = false
-		return
-	_selected_barracks = building
+	_selected_barracks = null
 	_selected_factory = null
+	_selected_airfield = null
+	if _barracks_panel != null:
+		_barracks_panel.visible = false
 	if _factory_panel != null:
 		_factory_panel.visible = false
-	if _barracks_panel != null:
-		_barracks_panel.visible = true
-		_update_barracks_panel()
+	if _airfield_panel != null:
+		_airfield_panel.visible = false
+	if building.build_id == "barracks":
+		_selected_barracks = building
+		if _barracks_panel != null:
+			_barracks_panel.visible = true
+			_update_barracks_panel()
+	elif building.build_id == "factory":
+		_selected_factory = building
+		if _factory_panel != null:
+			_factory_panel.visible = true
+			_update_factory_panel()
+	elif building.build_id == "airfield":
+		_selected_airfield = building
+		if _airfield_panel != null:
+			_airfield_panel.visible = true
+			_update_airfield_panel()
 
 func _update_barracks_panel() -> void:
 	if _barracks_panel == null:
@@ -467,3 +510,42 @@ func _update_factory_panel() -> void:
 			or GameState.p1_credits < _game_controller.vehicle_unit_cost
 			or GameState.p1_factory_queue >= _game_controller.factory_queue_max
 		)
+
+func _update_airfield_panel() -> void:
+	if _airfield_panel == null:
+		return
+	if _selected_airfield == null or not is_instance_valid(_selected_airfield):
+		_airfield_panel.visible = false
+		return
+	_airfield_panel.visible = true
+	if _airfield_name_label != null:
+		_airfield_name_label.text = "Airfield @ (%.0f, %.0f)" % [
+			_selected_airfield.global_position.x,
+			_selected_airfield.global_position.y
+		]
+	if _airfield_f35_button != null and _game_controller != null:
+		var cost := _game_controller.f35_cost
+		var label := "Buy F-35 ($%d)" % cost
+		var disabled := false
+		if _selected_airfield.team_id != "p1":
+			disabled = true
+		var f35_id := int(_selected_airfield.get_meta("f35_active", 0))
+		if f35_id > 0:
+			var inst = instance_from_id(f35_id)
+			if inst != null and is_instance_valid(inst):
+				label = "F-35 Active"
+				disabled = true
+			else:
+				_selected_airfield.set_meta("f35_active", 0)
+		if _game_controller.f35_airfield_cap > 0 and disabled == false:
+			if f35_id > 0:
+				disabled = true
+		if _game_controller.airfield_aircraft_cap > 0 and disabled == false:
+			var current := int(_selected_airfield.get_meta("aircraft_active", 0))
+			if current >= _game_controller.airfield_aircraft_cap:
+				label = "Airfield Full"
+				disabled = true
+		if GameState.p1_credits < cost and disabled == false:
+			disabled = true
+		_airfield_f35_button.text = label
+		_airfield_f35_button.disabled = disabled
