@@ -1,14 +1,69 @@
-[gd_scene load_steps=7 format=3 uid="uid://hal2fvk6nrgh"]
+[gd_scene load_steps=12 format=3 uid="uid://hal2fvk6nrgh"]
 
 [ext_resource type="PackedScene" uid="uid://fo5h4srnvbrq" path="res://scenes/game/main.tscn" id="1"]
 [ext_resource type="Script" uid="uid://d2whdk3hnplre" path="res://scripts/core/camera_controller_3d.gd" id="2"]
 [ext_resource type="Script" uid="uid://dimbxkoao1gt6" path="res://scripts/visuals/visual_sync_3d.gd" id="3"]
 [ext_resource type="Script" uid="uid://bbkjghunnegk0" path="res://scripts/visuals/world_input_3d.gd" id="4"]
-[ext_resource type="Script" uid="uid://bosx511uavf0t" path="res://scripts/visuals/ground_plane_3d.gd" id="5"]
+[ext_resource type="Terrain3DAssets" uid="uid://dal3jhw6241qg" path="res://demo/data/assets.tres" id="5"]
+[ext_resource type="NavigationMesh" uid="uid://yf3fu23666k8" path="res://demo/data/nav_mesh.res" id="6"]
 
 [sub_resource type="Environment" id="1"]
 background_mode = 2
 background_color = Color(0.05, 0.06, 0.07, 1)
+
+[sub_resource type="Gradient" id="Gradient_vr1m7"]
+offsets = PackedFloat32Array(0.2, 1)
+colors = PackedColorArray(1, 1, 1, 1, 0, 0, 0, 1)
+
+[sub_resource type="FastNoiseLite" id="FastNoiseLite_d8lcj"]
+noise_type = 2
+frequency = 0.03
+cellular_jitter = 3.0
+cellular_return_type = 0
+domain_warp_enabled = true
+domain_warp_type = 1
+domain_warp_amplitude = 50.0
+domain_warp_fractal_type = 2
+domain_warp_fractal_lacunarity = 1.5
+domain_warp_fractal_gain = 1.0
+
+[sub_resource type="NoiseTexture2D" id="NoiseTexture2D_bov7h"]
+noise = SubResource("FastNoiseLite_d8lcj")
+color_ramp = SubResource("Gradient_vr1m7")
+seamless = true
+
+[sub_resource type="Terrain3DMaterial" id="Terrain3DMaterial_s5mq5"]
+_shader_parameters = {
+"_mouse_layer": 2147483648,
+"auto_base_texture": 0,
+"auto_height_reduction": 0.1,
+"auto_overlay_texture": 1,
+"auto_slope": 1.0,
+"bias_distance": 512.0,
+"blend_sharpness": 0.87,
+"depth_blur": 0.0,
+"dual_scale_far": 170.0,
+"dual_scale_near": 100.0,
+"dual_scale_reduction": 0.3,
+"dual_scale_texture": 0,
+"enable_macro_variation": true,
+"enable_projection": true,
+&"flat_terrain_normals": false,
+"macro_variation1": Color(0.878431, 0.862745, 0.901961, 1),
+"macro_variation2": Color(0.898039, 0.898039, 0.803922, 1),
+"macro_variation_slope": 0.333,
+"mipmap_bias": 1.0,
+"noise1_angle": 0.1,
+"noise1_offset": Vector2(0.5, 0.5),
+"noise1_scale": 0.04,
+"noise2_scale": 0.076,
+"noise_texture": SubResource("NoiseTexture2D_bov7h"),
+"projection_threshold": 0.8,
+"tri_scale_reduction": 0.3
+}
+world_background = 0
+auto_shader = true
+dual_scaling = true
 
 [node name="Main3D" type="Node"]
 
@@ -30,13 +85,21 @@ shadow_enabled = true
 [node name="Environment" type="WorldEnvironment" parent="World3D"]
 environment = SubResource("1")
 
-[node name="Ground" type="Node3D" parent="World3D"]
-script = ExtResource("5")
+[node name="NavigationRegion3D" type="NavigationRegion3D" parent="World3D"]
+navigation_mesh = ExtResource("6")
 
-[node name="MeshInstance3D" type="MeshInstance3D" parent="World3D/Ground"]
+[node name="Ground" type="Terrain3D" parent="World3D/NavigationRegion3D"]
+data_directory = "res://demo/data"
+material = SubResource("Terrain3DMaterial_s5mq5")
+assets = ExtResource("5")
+collision_mask = 3
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 1024, 0, 2048)
+top_level = true
+metadata/_edit_lock_ = true
 
 [node name="VisualSync" type="Node3D" parent="World3D"]
 script = ExtResource("3")
+ground_path = NodePath("../NavigationRegion3D/Ground")
 
 [node name="WorldInput" type="Node" parent="."]
 script = ExtResource("4")

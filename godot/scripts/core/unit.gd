@@ -11,6 +11,14 @@ signal shot_fired(start_pos: Vector2, end_pos: Vector2, color: Color, width: flo
 		queue_redraw()
 
 @export var speed := 90.0
+@export var ground_slope_max_deg := 28.0
+@export var ground_slope_sample_distance := 0.0
+@export var navigation_enabled := true
+@export var navigation_layers := 1
+@export var navigation_optimize := true
+@export var navigation_repath_interval := 0.6
+@export var navigation_repath_distance := 120.0
+@export var navigation_point_reach_dist := 14.0
 @export var max_hp := 30.0
 @export var attack_damage := 6.0
 @export var attack_range := 26.0
@@ -80,6 +88,9 @@ signal shot_fired(start_pos: Vector2, end_pos: Vector2, color: Color, width: flo
 @export var aircraft_landing_slot_spacing := 32.0
 @export var aircraft_landing_cap := 2
 @export var aircraft_queue_radius := 0.0
+@export var aircraft_squad_enabled := true
+@export var aircraft_squad_spacing := 80.0
+@export var aircraft_squad_lateral_ratio := 0.6
 
 var hp := 0.0
 var unit_kind := "infantry"
@@ -127,6 +138,14 @@ var _aircraft_missile_lock_timer := 0.0
 var _aircraft_missile_lock_id := 0
 var _aircraft_speed_mult := 1.0
 var aircraft_afterburner_active := false
+var _aircraft_squad_index := -1
+var _aircraft_squad_leader_id := 0
+var _ground_height_provider: Node
+var _nav_provider: Node
+var _nav_path := PackedVector2Array()
+var _nav_index := 0
+var _nav_target := Vector2.ZERO
+var _nav_repath_timer := 0.0
 
 func _ready() -> void:
 	hp = max_hp
@@ -153,11 +172,13 @@ func _ready() -> void:
 			_aircraft_takeoff_active = true
 			_aircraft_takeoff_taxi = false
 			aircraft_altitude_factor = 0.0
+		_register_aircraft_squad()
 	_setup_visual()
 
 func _exit_tree() -> void:
 	GameState.unit_count = maxi(0, GameState.unit_count - 1)
 	if unit_kind == "aircraft":
+		_unregister_aircraft_squad()
 		_release_landing_slot()
 		_release_airfield_slot()
 		_release_airfield_f35()
@@ -260,8 +281,20 @@ func _sync_visual_rotation() -> void:
 	_visual_node.rotation = _facing.angle()
 
 func _update_aircraft_state(delta: float) -> void:
+	_refresh_aircraft_squad_state()
 	var missile_target := _find_aircraft_missile_target()
 	var gun_target := _find_attack_target()
+	if aircraft_squad_enabled:
+		if _is_aircraft_squad_leader() and missile_target == null and _aircraft_squad_has_missiles():
+			missile_target = _find_aircraft_missile_target(true)
+		if _is_aircraft_squad_leader():
+			var shared := missile_target if missile_target != null else gun_target
+			_set_aircraft_squad_target(shared)
+		else:
+			var shared := _get_aircraft_squad_target()
+			if shared != null:
+				missile_target = shared
+				gun_target = shared
 	_set_aircraft_speed(1.0, false)
 	_update_aircraft_loiter_reload(delta, missile_target, gun_target)
 	if _update_aircraft_reload(delta):
@@ -280,21 +313,24 @@ func _update_aircraft_state(delta: float) -> void:
 	_aircraft_landing_taxi = false
 	aircraft_circulating = false
 	var fired := false
+	var gun_in_range := gun_target != null and _aircraft_gun_target_in_range(gun_target)
 	if missile_target != null:
 		_face_aircraft_toward(missile_target.global_position, delta)
 		if _aircraft_missile_lock_timer >= aircraft_missile_lock_time and _can_fire_aircraft_missile():
 			_fire_aircraft_missile(missile_target)
 			_aircraft_missile_lock_timer = 0.0
 			fired = true
-	if not fired and gun_target != null and aircraft_gun_ammo > 0:
+	if not fired and gun_target != null and aircraft_gun_ammo > 0 and gun_in_range:
 		_face_aircraft_toward(gun_target.global_position, delta)
 		_fire_aircraft_gun(gun_target)
 		fired = true
 	if manual_active or _hold_active:
-		_move_toward_target(delta)
+		var manual_target_pos := _resolve_target()
+		if manual_target_pos != Vector2.ZERO:
+			_move_toward_aircraft_target(manual_target_pos, delta)
 	elif missile_target != null and _aircraft_missile_lock_timer < aircraft_missile_lock_time:
 		_set_aircraft_speed(aircraft_engage_speed_mult, true)
-		_move_toward_position(missile_target.global_position, delta)
+		_move_toward_aircraft_target(missile_target.global_position, delta)
 	elif missile_target == null and gun_target == null:
 		aircraft_circulating = true
 		_set_aircraft_speed(aircraft_circulate_speed_mult, false)
@@ -302,10 +338,10 @@ func _update_aircraft_state(delta: float) -> void:
 	elif gun_target != null and aircraft_gun_ammo > 0:
 		if global_position.distance_to(gun_target.global_position) > attack_range * 0.9:
 			_set_aircraft_speed(aircraft_engage_speed_mult, true)
-			_move_toward_position(gun_target.global_position, delta)
+			_move_toward_aircraft_target(gun_target.global_position, delta)
 	elif missile_target != null and aircraft_gun_ammo > 0 and aircraft_missile_ammo <= 0:
 		_set_aircraft_speed(aircraft_engage_speed_mult, true)
-		_move_toward_position(missile_target.global_position, delta)
+		_move_toward_aircraft_target(missile_target.global_position, delta)
 	else:
 		_move_toward_aircraft_loiter(delta)
 	_sync_visual_rotation()
@@ -493,6 +529,169 @@ func _update_aircraft_missile_lock(delta: float, missile_target: Node2D) -> void
 		_aircraft_missile_lock_timer + delta
 	)
 
+func _get_aircraft_squad_home() -> Node2D:
+	if not aircraft_squad_enabled:
+		return null
+	if aircraft_home == null or not is_instance_valid(aircraft_home):
+		return null
+	return aircraft_home
+
+func _get_aircraft_squad_member_ids() -> Array:
+	var home := _get_aircraft_squad_home()
+	if home == null:
+		return []
+	var members_value: Variant = home.get_meta("air_squad_members", [])
+	var members: Array = members_value if members_value is Array else []
+	var cleaned: Array = []
+	for value in members:
+		var id := int(value)
+		var inst := instance_from_id(id)
+		if inst == null or not is_instance_valid(inst):
+			continue
+		if inst is not Unit:
+			continue
+		var unit := inst as Unit
+		if unit.unit_kind != "aircraft":
+			continue
+		if unit.aircraft_home != home:
+			continue
+		cleaned.append(id)
+	if cleaned.size() != members.size():
+		home.set_meta("air_squad_members", cleaned)
+	return cleaned
+
+func _register_aircraft_squad() -> void:
+	var home := _get_aircraft_squad_home()
+	if home == null:
+		return
+	var members := _get_aircraft_squad_member_ids()
+	var id := get_instance_id()
+	if not members.has(id):
+		members.append(id)
+		home.set_meta("air_squad_members", members)
+	if not home.has_meta("air_squad_fire_index"):
+		home.set_meta("air_squad_fire_index", 0)
+	_refresh_aircraft_squad_state()
+
+func _unregister_aircraft_squad() -> void:
+	var home := _get_aircraft_squad_home()
+	if home == null:
+		return
+	var members := _get_aircraft_squad_member_ids()
+	var id := get_instance_id()
+	if members.has(id):
+		members.erase(id)
+		home.set_meta("air_squad_members", members)
+	if members.is_empty():
+		home.set_meta("air_squad_target_id", 0)
+		home.set_meta("air_squad_fire_index", 0)
+	_aircraft_squad_index = -1
+	_aircraft_squad_leader_id = 0
+
+func _refresh_aircraft_squad_state() -> void:
+	var members := _get_aircraft_squad_member_ids()
+	if members.is_empty():
+		_aircraft_squad_index = -1
+		_aircraft_squad_leader_id = 0
+		return
+	_aircraft_squad_leader_id = int(members[0])
+	_aircraft_squad_index = members.find(get_instance_id())
+
+func _is_aircraft_squad_leader() -> bool:
+	return _aircraft_squad_leader_id == get_instance_id()
+
+func _get_aircraft_squad_leader() -> Unit:
+	if _aircraft_squad_leader_id <= 0:
+		return null
+	var inst := instance_from_id(_aircraft_squad_leader_id)
+	if inst is Unit:
+		return inst as Unit
+	return null
+
+func _set_aircraft_squad_target(target: Node2D) -> void:
+	var home := _get_aircraft_squad_home()
+	if home == null:
+		return
+	if target == null or not is_instance_valid(target):
+		home.set_meta("air_squad_target_id", 0)
+		return
+	home.set_meta("air_squad_target_id", target.get_instance_id())
+
+func _get_aircraft_squad_target() -> Node2D:
+	var home := _get_aircraft_squad_home()
+	if home == null:
+		return null
+	var target_id := int(home.get_meta("air_squad_target_id", 0))
+	if target_id <= 0:
+		return null
+	var inst := instance_from_id(target_id)
+	if inst == null or not is_instance_valid(inst):
+		home.set_meta("air_squad_target_id", 0)
+		return null
+	if inst is not Node2D:
+		home.set_meta("air_squad_target_id", 0)
+		return null
+	return inst as Node2D
+
+func _get_aircraft_squad_missile_owner_id() -> int:
+	var home := _get_aircraft_squad_home()
+	if home == null:
+		return get_instance_id()
+	var members := _get_aircraft_squad_member_ids()
+	if members.is_empty():
+		return get_instance_id()
+	var index := int(home.get_meta("air_squad_fire_index", 0))
+	if index < 0 or index >= members.size():
+		index = 0
+	var current_id := int(members[index])
+	var current := instance_from_id(current_id) as Unit
+	if current != null and is_instance_valid(current) and current.aircraft_missile_ammo > 0:
+		home.set_meta("air_squad_fire_index", index)
+		return current_id
+	for offset in range(1, members.size() + 1):
+		var next_index := (index + offset) % members.size()
+		var next_id := int(members[next_index])
+		var next := instance_from_id(next_id) as Unit
+		if next != null and is_instance_valid(next) and next.aircraft_missile_ammo > 0:
+			home.set_meta("air_squad_fire_index", next_index)
+			return next_id
+	home.set_meta("air_squad_fire_index", index)
+	return current_id
+
+func _aircraft_can_fire_squad_missile() -> bool:
+	if not aircraft_squad_enabled:
+		return true
+	return _get_aircraft_squad_missile_owner_id() == get_instance_id()
+
+func _advance_aircraft_squad_fire_index() -> void:
+	var home := _get_aircraft_squad_home()
+	if home == null:
+		return
+	var members := _get_aircraft_squad_member_ids()
+	if members.is_empty():
+		return
+	var index := int(home.get_meta("air_squad_fire_index", 0))
+	if index < 0 or index >= members.size():
+		index = 0
+	for offset in range(1, members.size() + 1):
+		var next_index := (index + offset) % members.size()
+		var next_id := int(members[next_index])
+		var next := instance_from_id(next_id) as Unit
+		if next != null and is_instance_valid(next) and next.aircraft_missile_ammo > 0:
+			home.set_meta("air_squad_fire_index", next_index)
+			return
+	home.set_meta("air_squad_fire_index", index)
+
+func _aircraft_squad_has_missiles() -> bool:
+	if not aircraft_squad_enabled:
+		return aircraft_missile_ammo > 0
+	var members := _get_aircraft_squad_member_ids()
+	for member_id in members:
+		var unit := instance_from_id(int(member_id)) as Unit
+		if unit != null and is_instance_valid(unit) and unit.aircraft_missile_ammo > 0:
+			return true
+	return false
+
 func _get_incoming_aircraft_missiles() -> Dictionary:
 	var incoming := {}
 	for node in get_tree().get_nodes_in_group("missiles"):
@@ -510,8 +709,8 @@ func _get_incoming_aircraft_missiles() -> Dictionary:
 		incoming[target_id] = int(incoming.get(target_id, 0)) + 1
 	return incoming
 
-func _find_aircraft_missile_target() -> Node2D:
-	if aircraft_missile_ammo <= 0:
+func _find_aircraft_missile_target(ignore_ammo: bool = false) -> Node2D:
+	if aircraft_missile_ammo <= 0 and not ignore_ammo:
 		return null
 	var range := aircraft_missile_range
 	var range_sq := range * range if range > 0.0 else INF
@@ -571,8 +770,21 @@ func _aircraft_target_priority(target: Node2D) -> int:
 		return 1
 	return 3
 
+func _aircraft_gun_target_in_range(target: Node2D) -> bool:
+	if target == null or not is_instance_valid(target):
+		return false
+	var range := attack_range
+	if vision_radius > 0.0:
+		if range > 0.0:
+			range = minf(range, vision_radius)
+		else:
+			range = vision_radius
+	if range <= 0.0:
+		return true
+	return global_position.distance_squared_to(target.global_position) <= range * range
+
 func _can_fire_aircraft_missile() -> bool:
-	return aircraft_missile_ammo > 0 and _aircraft_missile_timer <= 0.0
+	return aircraft_missile_ammo > 0 and _aircraft_missile_timer <= 0.0 and _aircraft_can_fire_squad_missile()
 
 func _fire_aircraft_missile(target: Node2D) -> void:
 	if target == null or not is_instance_valid(target):
@@ -602,6 +814,8 @@ func _fire_aircraft_missile(target: Node2D) -> void:
 		get_parent().add_child(missile)
 	aircraft_missile_ammo = maxi(0, aircraft_missile_ammo - 1)
 	_aircraft_missile_timer = aircraft_missile_cooldown
+	if aircraft_missile_ammo <= 0:
+		_advance_aircraft_squad_fire_index()
 
 func _fire_aircraft_gun(target: Node) -> void:
 	if aircraft_gun_ammo <= 0 or _cooldown > 0.0:
@@ -795,20 +1009,27 @@ func _move_toward_target(delta: float) -> void:
 	var target := _resolve_target()
 	if target == Vector2.ZERO:
 		return
-	_move_toward_position(target, delta)
+	var move_target := target
+	var allow_completion := true
+	if _should_use_navigation(target):
+		move_target = _get_nav_move_target(target, delta)
+		allow_completion = _nav_path.is_empty()
+	_move_toward_position(move_target, delta, allow_completion)
 
-func _move_toward_position(target: Vector2, delta: float) -> void:
+func _move_toward_position(target: Vector2, delta: float, allow_completion: bool = true) -> void:
 	var delta_vec := target - global_position
 	if delta_vec.length() <= 1.0:
-		if _hold_active:
-			_hold_reached = true
-			return
-		if manual_active:
-			manual_active = false
-			manual_target = Vector2.ZERO
-		elif not _reached_rally and rally_target != Vector2.ZERO:
-			_reached_rally = true
-			rally_target = Vector2.ZERO
+		if allow_completion:
+			_clear_nav_path()
+			if _hold_active:
+				_hold_reached = true
+				return
+			if manual_active:
+				manual_active = false
+				manual_target = Vector2.ZERO
+			elif not _reached_rally and rally_target != Vector2.ZERO:
+				_reached_rally = true
+				rally_target = Vector2.ZERO
 		return
 	var direction := delta_vec.normalized()
 	if unit_kind == "aircraft" and not _aircraft_allow_instant_turn() and aircraft_turn_rate > 0.0:
@@ -816,15 +1037,121 @@ func _move_toward_position(target: Vector2, delta: float) -> void:
 	var move_speed := speed
 	if unit_kind == "aircraft":
 		move_speed *= maxf(0.0, _aircraft_speed_mult)
-	global_position += direction * move_speed * delta
+	var step := direction * move_speed * delta
+	if _should_limit_ground_slope():
+		var sample_dist := step.length()
+		if ground_slope_sample_distance > 0.0:
+			sample_dist = maxf(sample_dist, ground_slope_sample_distance)
+		if sample_dist > 0.0:
+			var sample_pos := global_position + direction * sample_dist
+			if _is_uphill_too_steep(global_position, sample_pos):
+				_facing = direction
+				return
+	global_position += step
 	_facing = direction
+
+func _move_toward_aircraft_target(target: Vector2, delta: float) -> void:
+	var adjusted := _get_aircraft_formation_target(target)
+	_move_toward_position(adjusted, delta)
 
 func _set_aircraft_speed(mult: float, afterburner: bool) -> void:
 	_aircraft_speed_mult = maxf(0.0, mult)
 	aircraft_afterburner_active = afterburner
 
 func _aircraft_allow_instant_turn() -> bool:
-	return _aircraft_reloading or _aircraft_landing_on_path or _aircraft_landing_taxi or _aircraft_takeoff_active
+	return _aircraft_landing_on_path or _aircraft_landing_taxi or _aircraft_takeoff_active
+
+func _should_limit_ground_slope() -> bool:
+	return unit_kind != "aircraft" and ground_slope_max_deg > 0.0
+
+func _is_uphill_too_steep(from_pos: Vector2, to_pos: Vector2) -> bool:
+	var delta := to_pos - from_pos
+	var dist := delta.length()
+	if dist <= 0.001:
+		return false
+	var height_from := _get_ground_height(from_pos)
+	var height_to := _get_ground_height(to_pos)
+	if not is_finite(height_from) or not is_finite(height_to):
+		return false
+	if height_to <= height_from:
+		return false
+	var slope := (height_to - height_from) / dist
+	var max_slope := tan(deg_to_rad(ground_slope_max_deg))
+	return slope > max_slope
+
+func _get_ground_height(pos: Vector2) -> float:
+	var provider := _get_ground_height_provider()
+	if provider != null and provider.has_method("get_ground_height_at"):
+		var value: Variant = provider.call("get_ground_height_at", pos)
+		if value is float or value is int:
+			return float(value)
+	return 0.0
+
+func _get_ground_height_provider() -> Node:
+	if _ground_height_provider != null and is_instance_valid(_ground_height_provider):
+		return _ground_height_provider
+	var providers := get_tree().get_nodes_in_group("ground_height_provider")
+	if not providers.is_empty():
+		_ground_height_provider = providers[0]
+		return _ground_height_provider
+	return null
+
+func _should_use_navigation(target: Vector2) -> bool:
+	return navigation_enabled and unit_kind != "aircraft" and target != Vector2.ZERO
+
+func _get_nav_move_target(target: Vector2, delta: float) -> Vector2:
+	_nav_repath_timer = maxf(0.0, _nav_repath_timer - delta)
+	var needs_repath := _nav_path.is_empty() or _nav_target == Vector2.ZERO
+	if not needs_repath and navigation_repath_distance > 0.0:
+		needs_repath = _nav_target.distance_to(target) > navigation_repath_distance
+	if needs_repath and _nav_repath_timer <= 0.0:
+		_build_nav_path(target)
+	_advance_nav_index()
+	if _nav_path.is_empty():
+		return target
+	return _nav_path[_nav_index]
+
+func _build_nav_path(target: Vector2) -> void:
+	_nav_repath_timer = maxf(0.0, navigation_repath_interval)
+	_nav_target = target
+	_nav_index = 0
+	_nav_path = PackedVector2Array()
+	var provider := _get_nav_provider()
+	if provider == null or not provider.has_method("get_navigation_path"):
+		return
+	var path_value: Variant = provider.call("get_navigation_path", global_position, target, navigation_layers, navigation_optimize)
+	if path_value is PackedVector2Array:
+		_nav_path = path_value
+	elif path_value is Array:
+		var converted := PackedVector2Array()
+		for point in path_value:
+			if point is Vector2:
+				converted.append(point)
+		_nav_path = converted
+	_advance_nav_index()
+
+func _advance_nav_index() -> void:
+	if _nav_path.is_empty():
+		return
+	var reach_dist := maxf(1.0, navigation_point_reach_dist)
+	while _nav_index < _nav_path.size() and global_position.distance_to(_nav_path[_nav_index]) <= reach_dist:
+		_nav_index += 1
+	if _nav_index >= _nav_path.size():
+		_clear_nav_path()
+
+func _clear_nav_path() -> void:
+	_nav_path = PackedVector2Array()
+	_nav_index = 0
+	_nav_target = Vector2.ZERO
+
+func _get_nav_provider() -> Node:
+	if _nav_provider != null and is_instance_valid(_nav_provider):
+		return _nav_provider
+	var providers := get_tree().get_nodes_in_group("navigation_provider")
+	if not providers.is_empty():
+		_nav_provider = providers[0]
+		return _nav_provider
+	return null
 
 func _apply_aircraft_turn(desired: Vector2, delta: float) -> Vector2:
 	var desired_dir := desired.normalized()
@@ -837,6 +1164,34 @@ func _apply_aircraft_turn(desired: Vector2, delta: float) -> Vector2:
 	if turned.length_squared() <= 0.01:
 		return desired_dir
 	return turned.normalized()
+
+func _should_use_aircraft_formation() -> bool:
+	return unit_kind == "aircraft" and aircraft_squad_enabled and _aircraft_squad_index > 0
+
+func _get_aircraft_formation_offset_local() -> Vector2:
+	if _aircraft_squad_index <= 0:
+		return Vector2.ZERO
+	var row := int((_aircraft_squad_index - 1) / 2) + 1
+	var side := -1 if (_aircraft_squad_index % 2) == 1 else 1
+	var back := float(row) * aircraft_squad_spacing
+	var lateral := float(row) * aircraft_squad_spacing * aircraft_squad_lateral_ratio
+	return Vector2(-back, lateral * float(side))
+
+func _get_aircraft_formation_target(base: Vector2) -> Vector2:
+	if not _should_use_aircraft_formation():
+		return base
+	var leader := _get_aircraft_squad_leader()
+	if leader == null or not is_instance_valid(leader):
+		return base
+	var dir := base - leader.global_position
+	if dir.length_squared() <= 0.01:
+		dir = leader._facing
+	if dir.length_squared() <= 0.01:
+		dir = Vector2.RIGHT
+	var forward := dir.normalized()
+	var right := Vector2(-forward.y, forward.x)
+	var offset := _get_aircraft_formation_offset_local()
+	return base + (forward * offset.x) + (right * offset.y)
 
 func _move_toward_aircraft_loiter(delta: float) -> void:
 	_move_toward_aircraft_orbit(aircraft_loiter_pos, aircraft_loiter_radius, delta)
@@ -856,6 +1211,7 @@ func _move_toward_aircraft_perimeter(delta: float) -> void:
 func _move_toward_aircraft_orbit(center: Vector2, radius: float, delta: float) -> void:
 	if center == Vector2.ZERO:
 		return
+	var orbit_center := _get_aircraft_formation_target(center)
 	var use_radius := maxf(0.0, radius) * maxf(0.1, aircraft_orbit_radius_scale)
 	_aircraft_loiter_angle = fmod(_aircraft_loiter_angle + (aircraft_loiter_orbit_speed * delta), TAU)
 	var angle := _aircraft_loiter_angle
@@ -863,7 +1219,7 @@ func _move_toward_aircraft_orbit(center: Vector2, radius: float, delta: float) -
 	var wobble := 0.0
 	if wobble_amp > 0.0 and aircraft_orbit_wobble_speed > 0.0:
 		wobble = sin((angle * aircraft_orbit_wobble_speed) + _aircraft_orbit_phase) * wobble_amp
-	var orbit_target := center + Vector2(cos(angle), sin(angle)) * (use_radius + wobble)
+	var orbit_target := orbit_center + Vector2(cos(angle), sin(angle)) * (use_radius + wobble)
 	if aircraft_circulating and aircraft_circulation_spread_enabled:
 		orbit_target += _get_aircraft_circulation_offset()
 	_move_toward_position(orbit_target, delta)
@@ -1142,6 +1498,7 @@ func _resolve_target() -> Vector2:
 func issue_move(target: Vector2) -> void:
 	manual_target = target
 	manual_active = true
+	_clear_nav_path()
 	if unit_kind == "aircraft":
 		aircraft_loiter_pos = target
 	_hold_active = false

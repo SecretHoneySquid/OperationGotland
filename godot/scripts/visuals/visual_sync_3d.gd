@@ -4,6 +4,8 @@ extends Node3D
 @export var vehicle_height := 10.0
 @export var aircraft_height := 160.0
 @export var aircraft_height_smooth := 4.0
+@export var aircraft_follow_terrain := false
+@export var aircraft_base_height := 220.0
 @export var aircraft_model_path := "res://gripen.glb"
 @export var aircraft_model_scale := 1.0
 @export var aircraft_model_rotation := Vector3(0.0, 90.0, 0.0)
@@ -217,6 +219,8 @@ var _aircraft_rng := RandomNumberGenerator.new()
 func _ready() -> void:
 	_smoke_rng.randomize()
 	_aircraft_rng.randomize()
+	add_to_group("ground_height_provider")
+	add_to_group("navigation_provider")
 
 func _process(delta: float) -> void:
 	_frame_delta = delta
@@ -664,14 +668,24 @@ func _update_proxy(node, proxy: Node3D, group_name: String) -> void:
 		if group_name == "units":
 			unit_kind = str(_get_value(node, "unit_kind", "infantry"))
 			if unit_kind == "aircraft":
+				if not aircraft_follow_terrain:
+					ground_y = aircraft_base_height
 				var altitude: float = clampf(_get_float(node, "aircraft_altitude_factor", 1.0), 0.0, 1.0)
 				y_offset += aircraft_height * altitude
 		if group_name == "missiles":
-			y_offset += missile_height * _get_missile_scale(node)
+			var missile_scale := _get_missile_scale(node)
+			y_offset += missile_height * missile_scale
 			var source_kind := str(_get_value(node, "source_kind", ""))
 			if source_kind == "aircraft":
 				var altitude := clampf(_get_float(node, "source_altitude", 1.0), 0.0, 1.0)
-				y_offset += aircraft_height * altitude
+				var target_pos := _get_vec2(node, "_target_pos", Vector2.ZERO)
+				var target_ground := ground_y
+				if target_pos != Vector2.ZERO:
+					target_ground = _get_ground_height(target_pos)
+				var start_base := ground_y if aircraft_follow_terrain else aircraft_base_height
+				var start_y := start_base + aircraft_height
+				var interp_y := lerpf(target_ground, start_y, altitude)
+				y_offset = (interp_y - ground_y) + (missile_height * missile_scale)
 		var target_y: float = ground_y + y_offset
 		if group_name == "units" and unit_kind == "aircraft" and aircraft_height_smooth > 0.0:
 			var altitude: float = clampf(_get_float(node, "aircraft_altitude_factor", 1.0), 0.0, 1.0)
@@ -835,11 +849,48 @@ func _get_ground_height(pos: Vector2) -> float:
 	if ground == null:
 		return 0.0
 	if not ground.has_method("get_height_at"):
+		var data_value: Variant = ground.get("data")
+		if data_value is Object and data_value.has_method("get_height"):
+			var world_pos := Vector3(pos.x, 0.0, pos.y)
+			var local_pos := world_pos
+			if ground is Node3D:
+				local_pos = (ground as Node3D).to_local(world_pos)
+			var height_value: Variant = data_value.call("get_height", Vector3(local_pos.x, 0.0, local_pos.z))
+			if height_value is float or height_value is int:
+				var height := float(height_value)
+				if not is_finite(height):
+					return 0.0
+				if ground is Node3D:
+					return (ground as Node3D).to_global(Vector3(local_pos.x, height, local_pos.z)).y
+				return height
 		return 0.0
 	var height_value: Variant = ground.call("get_height_at", pos)
 	if height_value is float or height_value is int:
-		return float(height_value)
+		var height := float(height_value)
+		return height if is_finite(height) else 0.0
 	return 0.0
+
+func get_ground_height_at(pos: Vector2) -> float:
+	return _get_ground_height(pos)
+
+func get_navigation_path(from_pos: Vector2, to_pos: Vector2, nav_layers: int = 1, optimize: bool = true) -> PackedVector2Array:
+	var world := get_world_3d()
+	if world == null:
+		return PackedVector2Array()
+	var nav_map := world.navigation_map
+	if nav_map == RID():
+		return PackedVector2Array()
+	var from_height := _get_ground_height(from_pos)
+	var to_height := _get_ground_height(to_pos)
+	var from_3d := Vector3(from_pos.x, from_height, from_pos.y)
+	var to_3d := Vector3(to_pos.x, to_height, to_pos.y)
+	var path_3d := NavigationServer3D.map_get_path(nav_map, from_3d, to_3d, optimize, nav_layers)
+	if path_3d.is_empty():
+		return PackedVector2Array()
+	var path_2d := PackedVector2Array()
+	for point in path_3d:
+		path_2d.append(Vector2(point.x, point.z))
+	return path_2d
 
 func _get_ground_max_height() -> float:
 	if not terrain_follow_enabled:
@@ -850,10 +901,21 @@ func _get_ground_max_height() -> float:
 	if ground == null:
 		return 0.0
 	if not ground.has_method("get_max_height"):
+		var data_value: Variant = ground.get("data")
+		if data_value is Object and data_value.has_method("get_height_range"):
+			var range_value: Variant = data_value.call("get_height_range")
+			if range_value is Vector2:
+				var max_height := float(range_value.y)
+				if not is_finite(max_height):
+					return 0.0
+				if ground is Node3D:
+					return (ground as Node3D).to_global(Vector3(0.0, max_height, 0.0)).y
+				return max_height
 		return 0.0
 	var height_value: Variant = ground.call("get_max_height")
 	if height_value is float or height_value is int:
-		return float(height_value)
+		var height := float(height_value)
+		return height if is_finite(height) else 0.0
 	return 0.0
 
 func _get_ground_node() -> Node:

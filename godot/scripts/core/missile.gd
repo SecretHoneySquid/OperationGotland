@@ -25,6 +25,10 @@ signal impact(pos: Vector2, color: Color, warhead_size: String, source_kind: Str
 var target: Node2D
 var _velocity := Vector2.RIGHT
 var _origin := Vector2.ZERO
+var _target_pos := Vector2.ZERO
+var _target_lost := false
+var _initial_distance := 0.0
+var _source_altitude_start := 1.0
 
 const _WARHEAD_RADII = {
 	"small": 4.0,
@@ -39,6 +43,12 @@ const _WARHEAD_SPLASH = {
 
 func _ready() -> void:
 	add_to_group("missiles")
+	if _origin == Vector2.ZERO:
+		_origin = global_position
+	_source_altitude_start = clampf(source_altitude, 0.0, 1.0)
+	if target != null and is_instance_valid(target):
+		_target_pos = target.global_position
+		_initial_distance = maxf(_origin.distance_to(_target_pos), 0.01)
 	_apply_warhead_settings()
 
 func _process(delta: float) -> void:
@@ -46,6 +56,13 @@ func _process(delta: float) -> void:
 	if lifetime <= 0.0:
 		queue_free()
 		return
+	if target != null and is_instance_valid(target):
+		_target_pos = target.global_position
+		if _initial_distance <= 0.0 and _origin != Vector2.ZERO:
+			_initial_distance = maxf(_origin.distance_to(_target_pos), 0.01)
+	elif not _target_lost and _target_pos != Vector2.ZERO:
+		_target_lost = true
+		target = null
 	var effective_range := max_distance
 	if range > 0.0:
 		effective_range = range
@@ -54,18 +71,33 @@ func _process(delta: float) -> void:
 			queue_free()
 			return
 	if target != null and is_instance_valid(target):
-		var desired := target.global_position - global_position
-		if desired.length_squared() > 0.1:
-			var desired_dir := desired.normalized()
-			if _velocity.length_squared() < 0.1:
-				_velocity = desired_dir
-			else:
-				var angle := _velocity.angle_to(desired_dir)
-				var max_turn := turn_rate * delta
-				_velocity = _velocity.rotated(clampf(angle, -max_turn, max_turn))
+		_update_guidance(target.global_position, delta)
 		_check_hit(target)
+	elif _target_pos != Vector2.ZERO:
+		_update_guidance(_target_pos, delta)
+		_check_ground_hit()
+	_update_altitude_factor()
 	global_position += _velocity.normalized() * speed * delta
 	queue_redraw()
+
+func _update_guidance(target_pos: Vector2, delta: float) -> void:
+	var desired := target_pos - global_position
+	if desired.length_squared() > 0.1:
+		var desired_dir := desired.normalized()
+		if _velocity.length_squared() < 0.1:
+			_velocity = desired_dir
+		else:
+			var angle := _velocity.angle_to(desired_dir)
+			var max_turn := turn_rate * delta
+			_velocity = _velocity.rotated(clampf(angle, -max_turn, max_turn))
+
+func _update_altitude_factor() -> void:
+	if _target_pos == Vector2.ZERO or _initial_distance <= 0.0:
+		source_altitude = _source_altitude_start
+		return
+	var remaining := global_position.distance_to(_target_pos)
+	var ratio := clampf(remaining / _initial_distance, 0.0, 1.0)
+	source_altitude = _source_altitude_start * ratio
 
 func _check_hit(target_node: Node2D) -> void:
 	if global_position.distance_squared_to(target_node.global_position) <= hit_radius * hit_radius:
@@ -73,6 +105,13 @@ func _check_hit(target_node: Node2D) -> void:
 			target_node.take_damage(damage)
 		_apply_splash_damage(target_node)
 		emit_signal("impact", global_position, color, warhead_size, source_kind)
+		queue_free()
+
+func _check_ground_hit() -> void:
+	if not _target_lost or _target_pos == Vector2.ZERO:
+		return
+	if global_position.distance_squared_to(_target_pos) <= hit_radius * hit_radius:
+		emit_signal("impact", _target_pos, color, warhead_size, source_kind)
 		queue_free()
 
 func _draw() -> void:

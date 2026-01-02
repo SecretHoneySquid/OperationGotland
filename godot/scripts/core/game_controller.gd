@@ -299,6 +299,36 @@ func deposit_credits(team_id: String, amount: int) -> void:
 		GameState.p2_credits += total
 		_income_accum_p2 += total
 
+func debug_add_credits(team_id: String, amount: int) -> void:
+	if amount == 0:
+		return
+	if team_id == "p1":
+		GameState.p1_credits += amount
+	else:
+		GameState.p2_credits += amount
+
+func debug_spawn_unit(team_id: String, unit_kind: String, count: int = 1, unit_type_id: String = "") -> int:
+	if count <= 0:
+		return 0
+	if GameState.winner != "":
+		return 0
+	var spawned := 0
+	for _i in range(count):
+		if unit_spawn_limit > 0 and _count_units(team_id) >= unit_spawn_limit:
+			break
+		var unit := _spawn_unit(team_id, unit_kind, null, unit_type_id)
+		if unit == null:
+			break
+		spawned += 1
+	return spawned
+
+func debug_clear_units() -> void:
+	var groups := ["units", "collectors", "missiles"]
+	for group_name in groups:
+		for node in get_tree().get_nodes_in_group(group_name):
+			if node != null and is_instance_valid(node):
+				node.queue_free()
+
 func request_resource_node(team_id: String) -> Dictionary:
 	var base := _start_p1 if team_id == "p1" else _start_p2
 	var best_index := -1
