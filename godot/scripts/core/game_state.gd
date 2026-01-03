@@ -1,5 +1,7 @@
 extends Node
 
+@export var map_path := "res://data/maps/test_map.json"
+
 var p1_credits := 500
 var p2_credits := 500
 var unit_count := 0

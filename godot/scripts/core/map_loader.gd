@@ -10,7 +10,7 @@ extends Node2D
 @export var show_map_bounds := true
 @export var map_fill := Color(0.18, 0.22, 0.17, 1.0)
 @export var map_outline := Color(0.1, 0.12, 0.1, 1.0)
-@export var render_2d := true
+@export var render_2d := false
 @export var show_facets := true
 @export var facet_size := 220.0:
 	set(value):
@@ -70,7 +70,46 @@ var _facets: Array = []
 
 func _ready() -> void:
 	add_to_group("map_loader")
+	# Prefer a centralized map selection from the autoload `GameState` when available
+	var gs := get_node_or_null("/root/GameState")
+	if gs != null:
+		map_path = gs.map_path
+
+	# If a 3D camera is present on the viewport, we're running the 3D main scene;
+	# disable the 2D map rendering to avoid overlaying the 3D terrain.
+	if Engine.has_singleton("SceneTree"):
+		var cam3d: Camera3D = null
+		if get_viewport() != null:
+			cam3d = get_viewport().get_camera_3d()
+		if cam3d != null:
+			render_2d = false
+
 	load_map(map_path)
+
+func _process(delta: float) -> void:
+	# Continuously ensure we don't draw the 2D map when a 3D camera is active
+	if get_tree() == null:
+		return
+	var cam3d: Camera3D = null
+	if get_viewport() != null:
+		cam3d = get_viewport().get_camera_3d()
+	if cam3d != null and render_2d:
+		render_2d = false
+		queue_redraw()
+	elif cam3d == null and not render_2d:
+		# If no 3D camera and this MapLoader instance is part of a 2D scene, enable rendering
+		# (some scenes explicitly set `render_2d` to true in the scene file; respect that)
+		# We only auto-enable if the node has a parent CanvasItem or is in a known 2D context.
+		var in_2d_context := false
+		var node := self
+		while node != null:
+			if node is CanvasItem:
+				in_2d_context = true
+				break
+			node = node.get_parent()
+		if in_2d_context:
+			render_2d = true
+			queue_redraw()
 
 func load_map(path: String) -> void:
 	var file := FileAccess.open(path, FileAccess.READ)
