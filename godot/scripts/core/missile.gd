@@ -21,6 +21,8 @@ signal impact(pos: Vector2, color: Color, warhead_size: String, source_kind: Str
 @export var splash_enabled := true
 @export var splash_damage_scale := 0.6
 @export var splash_radius := 0.0
+@export var visual_scene_path := ""
+@export var visual_base_radius := 1.0
 
 var target: Node2D
 var _velocity := Vector2.RIGHT
@@ -29,6 +31,7 @@ var _target_pos := Vector2.ZERO
 var _target_lost := false
 var _initial_distance := 0.0
 var _source_altitude_start := 1.0
+var _visual_node: Node2D
 
 const _WARHEAD_RADII = {
 	"small": 4.0,
@@ -50,6 +53,7 @@ func _ready() -> void:
 		_target_pos = target.global_position
 		_initial_distance = maxf(_origin.distance_to(_target_pos), 0.01)
 	_apply_warhead_settings()
+	_setup_visual()
 
 func _process(delta: float) -> void:
 	lifetime -= delta
@@ -78,6 +82,7 @@ func _process(delta: float) -> void:
 		_check_ground_hit()
 	_update_altitude_factor()
 	global_position += _velocity.normalized() * speed * delta
+	_update_visual_rotation()
 	queue_redraw()
 
 func _update_guidance(target_pos: Vector2, delta: float) -> void:
@@ -102,7 +107,7 @@ func _update_altitude_factor() -> void:
 func _check_hit(target_node: Node2D) -> void:
 	if global_position.distance_squared_to(target_node.global_position) <= hit_radius * hit_radius:
 		if target_node.has_method("take_damage"):
-			target_node.take_damage(damage)
+			target_node.take_damage(damage, "missile")
 		_apply_splash_damage(target_node)
 		emit_signal("impact", global_position, color, warhead_size, source_kind)
 		queue_free()
@@ -175,7 +180,7 @@ func _apply_splash_damage(primary: Node2D) -> void:
 			var falloff := clampf(1.0 - (dist / radius), 0.0, 1.0)
 			var amount := damage * splash_damage_scale * falloff
 			if amount > 0.0:
-				other.take_damage(amount)
+				other.take_damage(amount, "missile")
 
 func _can_damage(node: Node) -> bool:
 	if team_id == "":
@@ -184,3 +189,36 @@ func _can_damage(node: Node) -> bool:
 	if value is String:
 		return value != team_id
 	return true
+
+func _setup_visual() -> void:
+	if visual_scene_path == "":
+		return
+	var packed := load(visual_scene_path)
+	if packed == null:
+		push_warning("Missile: missing visual scene at %s" % visual_scene_path)
+		return
+	if packed is PackedScene:
+		var instance = packed.instantiate()
+		if instance is Node2D:
+			_visual_node = instance
+			add_child(_visual_node)
+			_visual_node.visible = render_2d
+			_update_visual_transform()
+	else:
+		push_warning("Missile: visual scene is not a PackedScene at %s" % visual_scene_path)
+
+func _update_visual_transform() -> void:
+	if _visual_node == null:
+		return
+	if visual_base_radius > 0.0:
+		var scale := 1.0 / visual_base_radius
+		_visual_node.scale = Vector2.ONE * scale
+	_visual_node.rotation = _velocity.angle()
+
+func _update_visual_rotation() -> void:
+	if _visual_node == null:
+		return
+	_visual_node.rotation = _velocity.angle()
+
+func set_visual_scene_path(path: String) -> void:
+	visual_scene_path = path

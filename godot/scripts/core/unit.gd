@@ -48,11 +48,12 @@ signal shot_fired(start_pos: Vector2, end_pos: Vector2, color: Color, width: flo
 @export var visual_base_radius := 10.0
 @export var visual_offset := Vector2.ZERO
 @export var render_2d := true
+@export var missile_visual_path := ""
 
 @export var aircraft_missile_capacity := 2
 @export var aircraft_gun_capacity := 20
 @export var aircraft_reload_time := 7.0
-@export var aircraft_missile_range := 12000.0
+@export var aircraft_missile_range := 2500.0  # Reduced from 12000
 @export var aircraft_missile_speed := 520.0
 @export var aircraft_missile_turn_rate := 6.0
 @export var aircraft_missile_damage := 32.0
@@ -74,6 +75,7 @@ signal shot_fired(start_pos: Vector2, end_pos: Vector2, color: Color, width: flo
 @export var aircraft_perimeter_padding := 60.0
 @export var aircraft_perimeter_forward_bias := 0.2
 @export var aircraft_loiter_reload_delay := 5.0
+@export var aircraft_retreat_duration := 3.0  # Time to retreat after firing missile
 @export var aircraft_turn_rate := 2.2
 @export var aircraft_circulate_speed_mult := 1.5
 @export var aircraft_engage_speed_mult := 2.0
@@ -127,6 +129,8 @@ var _aircraft_orbit_phase := 0.0
 var aircraft_altitude_factor := 1.0
 var aircraft_circulating := false
 var _aircraft_no_missile_timer := 0.0
+var _aircraft_retreat_timer := 0.0  # Timer for post-missile retreat behavior
+var _aircraft_retreat_direction := Vector2.ZERO  # Direction to flee when retreating
 var _aircraft_force_reload := false
 var _aircraft_landing_reserved := false
 var _aircraft_landing_on_path := false
@@ -183,8 +187,14 @@ func _exit_tree() -> void:
 		_release_airfield_slot()
 		_release_airfield_f35()
 
-func take_damage(amount: float) -> void:
-	hp = maxf(0.0, hp - amount)
+func take_damage(amount: float, attacker_type: String = "") -> void:
+	var final_damage := amount
+
+	# Aircraft take 90% less damage from infantry weapons (riflemen and snipers)
+	if (unit_type == "gripen" or unit_type == "f35") and (attacker_type == "rifle" or attacker_type == "sniper"):
+		final_damage *= 0.1
+
+	hp = maxf(0.0, hp - final_damage)
 	if hp <= 0.0:
 		queue_free()
 
@@ -297,6 +307,9 @@ func _update_aircraft_state(delta: float) -> void:
 				gun_target = shared
 	_set_aircraft_speed(1.0, false)
 	_update_aircraft_loiter_reload(delta, missile_target, gun_target)
+	# Update retreat timer
+	if _aircraft_retreat_timer > 0.0:
+		_aircraft_retreat_timer -= delta
 	if _update_aircraft_reload(delta):
 		_aircraft_missile_lock_timer = 0.0
 		_aircraft_missile_lock_id = 0
@@ -328,6 +341,14 @@ func _update_aircraft_state(delta: float) -> void:
 		var manual_target_pos := _resolve_target()
 		if manual_target_pos != Vector2.ZERO:
 			_move_toward_aircraft_target(manual_target_pos, delta)
+	elif _aircraft_retreat_timer > 0.0:
+		# Retreat after firing missile - fly away from target
+		_set_aircraft_speed(aircraft_engage_speed_mult, true)
+		if _aircraft_retreat_direction != Vector2.ZERO:
+			var retreat_target := global_position + (_aircraft_retreat_direction * 1000.0)
+			_move_toward_aircraft_target(retreat_target, delta)
+		else:
+			_move_toward_aircraft_loiter(delta)
 	elif missile_target != null and _aircraft_missile_lock_timer < aircraft_missile_lock_time:
 		_set_aircraft_speed(aircraft_engage_speed_mult, true)
 		_move_toward_aircraft_target(missile_target.global_position, delta)
@@ -347,7 +368,7 @@ func _update_aircraft_state(delta: float) -> void:
 	_sync_visual_rotation()
 
 func _update_aircraft_reload(delta: float) -> bool:
-	var needs_reload := _aircraft_force_reload or (aircraft_missile_ammo <= 0 and aircraft_gun_ammo <= 0)
+	var needs_reload := _aircraft_force_reload or aircraft_missile_ammo <= 0  # Reload when missiles depleted
 	if not _aircraft_reloading and not needs_reload:
 		return false
 	if not _aircraft_reloading:
@@ -810,8 +831,18 @@ func _fire_aircraft_missile(target: Node2D) -> void:
 	missile.target = target
 	missile.global_position = global_position + (_facing * (body_radius + 6.0))
 	missile.set_origin(global_position)
+	if missile_visual_path != "":
+		missile.visual_scene_path = missile_visual_path
+		missile.visual_base_radius = 10.0
 	if get_parent() != null:
 		get_parent().add_child(missile)
+	_aircraft_retreat_timer = aircraft_retreat_duration  # Start retreat after firing
+	# Set retreat direction: turn 120-180 degrees away from target
+	var to_target := (target.global_position - global_position).normalized()
+	var retreat_angle := randf_range(2.094, PI)  # 120 to 180 degrees
+	if randf() < 0.5:
+		retreat_angle = -retreat_angle
+	_aircraft_retreat_direction = to_target.rotated(retreat_angle)
 	aircraft_missile_ammo = maxi(0, aircraft_missile_ammo - 1)
 	_aircraft_missile_timer = aircraft_missile_cooldown
 	if aircraft_missile_ammo <= 0:
@@ -830,7 +861,7 @@ func _fire_aircraft_gun(target: Node) -> void:
 				final_damage *= damage_vs_infantry
 		elif target is Building or target is HQ:
 			final_damage *= damage_vs_structure
-		target.take_damage(final_damage)
+		target.take_damage(final_damage, unit_type)
 	if shot_tracer_enabled and target is Node2D:
 		var target_pos: Vector2 = (target as Node2D).global_position
 		_spawn_tracer(target_pos)
@@ -989,7 +1020,7 @@ func _attack(target: Node) -> void:
 				final_damage *= damage_vs_infantry
 		elif target is Building or target is HQ:
 			final_damage *= damage_vs_structure
-		target.take_damage(final_damage)
+		target.take_damage(final_damage, unit_type)
 	if shot_tracer_enabled and target is Node2D:
 		var target_pos: Vector2 = (target as Node2D).global_position
 		_spawn_tracer(target_pos)

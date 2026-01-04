@@ -1,2 +1,2 @@
-res://scripts/core/map_loader.gd
-res://scripts/core/hide_2d_wrapper.gd
+res://scripts/rendering/sync/VisualUnitBuilder.gd
+res://scripts/visuals/visual_sync_3d.gd

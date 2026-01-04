@@ -12,12 +12,13 @@ config_version=5
 
 config/name="Operation Gotland RTS Prototype"
 config/description="Auto-push RTS prototype."
-run/main_scene="res://scenes/game/main_3d.tscn"
+run/main_scene="res://scenes/game/main.tscn"
 config/features=PackedStringArray("4.5")
 
 [autoload]
 
 GameState="*res://scripts/core/game_state.gd"
+ModelPaths="*res://scripts/registry/ModelPaths.gd"
 
 [display]
 

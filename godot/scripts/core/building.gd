@@ -96,7 +96,7 @@ func _exit_tree() -> void:
 		if turret is Node and is_instance_valid(turret):
 			turret.queue_free()
 
-func take_damage(amount: float) -> void:
+func take_damage(amount: float, attacker_type: String = "") -> void:
 	if hp <= 0.0:
 		return
 	hp = maxf(0.0, hp - amount)

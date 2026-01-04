@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python:*)",
+      "Bash(grep:*)",
+      "Bash(cat:*)",
+      "Bash(find:*)",
+      "Bash(test:*)",
+      "Bash(du:*)",
+      "Bash(ls:*)",
+      "Bash(wc:*)",
+      "Bash(gdscript-parser:*)"
+    ]
+  }
+}

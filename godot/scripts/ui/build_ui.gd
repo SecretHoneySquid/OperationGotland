@@ -346,13 +346,13 @@ func _build_ui() -> void:
 	_airfield_panel.add_child(_airfield_name_label)
 
 	_airfield_f35_button = Button.new()
-	_airfield_f35_button.text = "Buy F-35"
+	_airfield_f35_button.text = "Upgrade Aircraft"
 	_airfield_f35_button.pressed.connect(func():
 		if _game_controller == null:
 			return
 		if _selected_airfield == null or not is_instance_valid(_selected_airfield):
 			return
-		_game_controller.buy_airfield_f35("p1", _selected_airfield)
+		_game_controller.upgrade_airfield_aircraft("p1", _selected_airfield)
 	)
 	_airfield_panel.add_child(_airfield_f35_button)
 
@@ -524,28 +524,27 @@ func _update_airfield_panel() -> void:
 			_selected_airfield.global_position.y
 		]
 	if _airfield_f35_button != null and _game_controller != null:
-		var cost := _game_controller.f35_cost
-		var label := "Buy F-35 ($%d)" % cost
+		var current_tier := _game_controller.get_airfield_aircraft_tier(_selected_airfield)
+		var cost := _game_controller.aircraft_upgrade_cost
+		var label := ""
 		var disabled := false
+
 		if _selected_airfield.team_id != "p1":
 			disabled = true
-		var f35_id := int(_selected_airfield.get_meta("f35_active", 0))
-		if f35_id > 0:
-			var inst = instance_from_id(f35_id)
-			if inst != null and is_instance_valid(inst):
-				label = "F-35 Active"
-				disabled = true
-			else:
-				_selected_airfield.set_meta("f35_active", 0)
-		if _game_controller.f35_airfield_cap > 0 and disabled == false:
-			if f35_id > 0:
-				disabled = true
-		if _game_controller.airfield_aircraft_cap > 0 and disabled == false:
-			var current := int(_selected_airfield.get_meta("aircraft_active", 0))
-			if current >= _game_controller.airfield_aircraft_cap:
-				label = "Airfield Full"
-				disabled = true
+			label = "Enemy Airfield"
+		elif current_tier == "f16":
+			label = "Upgrade to Gripen ($%d)" % cost
+		elif current_tier == "gripen":
+			label = "Upgrade to F-22 ($%d)" % cost
+		elif current_tier == "f22":
+			label = "Max Tier (F-22)"
+			disabled = true
+		else:
+			label = "Unknown Tier"
+			disabled = true
+
 		if GameState.p1_credits < cost and disabled == false:
 			disabled = true
+
 		_airfield_f35_button.text = label
 		_airfield_f35_button.disabled = disabled

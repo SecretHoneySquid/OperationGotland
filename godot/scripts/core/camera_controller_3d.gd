@@ -6,9 +6,9 @@ extends Node3D
 @export var focus_use_build_zone := true
 @export var pan_speed := 900.0
 @export var pan_drag_speed := 1.0
-@export var zoom_step := 6.0
+@export var zoom_step := 15.0
 @export var min_distance := 180.0
-@export var max_distance := 900.0
+@export var max_distance := 18000.0
 @export var pitch_deg := 45.0
 @export var rotate_drag_speed := 0.3
 

@@ -61,7 +61,7 @@ extends Node2D
 @export var aircraft_attack_range := 180.0
 @export var aircraft_attack_cooldown := 0.12
 @export var aircraft_body_radius := 12.0
-@export var aircraft_vision_radius := 280.0
+@export var aircraft_vision_radius := 560.0  # Doubled
 @export var aircraft_shot_width := 2.6
 @export var aircraft_shot_lifetime := 0.16
 @export var aircraft_gun_ammo := 20
@@ -69,7 +69,7 @@ extends Node2D
 @export var aircraft_missile_damage := 32.0
 @export var aircraft_missile_speed := 520.0
 @export var aircraft_missile_turn_rate := 6.0
-@export var aircraft_missile_range := 12000.0
+@export var aircraft_missile_range := 2500.0  # Reduced from 12000 - planes were targeting too far away
 @export var aircraft_missile_cooldown := 2.4
 @export var aircraft_missile_hit_radius := 16.0
 @export var aircraft_missile_warhead_size := "large"
@@ -78,6 +78,7 @@ extends Node2D
 @export var aircraft_missile_lifetime := 24.0
 @export var aircraft_reload_time := 7.0
 @export var aircraft_missile_color := Color(1.0, 0.55, 0.25, 1.0)
+@export var aircraft_upgrade_cost := 500
 @export var f35_cost := 100
 @export var f35_airfield_cap := 1
 
@@ -108,7 +109,7 @@ extends Node2D
 @export var p1_collector_color := Color(0.9, 0.85, 0.2, 1.0)
 @export var p2_collector_color := Color(0.9, 0.6, 0.2, 1.0)
 
-@export var show_rally_marker := true
+@export var show_rally_marker := false  # Disabled - was showing as diagonal line
 @export var rally_marker_radius := 12.0
 @export var rally_marker_outline := Color(0.9, 0.9, 0.9, 0.8)
 @export var rally_line_color := Color(0.8, 0.8, 0.8, 0.4)
@@ -287,6 +288,33 @@ func buy_airfield_f35(team_id: String, airfield: Building) -> bool:
 	airfield.set_meta("f35_active", unit.get_instance_id())
 	return true
 
+func upgrade_airfield_aircraft(team_id: String, airfield: Building) -> bool:
+	if airfield == null or not is_instance_valid(airfield):
+		return false
+	if airfield.build_id != "airfield" or airfield.team_id != team_id:
+		return false
+	if not _has_team_credits(team_id, aircraft_upgrade_cost):
+		return false
+	var current_tier := str(airfield.get_meta("aircraft_tier", "f16"))
+	var new_tier := ""
+	if current_tier == "f16":
+		new_tier = "gripen"
+	elif current_tier == "gripen":
+		new_tier = "f22"
+	else:
+		return false
+	_deduct_team_credits(team_id, aircraft_upgrade_cost)
+	airfield.set_meta("aircraft_tier", new_tier)
+	return true
+
+func get_airfield_aircraft_tier(airfield: Building) -> String:
+	if airfield == null or not is_instance_valid(airfield):
+		return "f16"
+	# Ensure the tier is set (for backwards compatibility with old saves)
+	if not airfield.has_meta("aircraft_tier"):
+		airfield.set_meta("aircraft_tier", "f16")
+	return str(airfield.get_meta("aircraft_tier", "f16"))
+
 func deposit_credits(team_id: String, amount: int) -> void:
 	if amount <= 0:
 		return
@@ -422,6 +450,7 @@ func _spawn_building(team_id: String, build_id: String, pos: Vector2) -> void:
 	elif build_id == "airfield":
 		building.size = Vector2(432, 288)
 		building.fill_color = Color(0.28, 0.38, 0.55, 1.0)
+		building.set_meta("aircraft_tier", "f16")
 		building.set_meta("aircraft_active", 0)
 		building.set_meta("aircraft_landing", 0)
 	elif build_id == "supply":
@@ -539,7 +568,8 @@ func _spawn_aircraft(team_id: String) -> bool:
 	var airfield := _get_airfield_for_spawn(team_id)
 	if airfield == null:
 		return false
-	_spawn_unit(team_id, "aircraft", airfield, "f16")
+	var aircraft_type := get_airfield_aircraft_tier(airfield)
+	_spawn_unit(team_id, "aircraft", airfield, aircraft_type)
 	_register_airfield_aircraft(airfield)
 	return true
 
@@ -672,8 +702,9 @@ func _spawn_unit(team_id: String, unit_kind: String, source_building: Building =
 			unit.aircraft_home = null
 			unit.aircraft_home_pos = unit.home_pos
 		unit.position = _spawn_at_airfield(team_id, airfield)
-		unit.visual_scene_path = _get_unit_visual_path("aircraft")
+		unit.visual_scene_path = _get_unit_visual_path("aircraft", type_id)
 		unit.visual_base_radius = 20.0
+		unit.missile_visual_path = _get_missile_visual_path(type_id, "ground")
 	else:
 		var barracks := source_building
 		var production_type := "mixed"
@@ -1312,6 +1343,10 @@ func _resolve_aircraft_type(requested: String) -> String:
 		return "f16"
 	if requested == "f16":
 		return "f16"
+	if requested == "gripen":
+		return "gripen"
+	if requested == "f22":
+		return "f22"
 	if requested == "f35":
 		return "f35"
 	return "f16"
@@ -1413,6 +1448,105 @@ func _get_vehicle_def(type_id: String) -> Dictionary:
 
 func _get_aircraft_def(type_id: String) -> Dictionary:
 	match type_id:
+		"f16":
+			return {
+				"range_role": "long",
+				"range_multiplier": 1.0,
+				"max_hp": aircraft_hp,
+				"damage": aircraft_damage,
+				"cooldown": aircraft_attack_cooldown,
+				"speed": aircraft_speed,
+				"attack_range": aircraft_attack_range,
+				"body_radius": aircraft_body_radius,
+				"vision_radius": aircraft_vision_radius,
+				"shot_color": Color(1.0, 0.9, 0.75, 0.85),
+				"shot_width": aircraft_shot_width,
+				"shot_lifetime": aircraft_shot_lifetime,
+				"gun_ammo": aircraft_gun_ammo,
+				"missile_ammo": aircraft_missile_ammo,
+				"missile_damage": aircraft_missile_damage,
+				"missile_speed": aircraft_missile_speed,
+				"missile_turn_rate": aircraft_missile_turn_rate,
+				"missile_range": aircraft_missile_range,
+				"missile_cooldown": aircraft_missile_cooldown,
+				"missile_hit_radius": aircraft_missile_hit_radius,
+				"missile_warhead_size": aircraft_missile_warhead_size,
+				"missile_splash_radius": aircraft_missile_splash_radius,
+				"missile_splash_scale": aircraft_missile_splash_scale,
+				"missile_lifetime": aircraft_missile_lifetime,
+				"reload_time": aircraft_reload_time,
+				"missile_color": aircraft_missile_color,
+				"prefers_vehicle": true,
+				"damage_vs_infantry": 0.6,
+				"damage_vs_vehicle": 1.6,
+				"damage_vs_structure": 1.0,
+			}
+		"gripen":
+			return {
+				"range_role": "long",
+				"range_multiplier": 1.0,
+				"max_hp": aircraft_hp * 1.1,
+				"damage": aircraft_damage * 1.15,
+				"cooldown": aircraft_attack_cooldown * 0.95,
+				"speed": aircraft_speed * 1.05,
+				"attack_range": aircraft_attack_range,
+				"body_radius": aircraft_body_radius,
+				"vision_radius": aircraft_vision_radius,
+				"shot_color": Color(1.0, 0.9, 0.75, 0.85),
+				"shot_width": aircraft_shot_width,
+				"shot_lifetime": aircraft_shot_lifetime,
+				"gun_ammo": aircraft_gun_ammo + 5,
+				"missile_ammo": aircraft_missile_ammo,
+				"missile_damage": aircraft_missile_damage * 1.1,
+				"missile_speed": aircraft_missile_speed,
+				"missile_turn_rate": aircraft_missile_turn_rate,
+				"missile_range": aircraft_missile_range,
+				"missile_cooldown": aircraft_missile_cooldown,
+				"missile_hit_radius": aircraft_missile_hit_radius,
+				"missile_warhead_size": aircraft_missile_warhead_size,
+				"missile_splash_radius": aircraft_missile_splash_radius,
+				"missile_splash_scale": aircraft_missile_splash_scale,
+				"missile_lifetime": aircraft_missile_lifetime,
+				"reload_time": aircraft_reload_time * 0.9,
+				"missile_color": aircraft_missile_color,
+				"prefers_vehicle": true,
+				"damage_vs_infantry": 0.6,
+				"damage_vs_vehicle": 1.6,
+				"damage_vs_structure": 1.1,
+			}
+		"f22":
+			return {
+				"range_role": "long",
+				"range_multiplier": 1.0,
+				"max_hp": aircraft_hp * 1.25,
+				"damage": aircraft_damage * 1.3,
+				"cooldown": aircraft_attack_cooldown * 0.9,
+				"speed": aircraft_speed * 1.1,
+				"attack_range": aircraft_attack_range,
+				"body_radius": aircraft_body_radius,
+				"vision_radius": aircraft_vision_radius,
+				"shot_color": Color(1.0, 0.9, 0.75, 0.85),
+				"shot_width": aircraft_shot_width,
+				"shot_lifetime": aircraft_shot_lifetime,
+				"gun_ammo": aircraft_gun_ammo + 10,
+				"missile_ammo": aircraft_missile_ammo + 1,
+				"missile_damage": aircraft_missile_damage * 1.2,
+				"missile_speed": aircraft_missile_speed * 1.05,
+				"missile_turn_rate": aircraft_missile_turn_rate,
+				"missile_range": aircraft_missile_range,
+				"missile_cooldown": aircraft_missile_cooldown * 0.95,
+				"missile_hit_radius": aircraft_missile_hit_radius,
+				"missile_warhead_size": aircraft_missile_warhead_size,
+				"missile_splash_radius": aircraft_missile_splash_radius,
+				"missile_splash_scale": aircraft_missile_splash_scale,
+				"missile_lifetime": aircraft_missile_lifetime,
+				"reload_time": aircraft_reload_time * 0.85,
+				"missile_color": aircraft_missile_color,
+				"prefers_vehicle": true,
+				"damage_vs_infantry": 0.6,
+				"damage_vs_vehicle": 1.6,
+				"damage_vs_structure": 1.1,
+			}
 		"f35":
 			return {
 				"range_role": "long",
@@ -1528,17 +1662,31 @@ func get_vehicle_type_options() -> Array:
 		{"id": "ifv", "name": "IFV"},
 	]
 
-func _get_unit_visual_path(unit_kind: String) -> String:
+func _get_unit_visual_path(unit_kind: String, unit_type: String = "") -> String:
 	match unit_kind:
 		"infantry":
 			return "res://scenes/units/infantry_visual.tscn"
 		"vehicle":
 			return "res://scenes/units/vehicle_visual.tscn"
 		"aircraft":
-			return "res://scenes/units/aircraft_visual.tscn"
+			return _get_aircraft_visual_path(unit_type)
 		"collector":
 			return "res://scenes/units/collector_visual.tscn"
 	return ""
+
+func _get_aircraft_visual_path(aircraft_type: String) -> String:
+	match aircraft_type:
+		"gripen":
+			return "res://assets/models/Gripen/Gripen-Plane.glb"
+		"f16":
+			return "res://assets/models/F16/F16-Plane.glb"
+		"f22":
+			return "res://assets/models/F22/F22-Plane.glb"
+		"f35":
+			# F-35 uses the generic 2D visual for now
+			return "res://scenes/units/aircraft_visual.tscn"
+	# Default to generic 2D aircraft visual
+	return "res://scenes/units/aircraft_visual.tscn"
 
 func _get_building_visual_path(build_id: String) -> String:
 	match build_id:
@@ -1554,6 +1702,21 @@ func _get_building_visual_path(build_id: String) -> String:
 			return "res://scenes/buildings/power_visual.tscn"
 		"command_center":
 			return "res://scenes/buildings/command_center_visual.tscn"
+	return ""
+
+func _get_missile_visual_path(aircraft_type: String, target_type: String = "ground") -> String:
+	# For now, we only support air-to-ground missiles
+	# target_type can be "ground" or "air" for future expansion
+	match aircraft_type:
+		"gripen":
+			return "res://assets/models/Gripen/Gripen-ATG.glb"
+		"f16":
+			return "res://assets/models/F16/F16-ATG.glb"
+		"f22":
+			return "res://assets/models/F22/F22-ATG.glb"
+		"f35":
+			# F-35 doesn't have assets yet, return empty for now
+			return ""
 	return ""
 
 func _get_turret_visual_path(build_id: String) -> String:

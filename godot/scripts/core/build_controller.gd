@@ -171,6 +171,7 @@ func _ready() -> void:
 	_world_input = _find_world_input()
 
 func _process(_delta: float) -> void:
+# DEBUG: Press B key to force build mode for testing	if Input.is_key_pressed(KEY_B):		if _active_build_id == "":			start_placement("barracks")			print("[BuildController] BUILD MODE ACTIVATED - Press B was detected")	# DEBUG: Press ESC to cancel build mode	if Input.is_key_pressed(KEY_ESCAPE):		if _active_build_id != "":			cancel_placement()			print("[BuildController] BUILD MODE CANCELLED")
 	if _active_build_id == "":
 		return
 	_ghost_pos = _get_mouse_world_pos()
@@ -276,6 +277,7 @@ func _try_place() -> void:
 	if _active_build_id == "factory":
 		building.vehicle_production_type = "mixed"
 	if _active_build_id == "airfield":
+		building.set_meta("aircraft_tier", "f16")
 		building.set_meta("aircraft_active", 0)
 		building.set_meta("aircraft_landing", 0)
 	building.position = _ghost_pos

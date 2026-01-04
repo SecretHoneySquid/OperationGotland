@@ -7,13 +7,14 @@ signal building_selected(building: Building)
 @export var build_controller_path := NodePath("../BuildController")
 @export var game_controller_path := NodePath("../GameController")
 @export var ui_block_rect := Rect2(0.0, 100.0, 280.0, 820.0)
-@export var selection_radius := 16.0
+@export var selection_radius := 32.0
 @export var drag_threshold := 6.0
 @export var selection_fill := Color(0.2, 0.8, 1.0, 0.15)
 @export var selection_outline := Color(0.2, 0.8, 1.0, 0.7)
 @export var move_spread := 18.0
 @export var render_2d := true
 @export var command_drag_threshold := 8.0
+@export var selection_box_overlay_path := NodePath("../UI/SelectionBoxOverlay")
 
 var _build_controller: BuildController
 var _game_controller: GameController
@@ -26,10 +27,12 @@ var _rmb_dragging := false
 var _rmb_start := Vector2.ZERO
 var _rng := RandomNumberGenerator.new()
 var _world_input: Node
+var _selection_box_overlay: Control
 
 func _ready() -> void:
 	_build_controller = get_node_or_null(build_controller_path) as BuildController
 	_game_controller = get_node_or_null(game_controller_path) as GameController
+	_selection_box_overlay = get_node_or_null(selection_box_overlay_path) as Control
 	_rng.randomize()
 	_world_input = _find_world_input()
 
@@ -45,6 +48,8 @@ func _unhandled_input(event: InputEvent) -> void:
 			_dragging = true
 			_drag_start = _screen_to_world(event.position)
 			_drag_end = _drag_start
+			if _selection_box_overlay != null and _selection_box_overlay.has_method("start_drag"):
+				_selection_box_overlay.start_drag(event.position)
 			queue_redraw()
 		else:
 			if not _dragging:
@@ -52,9 +57,13 @@ func _unhandled_input(event: InputEvent) -> void:
 			_dragging = false
 			_drag_end = _screen_to_world(event.position)
 			_finalize_selection(event)
+			if _selection_box_overlay != null and _selection_box_overlay.has_method("end_drag"):
+				_selection_box_overlay.end_drag()
 			queue_redraw()
 	elif event is InputEventMouseMotion and _dragging:
 		_drag_end = _screen_to_world(event.position)
+		if _selection_box_overlay != null and _selection_box_overlay.has_method("update_drag"):
+			_selection_box_overlay.update_drag(event.position)
 		queue_redraw()
 	elif event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_RIGHT:
 		if event.pressed:

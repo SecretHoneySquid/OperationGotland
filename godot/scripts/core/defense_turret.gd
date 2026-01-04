@@ -134,7 +134,7 @@ func _fire_hitscan() -> void:
 	else:
 		final_damage *= damage_vs_structure
 	if _target.has_method("take_damage"):
-		_target.take_damage(final_damage)
+		_target.take_damage(final_damage, "turret")
 	if shot_tracer_enabled and _target is Node2D:
 		var target_pos: Vector2 = (_target as Node2D).global_position
 		_spawn_tracer(target_pos)

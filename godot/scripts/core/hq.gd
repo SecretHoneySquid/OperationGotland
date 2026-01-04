@@ -47,7 +47,7 @@ func _ready() -> void:
 		add_child(light)
 	_setup_visual()
 
-func take_damage(amount: float) -> void:
+func take_damage(amount: float, attacker_type: String = "") -> void:
 	if hp <= 0.0:
 		return
 	hp = maxf(0.0, hp - amount)

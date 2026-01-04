@@ -6,11 +6,11 @@ extends Node3D
 @export var aircraft_height_smooth := 4.0
 @export var aircraft_follow_terrain := false
 @export var aircraft_base_height := 220.0
-@export var aircraft_model_path := "res://gripen.glb"
+@export var aircraft_model_path := "res://assets/models/gripen.glb"
 @export var aircraft_model_scale := 1.0
 @export var aircraft_model_rotation := Vector3(0.0, 90.0, 0.0)
 @export var aircraft_model_offset := Vector3.ZERO
-@export var aircraft_model_path_f35 := "res://f-35_lightning_ii_-_fighter_jet_-_free.glb"
+@export var aircraft_model_path_f35 := "res://assets/models/f-35_lightning_ii_-_fighter_jet_-_free.glb"
 @export var aircraft_model_scale_f35 := 1.0
 @export var aircraft_model_rotation_f35 := Vector3(0.0, 90.0, 0.0)
 @export var aircraft_model_offset_f35 := Vector3.ZERO
@@ -39,7 +39,7 @@ extends Node3D
 @export var health_bar_offset := 8.0
 @export var health_bar_color := Color(0.2, 0.85, 0.25, 0.9)
 @export var health_bar_back := Color(0.12, 0.12, 0.12, 0.8)
-@export var barracks_model_path := "res://barracks.glb"
+@export var barracks_model_path := "res://assets/models/barracks.glb"
 @export var barracks_model_scale := 1.0
 @export var barracks_model_rotation := Vector3(0.0, -90.0, 0.0)
 @export var barracks_compound_enabled := false
@@ -58,9 +58,9 @@ extends Node3D
 	"res://assets/vendor/quaternius_ultimate_buildings/Models with Materials/FBX/2Story_Columns_Mat.fbx",
 	"res://assets/vendor/quaternius_ultimate_buildings/Models with Materials/FBX/1Story_RoundRoof_Mat.fbx",
 ])
-@export var factory_model_path := "res://factory.glb"
+@export var factory_model_path := "res://assets/models/factory.glb"
 @export var factory_model_scale := 1.0
-@export var airfield_model_path := "res://airfield.glb"
+@export var airfield_model_path := "res://assets/models/airfield.glb"
 @export var airfield_model_scale := 1.0
 @export var airfield_runway_color := Color(0.12, 0.12, 0.14, 1.0)
 @export var airfield_marking_color := Color(0.9, 0.9, 0.9, 0.85)
@@ -100,7 +100,7 @@ extends Node3D
 @export var ghost_y_offset := 0.2
 @export var ghost_valid_color := Color(0.2, 0.9, 0.2, 0.35)
 @export var ghost_invalid_color := Color(0.95, 0.75, 0.2, 0.35)
-@export var show_build_zone := true
+@export var show_build_zone := false  # Disabled
 @export var build_zone_team_id := "p1"
 @export var build_zone_height := 0.4
 @export var build_zone_y_offset := 0.05
@@ -166,8 +166,8 @@ extends Node3D
 @export var unit_health_offset := 6.0
 @export var unit_health_width_scale := 2.4
 @export var selection_ring_color := Color(0.2, 0.9, 1.0, 0.75)
-@export var selection_ring_height := 0.12
-@export var selection_ring_thickness := 0.18
+@export var selection_ring_height := 1.5
+@export var selection_ring_thickness := 0.5
 @export var selection_ring_vehicle_scale := 1.5
 @export var selection_ring_infantry_scale := 1.1
 @export var selection_ring_use_unit_color := true
@@ -177,7 +177,7 @@ extends Node3D
 @export var turret_range_thickness := 0.8
 @export var turret_range_dash_count := 64
 @export var turret_range_dash_ratio := 0.55
-@export var show_build_zone_outline := true
+@export var show_build_zone_outline := false  # Disabled - was showing as diagonal line
 @export var build_zone_outline_color := Color(0.1, 0.8, 0.3, 0.6)
 @export var build_zone_outline_width := 4.0
 @export var build_zone_outline_height := 0.6
@@ -358,11 +358,22 @@ func _build_unit_proxy(proxy: Node3D, unit) -> void:
 		proxy.add_child(airframe)
 		proxy.set_meta("airframe", airframe)
 		var type_id := str(_get_value(unit, "unit_type", ""))
-		var model_path := aircraft_model_path
+		# Use visual_scene_path from unit if available, otherwise fall back to hardcoded paths
+		var visual_path := str(_get_value(unit, "visual_scene_path", ""))
+		var model_path := visual_path if visual_path != "" else aircraft_model_path
 		var model_scale := aircraft_model_scale
 		var model_rotation := aircraft_model_rotation
 		var model_offset := aircraft_model_offset
-		if type_id == "f35" and aircraft_model_path_f35 != "":
+
+		# Per-aircraft-type rotation settings
+		if type_id == "f16":
+			model_rotation = Vector3(0.0, 270.0, 0.0)  # F16 rotated 180 degrees from original
+		elif type_id == "gripen":
+			model_rotation = Vector3(0.0, 90.0, 0.0)
+		elif type_id == "f22":
+			model_rotation = Vector3(0.0, 0.0, 0.0)  # F22 rotated 90 degrees left from gripen
+		# Legacy fallback for F35
+		elif type_id == "f35" and visual_path == "" and aircraft_model_path_f35 != "":
 			model_path = aircraft_model_path_f35
 			model_scale = aircraft_model_scale_f35
 			model_rotation = aircraft_model_rotation_f35
@@ -463,7 +474,7 @@ func _build_collector_proxy(proxy: Node3D, collector) -> void:
 func _build_missile_proxy(proxy: Node3D, missile) -> void:
 	var base_color := _get_color(missile, "color", Color(0.9, 0.55, 0.2, 1.0))
 	var scale := _get_missile_scale(missile)
-	if _add_missile_model(proxy, base_color, scale):
+	if _add_missile_model(proxy, missile, base_color, scale):
 		return
 	var body_radius := missile_body_radius * scale
 	var body_length := missile_body_length * scale
@@ -1387,8 +1398,12 @@ func _add_building_props(proxy: Node3D, build_id: String, size2d: Vector2, heigh
 				_add_box_detail(proxy, Vector3(size2d.x * 0.2, height * 0.12, size2d.y * 0.2), dark,
 					Vector3(0.0, height * 0.06, size2d.y * 0.32))
 
-func _add_missile_model(proxy: Node3D, base_color: Color, scale: float) -> bool:
-	if missile_model_path == "" or not ResourceLoader.exists(missile_model_path):
+func _add_missile_model(proxy: Node3D, missile, base_color: Color, scale: float) -> bool:
+	# Use visual_scene_path from missile if available, otherwise fall back to hardcoded path
+	var visual_path := str(_get_value(missile, "visual_scene_path", ""))
+	var model_path := visual_path if visual_path != "" else missile_model_path
+
+	if model_path == "" or not ResourceLoader.exists(model_path):
 		return false
 	var target_size := Vector2(
 		maxf(0.5, missile_body_radius * 2.6 * scale),
@@ -1396,7 +1411,7 @@ func _add_missile_model(proxy: Node3D, base_color: Color, scale: float) -> bool:
 	)
 	var model := _add_scene_model_instance(
 		proxy,
-		missile_model_path,
+		model_path,
 		target_size,
 		0.0,
 		missile_model_scale
