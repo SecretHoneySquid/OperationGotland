@@ -9,7 +9,10 @@
       "Bash(du:*)",
       "Bash(ls:*)",
       "Bash(wc:*)",
-      "Bash(gdscript-parser:*)"
+      "Bash(gdscript-parser:*)",
+      "Bash(\"C:\\\\Program Files\\\\Godot_v4.3-stable_win64.exe\\\\Godot_v4.3-stable_win64.exe\" --headless --check-only --path .)",
+      "Bash(git config:*)",
+      "Bash(rm:*)"
     ]
   }
 }

@@ -25,7 +25,7 @@ extends Node2D
 @export var factory_vehicle_rate := 0.25
 @export var airfield_aircraft_rate := 0.2
 @export var airfield_aircraft_cap := 3
-@export var airfield_landing_cap := 2
+@export var airfield_landing_cap := 4
 @export var infantry_unit_cost := 25
 @export var vehicle_unit_cost := 60
 @export var aircraft_unit_cost := 120
@@ -568,8 +568,31 @@ func _spawn_aircraft(team_id: String) -> bool:
 	var airfield := _get_airfield_for_spawn(team_id)
 	if airfield == null:
 		return false
+
+	# Pre-find an available parking slot before spawning
+	var slot_map_value: Variant = airfield.get_meta("aircraft_landing_slots", {})
+	var slot_map: Dictionary = slot_map_value if slot_map_value is Dictionary else {}
+	var assigned_slot := -1
+	for i in range(4):
+		if not slot_map.has(i):
+			assigned_slot = i
+			break
+
+	# Store the slot temporarily so _spawn_at_airfield and the unit can use it
+	if assigned_slot >= 0:
+		airfield.set_meta("_spawn_slot_temp", assigned_slot)
+		airfield.set_meta("_spawn_slot_reserved", true)
+
 	var aircraft_type := get_airfield_aircraft_tier(airfield)
-	_spawn_unit(team_id, "aircraft", airfield, aircraft_type)
+	var unit := _spawn_unit(team_id, "aircraft", airfield, aircraft_type)
+
+	# Reserve the slot for this unit (after unit is added to tree)
+	if unit != null and airfield != null and assigned_slot >= 0:
+		slot_map[assigned_slot] = unit.get_instance_id()
+		airfield.set_meta("aircraft_landing_slots", slot_map)
+		airfield.remove_meta("_spawn_slot_temp")
+		airfield.remove_meta("_spawn_slot_reserved")
+
 	_register_airfield_aircraft(airfield)
 	return true
 
@@ -698,6 +721,14 @@ func _spawn_unit(team_id: String, unit_kind: String, source_building: Building =
 		if airfield != null and is_instance_valid(airfield):
 			unit.aircraft_home = airfield
 			unit.aircraft_home_pos = airfield.global_position
+			# Check if this unit is spawning on the runway with a reserved slot
+			if airfield.has_meta("_spawn_slot_reserved"):
+				var slot_id := int(airfield.get_meta("_spawn_slot_temp", -1))
+				print("[Spawn] Airfield has reserved slot: ", slot_id)
+				if slot_id >= 0:
+					unit._aircraft_landing_slot = slot_id
+					unit._aircraft_landing_reserved = true
+					print("[Spawn] Assigned slot ", slot_id, " to aircraft BEFORE _ready")
 		else:
 			unit.aircraft_home = null
 			unit.aircraft_home_pos = unit.home_pos
@@ -766,7 +797,33 @@ func _spawn_at_factory(team_id: String, factory: Building = null) -> Vector2:
 
 func _spawn_at_airfield(team_id: String, airfield: Building = null) -> Vector2:
 	if airfield != null and is_instance_valid(airfield):
-		return _offset_spawn(airfield.global_position)
+		# Spawn aircraft on runway parking spot instead of in the air
+		var runway_dir := Vector2(1.0, 0.0) if team_id == "p1" else Vector2(-1.0, 0.0)
+		var size_value: Variant = airfield.get("size")
+		var size2d: Vector2 = size_value if size_value is Vector2 else Vector2.ZERO
+
+		# Calculate spawn position at the start of the runway (opposite end from touchdown)
+		# Touchdown is at +0.5 * size.x, so spawn at -0.5 * size.x for full runway length
+		var offset_ratio := 0.0  # aircraft_runway_offset_ratio (usually 0)
+		var lateral := Vector2(-runway_dir.y, runway_dir.x).normalized()
+		var runway_offset: Vector2 = lateral * (size2d.y * offset_ratio) if size2d != Vector2.ZERO else Vector2.ZERO
+		var runway_start: Vector2 = airfield.global_position + runway_offset
+		if size2d != Vector2.ZERO:
+			# Spawn at the opposite end of the runway from touchdown
+			runway_start = airfield.global_position - (runway_dir * (size2d.x * 0.5)) + runway_offset
+
+		# Get the pre-assigned slot from temporary metadata
+		var slot_index := int(airfield.get_meta("_spawn_slot_temp", 0))
+
+		# Calculate lateral offset for parking spot
+		var spacing := 32.0  # aircraft_landing_slot_spacing
+		var center_index := 1.5  # (4-1)/2 for 4 slots
+		var offset_amount := (float(slot_index) - center_index) * spacing
+		var lateral_offset := lateral * offset_amount
+
+		# Final parking position at start of runway
+		var parking_pos: Vector2 = runway_start + lateral_offset
+		return parking_pos
 	return _spawn_at_building(team_id, "airfield", _start_p1 if team_id == "p1" else _start_p2)
 
 func _spawn_at_building(team_id: String, build_id: String, fallback: Vector2) -> Vector2:
@@ -1677,7 +1734,7 @@ func _get_unit_visual_path(unit_kind: String, unit_type: String = "") -> String:
 func _get_aircraft_visual_path(aircraft_type: String) -> String:
 	match aircraft_type:
 		"gripen":
-			return "res://assets/models/Gripen/Gripen-Plane.glb"
+			return "res://assets/models/gripen.glb"
 		"f16":
 			return "res://assets/models/F16/F16-Plane.glb"
 		"f22":

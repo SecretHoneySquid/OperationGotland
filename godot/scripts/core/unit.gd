@@ -51,14 +51,14 @@ signal shot_fired(start_pos: Vector2, end_pos: Vector2, color: Color, width: flo
 @export var missile_visual_path := ""
 
 @export var aircraft_missile_capacity := 2
-@export var aircraft_gun_capacity := 20
-@export var aircraft_reload_time := 7.0
+@export var aircraft_gun_capacity := 0  # Guns disabled for aircraft
+@export var aircraft_reload_time := 15.0  # Increased from 7.0 for more realistic rearm time
 @export var aircraft_missile_range := 2500.0  # Reduced from 12000
 @export var aircraft_missile_speed := 520.0
 @export var aircraft_missile_turn_rate := 6.0
 @export var aircraft_missile_damage := 32.0
 @export var aircraft_missile_cooldown := 2.4
-@export var aircraft_missile_lock_time := 2.0
+@export var aircraft_missile_lock_time := 0.5  # Reduced from 2.0 for faster engagement
 @export var aircraft_missile_focus_limit := 1
 @export var aircraft_missile_color := Color(1.0, 0.55, 0.25, 1.0)
 @export var aircraft_missile_warhead_size := "large"
@@ -75,10 +75,12 @@ signal shot_fired(start_pos: Vector2, end_pos: Vector2, color: Color, width: flo
 @export var aircraft_perimeter_padding := 60.0
 @export var aircraft_perimeter_forward_bias := 0.2
 @export var aircraft_loiter_reload_delay := 5.0
-@export var aircraft_retreat_duration := 3.0  # Time to retreat after firing missile
+@export var aircraft_retreat_duration := 5.0  # Increased from 3.0 for safer escape after firing
 @export var aircraft_turn_rate := 2.2
-@export var aircraft_circulate_speed_mult := 1.5
-@export var aircraft_engage_speed_mult := 2.0
+@export var aircraft_circulate_speed_mult := 3.0
+@export var aircraft_engage_speed_mult := 4.0
+@export var aircraft_min_engagement_distance := 400.0  # Minimum safe distance when engaging
+@export var aircraft_retreat_after_gun := true  # Retreat after gun run
 @export var aircraft_circulation_spread_enabled := true
 @export var aircraft_circulation_spacing := 16.0
 @export var aircraft_circulation_avoid_radius := 28.0
@@ -88,7 +90,7 @@ signal shot_fired(start_pos: Vector2, end_pos: Vector2, color: Color, width: flo
 @export var aircraft_landing_path_entry_radius := 18.0
 @export var aircraft_runway_offset_ratio := 0.0
 @export var aircraft_landing_slot_spacing := 32.0
-@export var aircraft_landing_cap := 2
+@export var aircraft_landing_cap := 4
 @export var aircraft_queue_radius := 0.0
 @export var aircraft_squad_enabled := true
 @export var aircraft_squad_spacing := 80.0
@@ -172,10 +174,15 @@ func _ready() -> void:
 				aircraft_loiter_pos = rally_target
 			else:
 				aircraft_loiter_pos = _get_aircraft_home_pos()
-		if aircraft_home != null and is_instance_valid(aircraft_home):
+		# Check if we spawned with a reserved slot (values set before _ready)
+		# If slot is reserved, we're on the runway and should take off
+		if _aircraft_landing_reserved and _aircraft_landing_slot >= 0:
 			_aircraft_takeoff_active = true
 			_aircraft_takeoff_taxi = false
 			aircraft_altitude_factor = 0.0
+		else:
+			# Otherwise start airborne (for units spawned without slot assignment)
+			aircraft_altitude_factor = 1.0
 		_register_aircraft_squad()
 	_setup_visual()
 
@@ -327,6 +334,8 @@ func _update_aircraft_state(delta: float) -> void:
 	aircraft_circulating = false
 	var fired := false
 	var gun_in_range := gun_target != null and _aircraft_gun_target_in_range(gun_target)
+
+	# Fire weapons if in position
 	if missile_target != null:
 		_face_aircraft_toward(missile_target.global_position, delta)
 		if _aircraft_missile_lock_timer >= aircraft_missile_lock_time and _can_fire_aircraft_missile():
@@ -336,13 +345,24 @@ func _update_aircraft_state(delta: float) -> void:
 	if not fired and gun_target != null and aircraft_gun_ammo > 0 and gun_in_range:
 		_face_aircraft_toward(gun_target.global_position, delta)
 		_fire_aircraft_gun(gun_target)
+		# Trigger retreat after gun run if enabled
+		if aircraft_retreat_after_gun:
+			_aircraft_retreat_timer = aircraft_retreat_duration
+			if gun_target != null and is_instance_valid(gun_target):
+				var to_target := (gun_target.global_position - global_position).normalized()
+				var retreat_angle := randf_range(2.094, PI)  # 120-180 degrees
+				if randf() < 0.5:
+					retreat_angle = -retreat_angle
+				_aircraft_retreat_direction = to_target.rotated(retreat_angle)
 		fired = true
+
+	# Movement logic with safe standoff distance
 	if manual_active or _hold_active:
 		var manual_target_pos := _resolve_target()
 		if manual_target_pos != Vector2.ZERO:
 			_move_toward_aircraft_target(manual_target_pos, delta)
 	elif _aircraft_retreat_timer > 0.0:
-		# Retreat after firing missile - fly away from target
+		# Retreat after firing - fly away from danger
 		_set_aircraft_speed(aircraft_engage_speed_mult, true)
 		if _aircraft_retreat_direction != Vector2.ZERO:
 			var retreat_target := global_position + (_aircraft_retreat_direction * 1000.0)
@@ -350,19 +370,41 @@ func _update_aircraft_state(delta: float) -> void:
 		else:
 			_move_toward_aircraft_loiter(delta)
 	elif missile_target != null and _aircraft_missile_lock_timer < aircraft_missile_lock_time:
-		_set_aircraft_speed(aircraft_engage_speed_mult, true)
-		_move_toward_aircraft_target(missile_target.global_position, delta)
+		# Approaching for missile lock - maintain minimum distance
+		var dist_to_target := global_position.distance_to(missile_target.global_position)
+		if dist_to_target < aircraft_min_engagement_distance:
+			# Too close - orbit at standoff distance instead
+			_set_aircraft_speed(aircraft_engage_speed_mult, true)
+			_move_toward_aircraft_orbit_standoff(missile_target.global_position, aircraft_min_engagement_distance, delta)
+		else:
+			# Far enough - approach but don't get too close
+			_set_aircraft_speed(aircraft_engage_speed_mult, true)
+			var approach_target := _calculate_standoff_position(missile_target.global_position, aircraft_min_engagement_distance)
+			_move_toward_aircraft_target(approach_target, delta)
 	elif missile_target == null and gun_target == null:
 		aircraft_circulating = true
 		_set_aircraft_speed(aircraft_circulate_speed_mult, false)
 		_move_toward_aircraft_perimeter(delta)
 	elif gun_target != null and aircraft_gun_ammo > 0:
-		if global_position.distance_to(gun_target.global_position) > attack_range * 0.9:
+		var dist_to_gun_target := global_position.distance_to(gun_target.global_position)
+		if dist_to_gun_target > attack_range * 0.95:
+			# Attack run - approach from safe distance
 			_set_aircraft_speed(aircraft_engage_speed_mult, true)
-			_move_toward_aircraft_target(gun_target.global_position, delta)
+			var attack_approach := _calculate_standoff_position(gun_target.global_position, attack_range * 0.8)
+			_move_toward_aircraft_target(attack_approach, delta)
+		else:
+			# In range - circle at standoff distance
+			_set_aircraft_speed(aircraft_engage_speed_mult, true)
+			_move_toward_aircraft_orbit_standoff(gun_target.global_position, attack_range * 0.85, delta)
 	elif missile_target != null and aircraft_gun_ammo > 0 and aircraft_missile_ammo <= 0:
-		_set_aircraft_speed(aircraft_engage_speed_mult, true)
-		_move_toward_aircraft_target(missile_target.global_position, delta)
+		# Out of missiles but have guns - maintain safer distance
+		var dist := global_position.distance_to(missile_target.global_position)
+		if dist < aircraft_min_engagement_distance * 1.5:
+			_set_aircraft_speed(aircraft_engage_speed_mult, true)
+			_move_toward_aircraft_orbit_standoff(missile_target.global_position, aircraft_min_engagement_distance, delta)
+		else:
+			_set_aircraft_speed(aircraft_engage_speed_mult, true)
+			_move_toward_aircraft_target(missile_target.global_position, delta)
 	else:
 		_move_toward_aircraft_loiter(delta)
 	_sync_visual_rotation()
@@ -389,6 +431,7 @@ func _update_aircraft_reload(delta: float) -> bool:
 		if not _aircraft_landing_reserved:
 			if not _reserve_landing_slot():
 				aircraft_altitude_factor = 1.0
+				_set_aircraft_speed(aircraft_engage_speed_mult, true)  # Fast speed while waiting
 				_move_toward_aircraft_queue(delta, home, _get_airfield_queue_radius())
 				return true
 	var landing_path := _get_airfield_landing_path(home)
@@ -419,19 +462,35 @@ func _update_aircraft_reload(delta: float) -> bool:
 	if not _aircraft_landing_on_path:
 		if global_position.distance_to(start) > entry_radius:
 			aircraft_altitude_factor = 1.0
+			# Speed up return to base - use engage speed with afterburner
+			_set_aircraft_speed(aircraft_engage_speed_mult, true)
 			_move_toward_position(start, delta)
 			return true
 		_aircraft_landing_on_path = true
 	var landing_radius := maxf(0.5, aircraft_landing_radius)
 	if not _aircraft_landing_taxi:
-		_move_toward_position(rollout, delta)
+		# Gradual deceleration during landing approach
+		var dist_to_rollout := global_position.distance_to(rollout)
 		var remaining := maxf(0.0, (global_position - touchdown).dot(path_dir))
+
+		# Calculate deceleration based on distance to rollout
+		if dist_to_rollout > landing_radius * 10.0:
+			# Far from rollout - maintain high speed
+			_set_aircraft_speed(aircraft_engage_speed_mult, true)
+		else:
+			# Close to rollout - gradually slow down
+			var slowdown_progress := 1.0 - (dist_to_rollout / (landing_radius * 10.0))
+			var speed_mult := lerpf(aircraft_engage_speed_mult, aircraft_circulate_speed_mult * 0.6, slowdown_progress)
+			_set_aircraft_speed(speed_mult, slowdown_progress < 0.3)
+
+		_move_toward_position(rollout, delta)
 		aircraft_altitude_factor = clampf(remaining / maxf(1.0, path_length), 0.0, 1.0)
 		if global_position.distance_to(rollout) > landing_radius:
 			_aircraft_reload_timer = 0.0
 			return true
 		_aircraft_landing_taxi = true
 	aircraft_altitude_factor = 0.0
+	_set_aircraft_speed(aircraft_circulate_speed_mult * 0.5, false)  # Slow taxi speed
 	_move_toward_position(slot, delta)
 	if global_position.distance_to(slot) > landing_radius:
 		_aircraft_reload_timer = 0.0
@@ -461,35 +520,96 @@ func _update_aircraft_takeoff(delta: float) -> bool:
 		return false
 	var home := _get_aircraft_home_pos()
 	var landing_path: Dictionary = _get_airfield_landing_path(home)
+	# For takeoff, aircraft move WITH the runway direction (opposite of landing)
+	# Landing: start -> touchdown -> rollout -> slot (moving AGAINST runway_dir)
+	# Takeoff: slot -> rollout -> touchdown -> beyond (moving WITH runway_dir)
+	var runway_dir := Vector2.RIGHT
+	var dir_value: Variant = landing_path.get("dir", Vector2.RIGHT)
+	if dir_value is Vector2:
+		runway_dir = dir_value
+	# Get the touchdown point (this is the runway exit for takeoff)
 	var touchdown := home
 	var touchdown_value: Variant = landing_path.get("touchdown", home)
 	if touchdown_value is Vector2:
 		touchdown = touchdown_value
-	var start := home
-	var start_value: Variant = landing_path.get("start", home)
-	if start_value is Vector2:
-		start = start_value
-	var rollout := touchdown
-	var rollout_value: Variant = landing_path.get("rollout", touchdown)
-	if rollout_value is Vector2:
-		rollout = rollout_value
-	var path_dir := Vector2.RIGHT
-	var dir_value: Variant = landing_path.get("dir", Vector2.RIGHT)
-	if dir_value is Vector2:
-		path_dir = dir_value
-	var path_length := float(landing_path.get("length", aircraft_landing_path_length))
+	# Calculate airborne point beyond touchdown, going WITH runway_dir
+	var path_length := aircraft_landing_path_length
+	var size2d := _get_airfield_size()
+	if size2d != Vector2.ZERO:
+		path_length = maxf(path_length, size2d.x * 1.4)
+	var airborne_point := touchdown + (runway_dir * path_length)
 	var landing_radius := maxf(0.5, aircraft_landing_radius)
+
+	# Calculate runway start position (opposite end from touchdown)
+	var runway_start := home - (runway_dir * (size2d.x * 0.5)) if size2d != Vector2.ZERO else home
+
+	# Phase 0: Taxi from parking to runway start, then turn around
 	if not _aircraft_takeoff_taxi:
 		aircraft_altitude_factor = 0.0
-		_move_toward_position(rollout, delta)
-		if global_position.distance_to(rollout) > landing_radius:
+		_set_aircraft_speed(aircraft_circulate_speed_mult * 0.5, false)  # Slow taxi speed
+
+		# First, taxi to runway start
+		var dist_to_start := global_position.distance_to(runway_start)
+		if dist_to_start > landing_radius:
+			_move_toward_position(runway_start, delta)
 			return true
+
+		# At runway start - now turn around to face down the runway
+		var current_dir := Vector2.RIGHT.rotated(rotation)
+		var angle_diff := current_dir.angle_to(runway_dir)
+
+		# If not aligned yet, rotate in place
+		if absf(angle_diff) > 0.1:
+			var turn_speed := 2.0 * delta  # Slow turn rate for ground taxi
+			var turn_amount := clampf(angle_diff, -turn_speed, turn_speed)
+			rotation += turn_amount
+			return true
+
+		# Aligned and ready for takeoff
 		_aircraft_takeoff_taxi = true
-	_move_toward_position(start, delta)
-	var traveled := maxf(0.0, (global_position - rollout).dot(path_dir))
-	aircraft_altitude_factor = clampf(traveled / maxf(1.0, path_length), 0.0, 1.0)
-	if global_position.distance_to(start) > landing_radius and aircraft_altitude_factor < 1.0:
 		return true
+
+	# Calculate continuous altitude throughout takeoff based on distance traveled along runway
+	var runway_length := size2d.x if size2d != Vector2.ZERO else 100.0
+
+	# Measure progress along the runway direction from a reference point
+	# Use the airfield position as the starting reference (behind the aircraft at spawn)
+	var spawn_point := home - (runway_dir * runway_length * 0.5)
+	var traveled_total := (global_position - spawn_point).dot(runway_dir)
+
+	# Define takeoff phases based on total distance traveled
+	var lift_start := runway_length * 0.6  # Start lifting at 60% down runway
+	var lift_end := runway_length * 1.0    # Finish initial lift at runway end (touchdown point)
+	var climb_end := runway_length * 1.8   # Reach full altitude at 1.8x runway length
+
+	# Calculate altitude and speed continuously based on distance traveled
+	if traveled_total < lift_start:
+		# Phase 1: Ground acceleration - gradually increase from slow start
+		var accel_progress := traveled_total / lift_start
+		var min_speed := aircraft_circulate_speed_mult * 0.4  # Start at 40% of circulate speed
+		var speed_mult := lerpf(min_speed, aircraft_circulate_speed_mult, accel_progress)
+		aircraft_altitude_factor = 0.0
+		_set_aircraft_speed(speed_mult, false)
+	elif traveled_total < lift_end:
+		# Phase 2: Lift-off (0.0 -> 0.25 altitude) - continue accelerating
+		var lift_progress := (traveled_total - lift_start) / (lift_end - lift_start)
+		aircraft_altitude_factor = clampf(lift_progress * 0.25, 0.0, 0.25)
+		var speed_mult := lerpf(aircraft_circulate_speed_mult, aircraft_engage_speed_mult, lift_progress)
+		_set_aircraft_speed(speed_mult, lift_progress > 0.5)
+	else:
+		# Phase 3: Climb (0.25 -> 1.0 altitude) - full speed
+		var climb_progress := (traveled_total - lift_end) / (climb_end - lift_end)
+		aircraft_altitude_factor = clampf(0.25 + (climb_progress * 0.75), 0.25, 1.0)
+		_set_aircraft_speed(aircraft_engage_speed_mult, true)
+
+	# Movement: head toward airborne point throughout entire takeoff
+	_move_toward_position(airborne_point, delta)
+
+	# Continue takeoff until fully airborne and far enough from touchdown
+	if aircraft_altitude_factor < 0.99 or traveled_total < climb_end:
+		return true
+
+	# Takeoff complete
 	_aircraft_takeoff_active = false
 	_aircraft_takeoff_taxi = false
 	aircraft_altitude_factor = 1.0
@@ -1092,6 +1212,33 @@ func _set_aircraft_speed(mult: float, afterburner: bool) -> void:
 func _aircraft_allow_instant_turn() -> bool:
 	return _aircraft_landing_on_path or _aircraft_landing_taxi or _aircraft_takeoff_active
 
+func _calculate_standoff_position(target_pos: Vector2, standoff_dist: float) -> Vector2:
+	# Calculate a position at standoff distance from target, on our approach vector
+	var to_target := (target_pos - global_position).normalized()
+	return target_pos - (to_target * standoff_dist)
+
+func _move_toward_aircraft_orbit_standoff(target_pos: Vector2, orbit_radius: float, delta: float) -> void:
+	# Orbit around the target at a specific radius (standoff distance)
+	var to_me := global_position - target_pos
+	var current_dist := to_me.length()
+
+	# Calculate tangential direction for orbiting
+	var tangent := Vector2(-to_me.y, to_me.x).normalized()
+
+	# If too close, move outward while orbiting
+	# If too far, move inward while orbiting
+	var radial_adjust := Vector2.ZERO
+	if current_dist < orbit_radius * 0.9:
+		radial_adjust = to_me.normalized() * 0.3  # Push out
+	elif current_dist > orbit_radius * 1.1:
+		radial_adjust = -to_me.normalized() * 0.3  # Pull in
+
+	# Combine tangential orbit with radial adjustment
+	var orbit_dir := (tangent + radial_adjust).normalized()
+	var orbit_target := global_position + (orbit_dir * 200.0)
+
+	_move_toward_aircraft_target(orbit_target, delta)
+
 func _should_limit_ground_slope() -> bool:
 	return unit_kind != "aircraft" and ground_slope_max_deg > 0.0
 
@@ -1397,9 +1544,19 @@ func _get_airfield_landing_slot_offset(size2d: Vector2, runway_dir: Vector2) -> 
 		var max_spacing := (size2d.y * 0.6) / float(slot_count - 1)
 		spacing = minf(spacing, max_spacing)
 	var slot_index := clampi(_aircraft_landing_slot, 0, slot_count - 1)
-	var center_index := float(slot_count - 1) * 0.5
-	var offset_amount := (float(slot_index) - center_index) * spacing
-	return lateral * offset_amount
+	# For 4 slots: arrange as 2 pairs side by side
+	# Slots 0,1 on left (-1 spacing), Slots 2,3 on right (+1 spacing)
+	# Then offset along runway direction to separate front/back
+	var side := -1.0 if slot_index < 2 else 1.0  # Left side for 0,1, right side for 2,3
+	var row := float(slot_index % 2)  # 0 for front, 1 for back
+
+	# Calculate lateral offset (perpendicular to runway)
+	var lateral_offset := lateral * (side * spacing)
+
+	# Calculate longitudinal offset (along runway direction) for front/back positioning
+	var longitudinal_offset := runway_dir * (row * spacing * 0.8)
+
+	return lateral_offset + longitudinal_offset
 
 func _get_airfield_landing_path(home: Vector2) -> Dictionary:
 	var size2d := _get_airfield_size()
@@ -1407,10 +1564,15 @@ func _get_airfield_landing_path(home: Vector2) -> Dictionary:
 	if runway_dir.length_squared() <= 0.0:
 		runway_dir = Vector2.RIGHT
 	var offset := _get_airfield_runway_offset(size2d)
+	# Touchdown point is at the far end of the runway (entry side)
 	var touchdown := home + offset
 	if size2d != Vector2.ZERO:
 		touchdown = home + (runway_dir * (size2d.x * 0.5)) + offset
+	# Rollout is the midpoint where aircraft slow down and prepare to taxi to parking
+	# Position it slightly before center so aircraft have room to turn into parking spots
 	var rollout := home + offset
+	if size2d != Vector2.ZERO:
+		rollout = home - (runway_dir * (size2d.x * 0.15)) + offset
 	var slot_offset := _get_airfield_landing_slot_offset(size2d, runway_dir)
 	var slot := rollout + slot_offset
 	var base_length := aircraft_landing_path_length

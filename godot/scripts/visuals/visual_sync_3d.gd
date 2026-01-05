@@ -3,7 +3,7 @@ extends Node3D
 @export var unit_height := 6.0
 @export var vehicle_height := 10.0
 @export var aircraft_height := 160.0
-@export var aircraft_height_smooth := 4.0
+@export var aircraft_height_smooth := 10.0
 @export var aircraft_follow_terrain := false
 @export var aircraft_base_height := 220.0
 @export var aircraft_model_path := "res://assets/models/gripen.glb"
@@ -367,11 +367,11 @@ func _build_unit_proxy(proxy: Node3D, unit) -> void:
 
 		# Per-aircraft-type rotation settings
 		if type_id == "f16":
-			model_rotation = Vector3(0.0, 270.0, 0.0)  # F16 rotated 180 degrees from original
+			model_rotation = Vector3(0.0, 0.0, 0.0)  # F16: 270° + 90° right = 0°
 		elif type_id == "gripen":
 			model_rotation = Vector3(0.0, 90.0, 0.0)
 		elif type_id == "f22":
-			model_rotation = Vector3(0.0, 0.0, 0.0)  # F22 rotated 90 degrees left from gripen
+			model_rotation = Vector3(0.0, 270.0, 0.0)  # F22: 0° - 90° left = 270°
 		# Legacy fallback for F35
 		elif type_id == "f35" and visual_path == "" and aircraft_model_path_f35 != "":
 			model_path = aircraft_model_path_f35
@@ -679,9 +679,11 @@ func _update_proxy(node, proxy: Node3D, group_name: String) -> void:
 		if group_name == "units":
 			unit_kind = str(_get_value(node, "unit_kind", "infantry"))
 			if unit_kind == "aircraft":
-				if not aircraft_follow_terrain:
-					ground_y = aircraft_base_height
 				var altitude: float = clampf(_get_float(node, "aircraft_altitude_factor", 1.0), 0.0, 1.0)
+				if not aircraft_follow_terrain:
+					# Only use aircraft_base_height when airborne, not when on the ground
+					if altitude > 0.01:
+						ground_y = aircraft_base_height
 				y_offset += aircraft_height * altitude
 		if group_name == "missiles":
 			var missile_scale := _get_missile_scale(node)
@@ -701,10 +703,16 @@ func _update_proxy(node, proxy: Node3D, group_name: String) -> void:
 		if group_name == "units" and unit_kind == "aircraft" and aircraft_height_smooth > 0.0:
 			var altitude: float = clampf(_get_float(node, "aircraft_altitude_factor", 1.0), 0.0, 1.0)
 			var state: Dictionary = _aircraft_visual_state.get(id, {})
+			var has_state := state.has("altitude_y")
 			var smoothed_y: float = float(state.get("altitude_y", target_y))
-			if altitude <= 0.01:
+			# On first frame, initialize to current target_y to prevent jumping
+			if not has_state:
+				smoothed_y = target_y
+			elif altitude <= 0.01:
+				# When grounded, snap to ground level
 				smoothed_y = target_y
 			else:
+				# When airborne, smooth the transition
 				var t: float = clampf(aircraft_height_smooth * _frame_delta, 0.0, 1.0)
 				smoothed_y = lerpf(smoothed_y, target_y, t)
 			state["altitude_y"] = smoothed_y
@@ -720,11 +728,25 @@ func _update_proxy(node, proxy: Node3D, group_name: String) -> void:
 					proxy.look_at(target, Vector3.UP)
 				_update_missile_trail(node, proxy, id)
 			elif facing is Vector2 and facing.length() > 0.1:
-				var target := proxy.global_position + Vector3(facing.x, 0.0, facing.y)
-				proxy.look_at(target, Vector3.UP)
 				if group_name == "units" and unit_kind == "aircraft":
+					# For aircraft, calculate pitch based on altitude change
+					var altitude := clampf(_get_float(node, "aircraft_altitude_factor", 1.0), 0.0, 1.0)
+					var aircraft_state: Dictionary = _aircraft_visual_state.get(id, {})
+					var prev_altitude := float(aircraft_state.get("prev_altitude", altitude))
+					var altitude_change := altitude - prev_altitude
+					var pitch_angle := clampf(altitude_change * 200.0, -0.4, 0.4)  # Limit pitch range
+
+					# Create target with vertical component for pitch
+					var target := proxy.global_position + Vector3(facing.x, pitch_angle, facing.y)
+					proxy.look_at(target, Vector3.UP)
+
+					aircraft_state["prev_altitude"] = altitude
+					_aircraft_visual_state[id] = aircraft_state
 					_apply_aircraft_bank_and_roll(node, proxy, id, facing)
 					_update_aircraft_afterburner(node, proxy, id, facing)
+				else:
+					var target := proxy.global_position + Vector3(facing.x, 0.0, facing.y)
+					proxy.look_at(target, Vector3.UP)
 		if group_name == "defense_turret":
 			_update_turret_range(proxy, node)
 		elif group_name in ["building", "hq"]:

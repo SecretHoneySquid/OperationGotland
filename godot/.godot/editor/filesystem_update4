@@ -1,2 +1,4 @@
 res://scripts/rendering/sync/VisualUnitBuilder.gd
 res://scripts/visuals/visual_sync_3d.gd
+res://scripts/core/game_controller.gd
+res://scripts/core/unit.gd
