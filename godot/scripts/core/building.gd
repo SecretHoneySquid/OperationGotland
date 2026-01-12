@@ -31,6 +31,7 @@ extends Node2D
 @export var production_type := "mixed"
 @export var wait_mode := false
 @export var vehicle_production_type := "mixed"
+@export var aircraft_production_type := "fighter"  # "fighter" or "uav"
 @export var build_id := "unknown"
 @export var team_id := "p1"
 @export var visual_scene_path := ""
@@ -40,6 +41,8 @@ extends Node2D
 
 var hp := 0.0
 var _visual_node: Node2D
+var _is_selected := false
+var _game_controller: Node
 
 func _ready() -> void:
 	hp = max_hp
@@ -51,6 +54,13 @@ func _ready() -> void:
 		var light := VisionHelper.create_light(vision_radius)
 		add_child(light)
 	_setup_visual()
+	# Get game controller reference for rally point
+	_game_controller = get_node_or_null("../GameController")
+
+func _process(_delta: float) -> void:
+	# Redraw each frame if selected and is a factory to update rally line
+	if _is_selected and build_id == "factory":
+		queue_redraw()
 
 func _exit_tree() -> void:
 	if build_id == "" or build_id == "unknown":
@@ -106,6 +116,26 @@ func take_damage(amount: float, attacker_type: String = "") -> void:
 
 func _draw() -> void:
 	if not render_2d:
+		# Still draw rally line even when render_2d is false (for 3D buildings)
+		if _is_selected and build_id == "factory" and team_id == "p1" and _game_controller != null:
+			var rally_point: Vector2 = _game_controller.get_rally_point("p1") if _game_controller.has_method("get_rally_point") else Vector2.ZERO
+			var line_end: Vector2
+
+			if rally_point != Vector2.ZERO:
+				# Rally point is set, show line to rally point
+				line_end = rally_point - global_position
+			else:
+				# No rally point, show default forward direction (80 units forward)
+				var forward_dir := Vector2(1.0, 0.0) if team_id == "p1" else Vector2(-1.0, 0.0)
+				line_end = forward_dir * 80.0
+
+			var line_start := Vector2.ZERO  # Building center in local coordinates
+			# Draw thicker, more visible white line
+			draw_line(line_start, line_end, Color(1.0, 1.0, 1.0, 0.9), 3.0)
+			# Draw filled circle at target
+			draw_circle(line_end, 8.0, Color(1.0, 1.0, 1.0, 0.9))
+			# Draw yellow ring around it
+			draw_arc(line_end, 12.0, 0, TAU, 24, Color(0.9, 0.9, 0.2, 1.0), 3.0)
 		return
 	var height := minf(18.0, size.y * 0.22)
 	if _visual_node == null:
@@ -236,3 +266,9 @@ func _set_canvas_children_visible(value: bool) -> void:
 			child.visible = value
 func get_vision_radius() -> float:
 	return vision_radius
+
+func set_selected(value: bool) -> void:
+	if _is_selected == value:
+		return
+	_is_selected = value
+	queue_redraw()  # Redraw to show/hide rally line

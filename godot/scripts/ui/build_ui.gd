@@ -3,10 +3,12 @@ extends CanvasLayer
 @export var build_controller_path := NodePath("../BuildController")
 @export var game_controller_path := NodePath("../GameController")
 @export var selection_controller_path := NodePath("../SelectionController")
+@export var bombardment_controller_path := NodePath("../BombardmentController")
 
 var _controller: BuildController
 var _game_controller: GameController
 var _selection_controller: SelectionController
+var _bombardment_controller: BombardmentController
 var _status_label: Label
 var _credits_label: Label
 var _income_label: Label
@@ -15,7 +17,7 @@ var _infantry_status_label: Label
 var _queue_label: Label
 var _rally_label: Label
 var _queue_button: Button
-var _rally_button: Button
+var _rally_button: TextureButton
 var _barracks_panel: VBoxContainer
 var _barracks_name_label: Label
 var _barracks_type: OptionButton
@@ -35,18 +37,32 @@ var _factory_updating := false
 var _airfield_panel: VBoxContainer
 var _airfield_name_label: Label
 var _airfield_f35_button: Button
+var _airfield_uav_button: TextureButton
 var _selected_airfield: Building
+var _himars_button: TextureButton
+var _factory_himars_button: TextureButton
+var _bombardment_panel: VBoxContainer
+var _bombardment_button: Button
+var _cancel_bombardment_button: Button
+var _selected_units: Array[Unit] = []
+var _tooltip_panel: PanelContainer
+var _tooltip_name: Label
+var _tooltip_desc: Label
+var _tooltip_strong: Label
+var _tooltip_weak: Label
 
 func _ready() -> void:
 	_controller = get_node_or_null(build_controller_path) as BuildController
 	_game_controller = get_node_or_null(game_controller_path) as GameController
 	_selection_controller = get_node_or_null(selection_controller_path) as SelectionController
+	_bombardment_controller = get_node_or_null(bombardment_controller_path) as BombardmentController
 	_build_ui()
 	if _controller != null:
 		_controller.build_mode_changed.connect(_on_build_mode_changed)
 		_on_build_mode_changed(_controller.get_active_build_id())
 	if _selection_controller != null:
 		_selection_controller.building_selected.connect(_on_building_selected)
+		_selection_controller.units_selected.connect(_on_units_selected)
 
 func _process(_delta: float) -> void:
 	if _credits_label != null:
@@ -100,49 +116,98 @@ func _process(_delta: float) -> void:
 			or GameState.p1_credits < _game_controller.vehicle_unit_cost
 			or GameState.p1_factory_queue >= _game_controller.factory_queue_max
 		)
+	if _factory_himars_button != null and _game_controller != null:
+		_factory_himars_button.disabled = (
+			GameState.p1_factory <= 0
+			or GameState.p1_credits < GameBalance.HIMARS_UNIT_COST
+			or GameState.p1_factory_queue >= _game_controller.factory_queue_max
+		)
+	if _airfield_uav_button != null:
+		_airfield_uav_button.disabled = (
+			GameState.p1_airfield <= 0
+			or GameState.p1_credits < 100
+		)
 	if _rally_button != null and _game_controller != null:
+		# Visual feedback via modulate color when in rally mode
 		if _game_controller.is_rally_mode("p1"):
-			_rally_button.text = "Rally Mode: Click Map"
+			_rally_button.modulate = Color(0.5, 1.0, 0.5)  # Green tint when active
 		else:
-			_rally_button.text = "Set Rally Point"
+			_rally_button.modulate = Color.WHITE
 	if _barracks_panel != null:
 		_update_barracks_panel()
 	if _factory_panel != null:
 		_update_factory_panel()
 	if _airfield_panel != null:
 		_update_airfield_panel()
+	if _bombardment_panel != null:
+		_update_bombardment_panel()
 
 func _build_ui() -> void:
-	var panel := PanelContainer.new()
-	panel.name = "BuildPanel"
-	panel.anchor_left = 0.0
-	panel.anchor_top = 0.0
-	panel.anchor_right = 0.0
-	panel.anchor_bottom = 1.0
-	panel.offset_left = 12.0
-	panel.offset_top = 110.0
-	panel.offset_right = 260.0
-	panel.offset_bottom = -12.0
-	add_child(panel)
+	# LEFT PANEL - Buildings only
+	var left_panel := PanelContainer.new()
+	left_panel.name = "BuildingsPanel"
+	left_panel.anchor_left = 0.0
+	left_panel.anchor_top = 0.0
+	left_panel.anchor_right = 0.0
+	left_panel.anchor_bottom = 1.0
+	left_panel.offset_left = 12.0
+	left_panel.offset_top = 110.0
+	left_panel.offset_right = 220.0
+	left_panel.offset_bottom = -12.0
+	add_child(left_panel)
 
-	var margin := MarginContainer.new()
-	margin.add_theme_constant_override("margin_left", 10)
-	margin.add_theme_constant_override("margin_right", 10)
-	margin.add_theme_constant_override("margin_top", 10)
-	margin.add_theme_constant_override("margin_bottom", 10)
-	panel.add_child(margin)
+	var left_margin := MarginContainer.new()
+	left_margin.add_theme_constant_override("margin_left", 10)
+	left_margin.add_theme_constant_override("margin_right", 10)
+	left_margin.add_theme_constant_override("margin_top", 10)
+	left_margin.add_theme_constant_override("margin_bottom", 10)
+	left_panel.add_child(left_margin)
 
-	var scroll := ScrollContainer.new()
-	scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	margin.add_child(scroll)
+	var left_scroll := ScrollContainer.new()
+	left_scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	left_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	left_margin.add_child(left_scroll)
 
 	var vbox := VBoxContainer.new()
 	vbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	vbox.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	vbox.add_theme_constant_override("separation", 6)
-	scroll.add_child(vbox)
+	left_scroll.add_child(vbox)
 
+	# BOTTOM PANEL - Units, HIMARS, Aircraft
+	var bottom_panel := PanelContainer.new()
+	bottom_panel.name = "UnitsPanel"
+	bottom_panel.anchor_left = 0.0
+	bottom_panel.anchor_top = 1.0
+	bottom_panel.anchor_right = 1.0
+	bottom_panel.anchor_bottom = 1.0
+	bottom_panel.offset_left = 232.0
+	bottom_panel.offset_top = -280.0
+	bottom_panel.offset_right = -12.0
+	bottom_panel.offset_bottom = -12.0
+	add_child(bottom_panel)
+
+	var bottom_margin := MarginContainer.new()
+	bottom_margin.add_theme_constant_override("margin_left", 10)
+	bottom_margin.add_theme_constant_override("margin_right", 10)
+	bottom_margin.add_theme_constant_override("margin_top", 10)
+	bottom_margin.add_theme_constant_override("margin_bottom", 10)
+	bottom_panel.add_child(bottom_margin)
+
+	var bottom_scroll := ScrollContainer.new()
+	bottom_scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	bottom_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	bottom_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
+	bottom_scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	bottom_margin.add_child(bottom_scroll)
+
+	var bottom_hbox := HBoxContainer.new()
+	bottom_hbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	bottom_hbox.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	bottom_hbox.add_theme_constant_override("separation", 15)
+	bottom_scroll.add_child(bottom_hbox)
+
+	# ========== LEFT PANEL CONTENT (Buildings) ==========
 	var title := Label.new()
 	title.text = "Build Menu"
 	vbox.add_child(title)
@@ -200,16 +265,42 @@ func _build_ui() -> void:
 	)
 	vbox.add_child(cancel)
 
-	var spacer := HSeparator.new()
-	vbox.add_child(spacer)
+	_status_label = Label.new()
+	_status_label.text = "Placement: none"
+	vbox.add_child(_status_label)
 
-	var queue_title := Label.new()
-	queue_title.text = "Factory Queue"
-	vbox.add_child(queue_title)
+	# ========== BOTTOM PANEL CONTENT (Units/Controls) ==========
+
+	# Factory Panel
+	_factory_panel = VBoxContainer.new()
+	_factory_panel.visible = false
+	_factory_panel.add_theme_constant_override("separation", 6)
+	_factory_panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	bottom_hbox.add_child(_factory_panel)
+
+	var factory_title := Label.new()
+	factory_title.text = "Factory Control"
+	_factory_panel.add_child(factory_title)
+
+	_factory_name_label = Label.new()
+	_factory_name_label.text = "No factory selected"
+	_factory_panel.add_child(_factory_name_label)
 
 	_queue_label = Label.new()
 	_queue_label.text = "Factory Queue: %d" % GameState.p1_factory_queue
-	vbox.add_child(_queue_label)
+	_factory_panel.add_child(_queue_label)
+
+	_factory_type = OptionButton.new()
+	_factory_panel.add_child(_factory_type)
+	_factory_type.item_selected.connect(func(index: int):
+		if _factory_updating:
+			return
+		if _selected_factory == null or not is_instance_valid(_selected_factory):
+			return
+		if index < 0 or index >= _factory_type_ids.size():
+			return
+		_selected_factory.vehicle_production_type = _factory_type_ids[index]
+	)
 
 	_queue_button = Button.new()
 	if _game_controller != null:
@@ -225,37 +316,98 @@ func _build_ui() -> void:
 			else:
 				_game_controller.queue_vehicle("p1")
 	)
-	vbox.add_child(_queue_button)
-
-	var rally_title := Label.new()
-	rally_title.text = "Rally Point"
-	vbox.add_child(rally_title)
+	_factory_panel.add_child(_queue_button)
 
 	_rally_label = Label.new()
 	_rally_label.text = "Rally: (0, 0)"
-	vbox.add_child(_rally_label)
+	_factory_panel.add_child(_rally_label)
 
-	_rally_button = Button.new()
-	_rally_button.text = "Set Rally Point"
+	# HBox for HIMARS and Rally buttons side-by-side
+	var buttons_hbox := HBoxContainer.new()
+	buttons_hbox.add_theme_constant_override("separation", 10)
+	buttons_hbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_factory_panel.add_child(buttons_hbox)
+
+	# HIMARS Icon Button (64x64 square)
+	var himars_container = AspectRatioContainer.new()
+	himars_container.ratio = 1.0
+	himars_container.custom_minimum_size = Vector2(64, 64)
+	himars_container.stretch_mode = AspectRatioContainer.STRETCH_FIT
+	_factory_himars_button = TextureButton.new()
+	_factory_himars_button.stretch_mode = TextureButton.STRETCH_SCALE
+	_factory_himars_button.ignore_texture_size = true
+	var himars_icon := load("res://assets/models/HIMARS/ICON_HIMARS.jpg")
+	if himars_icon != null:
+		_factory_himars_button.texture_normal = himars_icon
+	himars_container.add_child(_factory_himars_button)
+	_factory_himars_button.pressed.connect(func():
+		if _game_controller != null:
+			if _controller != null:
+				_controller.cancel_placement()
+			if _selected_factory != null and is_instance_valid(_selected_factory):
+				_game_controller.queue_himars("p1", _selected_factory)
+			else:
+				_game_controller.queue_himars("p1")
+	)
+	_factory_himars_button.mouse_entered.connect(func():
+		_show_tooltip(
+			_factory_himars_button,
+			"HIMARS ($%d)" % GameBalance.HIMARS_UNIT_COST,
+			"Long-range rocket artillery system. Launches devastating ATACMS ballistic missiles at distant targets.",
+			"",  # Strong vs - empty for now
+			""   # Weak vs - empty for now
+		)
+	)
+	_factory_himars_button.mouse_exited.connect(_hide_tooltip)
+	buttons_hbox.add_child(himars_container)
+
+	# Rally Point Icon Button (64x64 square)
+	var rally_container = AspectRatioContainer.new()
+	rally_container.ratio = 1.0
+	rally_container.custom_minimum_size = Vector2(64, 64)
+	rally_container.stretch_mode = AspectRatioContainer.STRETCH_FIT
+	_rally_button = TextureButton.new()
+	_rally_button.stretch_mode = TextureButton.STRETCH_SCALE
+	_rally_button.ignore_texture_size = true
+	# Create a simple rally point icon (white flag/target on dark background)
+	var rally_image := Image.create(64, 64, false, Image.FORMAT_RGBA8)
+	rally_image.fill(Color(0.2, 0.2, 0.2, 1.0))  # Dark gray background
+	# Draw a simple flag/target pattern
+	for y in range(16, 48):
+		for x in range(28, 36):
+			rally_image.set_pixel(x, y, Color.WHITE)  # Vertical pole
+	for y in range(16, 32):
+		for x in range(36, 52):
+			rally_image.set_pixel(x, y, Color(0.9, 0.9, 0.2, 1.0))  # Yellow flag
+	var rally_texture := ImageTexture.create_from_image(rally_image)
+	_rally_button.texture_normal = rally_texture
+	rally_container.add_child(_rally_button)
 	_rally_button.pressed.connect(func():
 		if _game_controller != null:
 			if _controller != null:
 				_controller.cancel_placement()
 			_game_controller.start_rally_mode("p1")
 	)
-	vbox.add_child(_rally_button)
+	_rally_button.mouse_entered.connect(func():
+		_show_tooltip(
+			_rally_button,
+			"Set Rally Point",
+			"Click to set where newly built vehicles will move to after production.",
+			"",
+			""
+		)
+	)
+	_rally_button.mouse_exited.connect(_hide_tooltip)
+	buttons_hbox.add_child(rally_container)
 
-	_status_label = Label.new()
-	_status_label.text = "Placement: none"
-	vbox.add_child(_status_label)
+	_setup_factory_options()
 
-	var barracks_spacer := HSeparator.new()
-	vbox.add_child(barracks_spacer)
-
+	# Barracks Panel
 	_barracks_panel = VBoxContainer.new()
 	_barracks_panel.visible = false
-	_barracks_panel.add_theme_constant_override("separation", 4)
-	vbox.add_child(_barracks_panel)
+	_barracks_panel.add_theme_constant_override("separation", 6)
+	_barracks_panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	bottom_hbox.add_child(_barracks_panel)
 
 	var barracks_title := Label.new()
 	barracks_title.text = "Barracks Control"
@@ -288,54 +440,12 @@ func _build_ui() -> void:
 
 	_setup_barracks_options()
 
-	var factory_spacer := HSeparator.new()
-	vbox.add_child(factory_spacer)
-
-	_factory_panel = VBoxContainer.new()
-	_factory_panel.visible = false
-	_factory_panel.add_theme_constant_override("separation", 4)
-	vbox.add_child(_factory_panel)
-
-	var factory_title := Label.new()
-	factory_title.text = "Factory Control"
-	_factory_panel.add_child(factory_title)
-
-	_factory_name_label = Label.new()
-	_factory_name_label.text = "No factory selected"
-	_factory_panel.add_child(_factory_name_label)
-
-	_factory_type = OptionButton.new()
-	_factory_panel.add_child(_factory_type)
-	_factory_type.item_selected.connect(func(index: int):
-		if _factory_updating:
-			return
-		if _selected_factory == null or not is_instance_valid(_selected_factory):
-			return
-		if index < 0 or index >= _factory_type_ids.size():
-			return
-		_selected_factory.vehicle_production_type = _factory_type_ids[index]
-	)
-
-	_factory_queue_button = Button.new()
-	_factory_queue_button.text = "Queue Vehicle"
-	_factory_queue_button.pressed.connect(func():
-		if _game_controller == null:
-			return
-		if _selected_factory == null or not is_instance_valid(_selected_factory):
-			return
-		_game_controller.queue_vehicle("p1", _selected_factory.vehicle_production_type, _selected_factory)
-	)
-	_factory_panel.add_child(_factory_queue_button)
-
-	_setup_factory_options()
-
-	var airfield_spacer := HSeparator.new()
-	vbox.add_child(airfield_spacer)
-
+	# Airfield Panel
 	_airfield_panel = VBoxContainer.new()
 	_airfield_panel.visible = false
-	_airfield_panel.add_theme_constant_override("separation", 4)
-	vbox.add_child(_airfield_panel)
+	_airfield_panel.add_theme_constant_override("separation", 6)
+	_airfield_panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	bottom_hbox.add_child(_airfield_panel)
 
 	var airfield_title := Label.new()
 	airfield_title.text = "Airfield Control"
@@ -355,6 +465,158 @@ func _build_ui() -> void:
 		_game_controller.upgrade_airfield_aircraft("p1", _selected_airfield)
 	)
 	_airfield_panel.add_child(_airfield_f35_button)
+
+	# UAV Icon Button (64x64 square)
+	var uav_container = AspectRatioContainer.new()
+	uav_container.ratio = 1.0
+	uav_container.custom_minimum_size = Vector2(64, 64)
+	uav_container.stretch_mode = AspectRatioContainer.STRETCH_FIT
+	_airfield_uav_button = TextureButton.new()
+	_airfield_uav_button.stretch_mode = TextureButton.STRETCH_SCALE
+	_airfield_uav_button.ignore_texture_size = true
+	var uav_icon := load("res://assets/models/Drones/MQ-9_Reaper_UAV_(cropped).jpg")
+	if uav_icon != null:
+		_airfield_uav_button.texture_normal = uav_icon
+	uav_container.add_child(_airfield_uav_button)
+	_airfield_uav_button.pressed.connect(func():
+		if _game_controller == null:
+			return
+		if _selected_airfield == null or not is_instance_valid(_selected_airfield):
+			return
+		# Purchase a single UAV for 100 credits
+		if GameState.p1_credits >= 100:
+			GameState.p1_credits -= 100
+			_game_controller.spawn_aircraft("p1", _selected_airfield, "uav")
+	)
+	_airfield_uav_button.mouse_entered.connect(func():
+		_show_tooltip(
+			_airfield_uav_button,
+			"UAV Drone ($100)",
+			"Unarmed reconnaissance drone with large vision radius. Circles designated area to reveal fog of war.",
+			"",  # Strong vs - empty for now
+			""   # Weak vs - empty for now
+		)
+	)
+	_airfield_uav_button.mouse_exited.connect(_hide_tooltip)
+	_airfield_panel.add_child(uav_container)
+
+	# Bombardment Panel
+	_bombardment_panel = VBoxContainer.new()
+	_bombardment_panel.visible = false
+	_bombardment_panel.add_theme_constant_override("separation", 6)
+	_bombardment_panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	bottom_hbox.add_child(_bombardment_panel)
+
+	var bombardment_title := Label.new()
+	bombardment_title.text = "HIMARS Control"
+	_bombardment_panel.add_child(bombardment_title)
+
+	_bombardment_button = Button.new()
+	_bombardment_button.text = "Launch Bombardment"
+	_bombardment_button.pressed.connect(func():
+		if _bombardment_controller == null:
+			return
+		if _selected_units.is_empty():
+			return
+		var himars_unit: Unit = null
+		for unit in _selected_units:
+			if is_instance_valid(unit) and unit.is_himars:
+				himars_unit = unit
+				break
+		if himars_unit == null:
+			return
+		if _controller != null:
+			_controller.cancel_placement()
+		_bombardment_controller.start_bombardment(himars_unit)
+	)
+	_bombardment_panel.add_child(_bombardment_button)
+
+	_cancel_bombardment_button = Button.new()
+	_cancel_bombardment_button.text = "Cancel Bombardment"
+	_cancel_bombardment_button.visible = false  # Hidden by default
+	_cancel_bombardment_button.pressed.connect(func():
+		if _selected_units.is_empty():
+			return
+		for unit in _selected_units:
+			if is_instance_valid(unit) and unit.is_himars:
+				unit.clear_bombardment_area()
+	)
+	_bombardment_panel.add_child(_cancel_bombardment_button)
+
+	# Tooltip Panel - initially hidden, shown on hover
+	_tooltip_panel = PanelContainer.new()
+	_tooltip_panel.visible = false
+	_tooltip_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE  # Don't intercept mouse events
+	add_child(_tooltip_panel)
+
+	var tooltip_margin := MarginContainer.new()
+	tooltip_margin.add_theme_constant_override("margin_left", 8)
+	tooltip_margin.add_theme_constant_override("margin_right", 8)
+	tooltip_margin.add_theme_constant_override("margin_top", 6)
+	tooltip_margin.add_theme_constant_override("margin_bottom", 6)
+	_tooltip_panel.add_child(tooltip_margin)
+
+	var tooltip_vbox := VBoxContainer.new()
+	tooltip_vbox.add_theme_constant_override("separation", 4)
+	tooltip_margin.add_child(tooltip_vbox)
+
+	_tooltip_name = Label.new()
+	_tooltip_name.add_theme_font_size_override("font_size", 16)
+	tooltip_vbox.add_child(_tooltip_name)
+
+	_tooltip_desc = Label.new()
+	_tooltip_desc.add_theme_font_size_override("font_size", 12)
+	_tooltip_desc.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_tooltip_desc.custom_minimum_size = Vector2(200, 0)
+	tooltip_vbox.add_child(_tooltip_desc)
+
+	_tooltip_strong = Label.new()
+	_tooltip_strong.add_theme_font_size_override("font_size", 11)
+	_tooltip_strong.add_theme_color_override("font_color", Color(0.4, 1.0, 0.4))
+	tooltip_vbox.add_child(_tooltip_strong)
+
+	_tooltip_weak = Label.new()
+	_tooltip_weak.add_theme_font_size_override("font_size", 11)
+	_tooltip_weak.add_theme_color_override("font_color", Color(1.0, 0.4, 0.4))
+	tooltip_vbox.add_child(_tooltip_weak)
+
+func _show_tooltip(button: Control, name_text: String, desc_text: String, strong_text: String = "", weak_text: String = "") -> void:
+	if _tooltip_panel == null:
+		return
+	_tooltip_name.text = name_text
+	_tooltip_desc.text = desc_text
+	_tooltip_strong.text = strong_text if strong_text != "" else ""
+	_tooltip_strong.visible = strong_text != ""
+	_tooltip_weak.text = weak_text if weak_text != "" else ""
+	_tooltip_weak.visible = weak_text != ""
+	_tooltip_panel.visible = true
+
+	# Position tooltip with bounds checking to keep it on screen
+	await get_tree().process_frame  # Wait for tooltip to calculate its size
+	var button_rect := button.get_global_rect()
+	var viewport_size := get_viewport().get_visible_rect().size
+	var tooltip_size := _tooltip_panel.size
+
+	# Try to position to the right of button
+	var pos_x := button_rect.position.x + button_rect.size.x + 10
+	var pos_y := button_rect.position.y
+
+	# If it goes off right edge, position to the left instead
+	if pos_x + tooltip_size.x > viewport_size.x:
+		pos_x = button_rect.position.x - tooltip_size.x - 10
+
+	# If still off left edge, clamp to right side of screen
+	if pos_x < 0:
+		pos_x = viewport_size.x - tooltip_size.x - 10
+
+	# Clamp vertical position to keep it on screen
+	pos_y = clampf(pos_y, 0, viewport_size.y - tooltip_size.y)
+
+	_tooltip_panel.global_position = Vector2(pos_x, pos_y)
+
+func _hide_tooltip() -> void:
+	if _tooltip_panel != null:
+		_tooltip_panel.visible = false
 
 func _on_build_mode_changed(active_id: String) -> void:
 	if _status_label == null:
@@ -548,3 +810,38 @@ func _update_airfield_panel() -> void:
 
 		_airfield_f35_button.text = label
 		_airfield_f35_button.disabled = disabled
+
+func _update_bombardment_panel() -> void:
+	# Check if any selected units are HIMARS
+	var has_himars := false
+	var himars_ready := false
+	var area_bombardment_active := false
+	for unit in _selected_units:
+		if is_instance_valid(unit) and unit.is_himars:
+			has_himars = true
+			if unit.is_bombardment_ready():
+				himars_ready = true
+			if unit.is_area_bombardment_active():
+				area_bombardment_active = true
+			break
+
+	_bombardment_panel.visible = has_himars
+
+	if _bombardment_button != null and has_himars:
+		if himars_ready:
+			_bombardment_button.text = "Launch Bombardment (Ready)"
+			_bombardment_button.disabled = false
+		else:
+			_bombardment_button.text = "Launch Bombardment (Reloading...)"
+			_bombardment_button.disabled = true
+
+	if _cancel_bombardment_button != null:
+		_cancel_bombardment_button.visible = area_bombardment_active
+		if area_bombardment_active:
+			_cancel_bombardment_button.text = "Cancel Area Bombardment"
+
+func update_selected_units(units: Array[Unit]) -> void:
+	_selected_units = units
+
+func _on_units_selected(units: Array[Unit]) -> void:
+	update_selected_units(units)

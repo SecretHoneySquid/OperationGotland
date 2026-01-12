@@ -2,10 +2,12 @@ class_name SelectionController
 extends Node2D
 
 signal building_selected(building: Building)
+signal units_selected(units: Array[Unit])
 
 @export var team_id := "p1"
 @export var build_controller_path := NodePath("../BuildController")
 @export var game_controller_path := NodePath("../GameController")
+@export var bombardment_controller_path := NodePath("../BombardmentController")
 @export var ui_block_rect := Rect2(0.0, 100.0, 280.0, 820.0)
 @export var selection_radius := 32.0
 @export var drag_threshold := 6.0
@@ -18,6 +20,7 @@ signal building_selected(building: Building)
 
 var _build_controller: BuildController
 var _game_controller: GameController
+var _bombardment_controller: BombardmentController
 var _selected: Array[Unit] = []
 var _selected_building: Building
 var _dragging := false
@@ -32,12 +35,15 @@ var _selection_box_overlay: Control
 func _ready() -> void:
 	_build_controller = get_node_or_null(build_controller_path) as BuildController
 	_game_controller = get_node_or_null(game_controller_path) as GameController
+	_bombardment_controller = get_node_or_null(bombardment_controller_path) as BombardmentController
 	_selection_box_overlay = get_node_or_null(selection_box_overlay_path) as Control
 	_rng.randomize()
 	_world_input = _find_world_input()
 
 func _unhandled_input(event: InputEvent) -> void:
 	if _build_controller != null and _build_controller.is_placing():
+		return
+	if _bombardment_controller != null and _bombardment_controller.is_active():
 		return
 	if _game_controller != null and _game_controller.is_rally_mode(team_id):
 		return
@@ -151,26 +157,38 @@ func _add_selected(unit: Unit) -> void:
 		return
 	_selected.append(unit)
 	unit.set_selected(true)
+	emit_signal("units_selected", _selected)
 
 func _remove_selected(unit: Unit) -> void:
 	_selected.erase(unit)
 	unit.set_selected(false)
+	emit_signal("units_selected", _selected)
 
 func _clear_selection() -> void:
 	for unit in _selected:
 		if is_instance_valid(unit):
 			unit.set_selected(false)
 	_selected.clear()
+	emit_signal("units_selected", _selected)
 
 func _set_selected_building(building: Building) -> void:
 	if _selected_building == building:
 		return
+	# Deselect previous building
+	if _selected_building != null and is_instance_valid(_selected_building):
+		_selected_building.set_selected(false)
 	_selected_building = building
+	# Select new building
+	if _selected_building != null and is_instance_valid(_selected_building):
+		_selected_building.set_selected(true)
 	emit_signal("building_selected", building)
 
 func _clear_selected_building() -> void:
 	if _selected_building == null:
 		return
+	# Deselect the building
+	if is_instance_valid(_selected_building):
+		_selected_building.set_selected(false)
 	_selected_building = null
 	emit_signal("building_selected", null)
 

@@ -148,6 +148,9 @@ var _start_p2 := Vector2(1800, 600)
 var _rally_p1 := Vector2.ZERO
 var _rally_p2 := Vector2.ZERO
 var _rally_mode_team := ""
+var _selected_factory_p1: Building = null
+var _rally_line: Line2D = null
+var _rally_canvas_layer: CanvasLayer = null
 var _rng := RandomNumberGenerator.new()
 var _ai_queue_timer := 0.0
 var _income_accum_p1 := 0.0
@@ -181,6 +184,18 @@ func _ready() -> void:
 	_sync_collectors("p2")
 	_ai_queue_timer = ai_queue_interval
 	_world_input = _find_world_input()
+	# Create Line2D for rally line visualization (added directly to GameController)
+	_rally_line = Line2D.new()
+	_rally_line.width = 20.0  # Make it very thick
+	_rally_line.default_color = Color(1.0, 0.0, 0.0, 1.0)  # Bright RED to make it obvious
+	_rally_line.z_index = 1000
+	_rally_line.visible = false
+	add_child(_rally_line)
+
+	# Connect to selection signals for rally line drawing
+	var selection_controller = get_node_or_null("../SelectionController")
+	if selection_controller != null and selection_controller.has_signal("building_selected"):
+		selection_controller.building_selected.connect(_on_building_selected)
 	queue_redraw()
 
 func _process(delta: float) -> void:
@@ -197,6 +212,9 @@ func _process(delta: float) -> void:
 	_update_state_counters()
 	_update_visibility()
 
+	# Update rally line when factory is selected
+	_update_rally_line()
+
 func _unhandled_input(event: InputEvent) -> void:
 	if _rally_mode_team == "":
 		return
@@ -204,11 +222,20 @@ func _unhandled_input(event: InputEvent) -> void:
 		_set_rally_point(_rally_mode_team, _get_world_mouse_pos())
 		_rally_mode_team = ""
 	elif event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_RIGHT and event.pressed:
+		# Right-click clears the rally point
+		_set_rally_point(_rally_mode_team, Vector2.ZERO)
 		_rally_mode_team = ""
 	elif event is InputEventKey and event.pressed and event.keycode == KEY_ESCAPE:
 		_rally_mode_team = ""
 
 func _draw() -> void:
+	# Draw HIMARS rally line when factory is selected
+	if _selected_factory_p1 != null and is_instance_valid(_selected_factory_p1):
+		var factory_pos := _selected_factory_p1.global_position
+		var target_pos := factory_pos + Vector2(200.0, 0.0)
+		draw_line(factory_pos, target_pos, Color(1.0, 1.0, 0.0, 1.0), 8.0)
+		draw_circle(target_pos, 15.0, Color(1.0, 1.0, 0.0, 0.5))
+
 	if not show_rally_marker:
 		pass
 	else:
@@ -258,6 +285,32 @@ func queue_vehicle(team_id: String, vehicle_type: String = "mixed", factory: Bui
 		_factory_queue_p1.append(entry)
 	else:
 		_factory_queue_p2.append(entry)
+	return true
+
+func queue_himars(team_id: String, factory: Building = null) -> bool:
+	if not _has_team_credits(team_id, GameBalance.HIMARS_UNIT_COST):
+		#print("[HIMARS] Not enough credits")
+		return false
+	if _get_factory_count(team_id) <= 0:
+		#print("[HIMARS] No factory")
+		return false
+	if _get_factory_queue(team_id).size() >= factory_queue_max:
+		#print("[HIMARS] Queue full")
+		return false
+	var chosen_factory: Building = null
+	if factory != null and is_instance_valid(factory):
+		if factory.build_id == "factory" and factory.team_id == team_id:
+			chosen_factory = factory
+	_deduct_team_credits(team_id, GameBalance.HIMARS_UNIT_COST)
+	var entry := {
+		"type": "himars",
+		"factory": chosen_factory,
+	}
+	if team_id == "p1":
+		_factory_queue_p1.append(entry)
+	else:
+		_factory_queue_p2.append(entry)
+	#print("[HIMARS] Queued successfully! Queue size: ", _get_factory_queue(team_id).size())
 	return true
 
 func buy_airfield_f35(team_id: String, airfield: Building) -> bool:
@@ -314,6 +367,19 @@ func get_airfield_aircraft_tier(airfield: Building) -> String:
 	if not airfield.has_meta("aircraft_tier"):
 		airfield.set_meta("aircraft_tier", "f16")
 	return str(airfield.get_meta("aircraft_tier", "f16"))
+
+func cycle_airfield_production_type(team_id: String, airfield: Building) -> bool:
+	if airfield == null or not is_instance_valid(airfield):
+		return false
+	if airfield.build_id != "airfield" or airfield.team_id != team_id:
+		return false
+	# Toggle between "fighter" and "uav"
+	if airfield.aircraft_production_type == "fighter":
+		airfield.aircraft_production_type = "uav"
+	else:
+		airfield.aircraft_production_type = "fighter"
+	print("[Airfield] Production type changed to: ", airfield.aircraft_production_type)
+	return true
 
 func deposit_credits(team_id: String, amount: int) -> void:
 	if amount <= 0:
@@ -453,6 +519,7 @@ func _spawn_building(team_id: String, build_id: String, pos: Vector2) -> void:
 		building.set_meta("aircraft_tier", "f16")
 		building.set_meta("aircraft_active", 0)
 		building.set_meta("aircraft_landing", 0)
+		building.aircraft_production_type = "fighter"  # Default to fighters
 	elif build_id == "supply":
 		building.size = Vector2(100, 80)
 		building.fill_color = Color(0.7, 0.6, 0.2, 1.0)
@@ -564,6 +631,42 @@ func _spawn_infantry(team_id: String) -> bool:
 	_spawn_unit(team_id, "infantry", barracks)
 	return true
 
+func spawn_aircraft(team_id: String, airfield: Building = null, aircraft_type: String = "") -> bool:
+	"""Spawn a specific aircraft type immediately (for direct purchase)"""
+	var target_airfield := airfield if airfield != null else _get_airfield_for_spawn(team_id)
+	if target_airfield == null:
+		return false
+
+	# Use specified type or determine from airfield settings
+	var type_to_spawn := aircraft_type if aircraft_type != "" else (
+		"uav" if target_airfield.aircraft_production_type == "uav" else get_airfield_aircraft_tier(target_airfield)
+	)
+
+	# Pre-find an available parking slot
+	var slot_map_value: Variant = target_airfield.get_meta("aircraft_landing_slots", {})
+	var slot_map: Dictionary = slot_map_value if slot_map_value is Dictionary else {}
+	var assigned_slot := -1
+	for i in range(4):
+		if not slot_map.has(i):
+			assigned_slot = i
+			break
+
+	# Store the slot temporarily
+	if assigned_slot >= 0:
+		target_airfield.set_meta("_spawn_slot_temp", assigned_slot)
+		target_airfield.set_meta("_spawn_slot_reserved", true)
+
+	var unit := _spawn_unit(team_id, "aircraft", target_airfield, type_to_spawn)
+
+	# Reserve the slot for this unit
+	if unit != null and target_airfield != null and assigned_slot >= 0:
+		slot_map[assigned_slot] = unit.get_instance_id()
+		target_airfield.set_meta("aircraft_landing_slots", slot_map)
+		target_airfield.remove_meta("_spawn_slot_temp")
+		target_airfield.remove_meta("_spawn_slot_reserved")
+
+	return unit != null
+
 func _spawn_aircraft(team_id: String) -> bool:
 	var airfield := _get_airfield_for_spawn(team_id)
 	if airfield == null:
@@ -583,7 +686,8 @@ func _spawn_aircraft(team_id: String) -> bool:
 		airfield.set_meta("_spawn_slot_temp", assigned_slot)
 		airfield.set_meta("_spawn_slot_reserved", true)
 
-	var aircraft_type := get_airfield_aircraft_tier(airfield)
+	# Check if airfield is set to produce UAVs or fighters
+	var aircraft_type := "uav" if airfield.aircraft_production_type == "uav" else get_airfield_aircraft_tier(airfield)
 	var unit := _spawn_unit(team_id, "aircraft", airfield, aircraft_type)
 
 	# Reserve the slot for this unit (after unit is added to tree)
@@ -636,6 +740,7 @@ func _spawn_unit(team_id: String, unit_kind: String, source_building: Building =
 		if production_type == "" and factory != null and is_instance_valid(factory):
 			production_type = factory.vehicle_production_type
 		var type_id := _resolve_vehicle_type(production_type)
+		print("[SPAWN] Spawning vehicle: production_type='", production_type, "' resolved_type='", type_id, "'")
 		var stats := _get_vehicle_def(type_id)
 		var range_role := str(stats.get("range_role", "short"))
 		var range_mult := _range_multiplier(range_role, vehicle_long_multiplier, vehicle_mid_multiplier)
@@ -654,7 +759,7 @@ func _spawn_unit(team_id: String, unit_kind: String, source_building: Building =
 		unit.attack_damage = float(stats.get("damage", vehicle_damage))
 		unit.attack_range = attack_range
 		unit.attack_cooldown = float(stats.get("cooldown", vehicle_attack_cooldown))
-		unit.body_radius = vehicle_body_radius
+		unit.body_radius = float(stats.get("body_radius", vehicle_body_radius))
 		unit.color = p1_vehicle_color if team_id == "p1" else p2_vehicle_color
 		unit.aggro_range = maxf(260.0, attack_range * 1.05)
 		unit.chase_leash = maxf(360.0, attack_range * 1.1)
@@ -664,9 +769,37 @@ func _spawn_unit(team_id: String, unit_kind: String, source_building: Building =
 		var shot_color = stats.get("shot_color", Color(1.0, 0.8, 0.5, 0.8))
 		if shot_color is Color:
 			unit.shot_color = shot_color
-		unit.position = _spawn_at_factory(team_id, factory)
-		unit.visual_scene_path = _get_unit_visual_path("vehicle")
-		unit.visual_base_radius = 14.0
+		unit.vehicle_turn_rate = float(stats.get("turn_rate", 3.0))  # Default 3.0 rad/s for smooth turning
+		var spawn_pos := _spawn_at_factory(team_id, factory)
+		unit.position = spawn_pos
+
+		# Check if vehicle def has custom visual path (e.g., HIMARS)
+		var custom_visual_path = stats.get("visual_scene_path", "")
+		if custom_visual_path != "":
+			unit.visual_scene_path = str(custom_visual_path)
+			unit.visual_base_radius = float(stats.get("visual_base_radius", 14.0))
+		else:
+			unit.visual_scene_path = _get_unit_visual_path("vehicle")
+			unit.visual_base_radius = 14.0
+
+		# Set HIMARS-specific properties
+		var is_himars_unit := bool(stats.get("is_himars", false))
+		if is_himars_unit:
+			unit.is_himars = true
+			unit.vision_radius = float(stats.get("vision_radius", GameBalance.HIMARS_VISION_RADIUS))
+			unit.bombardment_range = float(stats.get("bombardment_range", GameBalance.HIMARS_BOMBARDMENT_RANGE))
+			unit.bombardment_missile_damage = float(stats.get("missile_damage", GameBalance.HIMARS_MISSILE_DAMAGE))
+			unit.bombardment_missile_speed = float(stats.get("missile_speed", GameBalance.HIMARS_MISSILE_SPEED))
+			unit.bombardment_missile_lifetime = float(stats.get("missile_lifetime", GameBalance.HIMARS_MISSILE_LIFETIME))
+			unit.bombardment_missile_splash_radius = float(stats.get("missile_splash_radius", GameBalance.HIMARS_MISSILE_SPLASH_RADIUS))
+			unit.bombardment_missiles_per_salvo = int(stats.get("missiles_per_salvo", GameBalance.HIMARS_MISSILES_PER_SALVO))
+			unit.bombardment_salvo_interval = float(stats.get("salvo_interval", GameBalance.HIMARS_SALVO_INTERVAL))
+			unit.bombardment_reload_time = float(stats.get("reload_time", GameBalance.HIMARS_RELOAD_TIME))
+			#print("[HIMARS] Unit spawned with bombardment properties, visual_path: ", unit.visual_scene_path, " vision_radius: ", unit.vision_radius)
+
+		# HIMARS always drives forward 200 units and stops, never goes to rally point
+		var forward_dir := Vector2(1.0, 0.0) if team_id == "p1" else Vector2(-1.0, 0.0)
+		unit.rally_target = spawn_pos + forward_dir * 200.0
 	elif unit_kind == "aircraft":
 		var airfield := source_building
 		var type_id := _resolve_aircraft_type(unit_type_id)
@@ -736,6 +869,12 @@ func _spawn_unit(team_id: String, unit_kind: String, source_building: Building =
 		unit.visual_scene_path = _get_unit_visual_path("aircraft", type_id)
 		unit.visual_base_radius = 20.0
 		unit.missile_visual_path = _get_missile_visual_path(type_id, "ground")
+		# Set UAV flag if this is a UAV
+		if stats.get("is_uav", false):
+			unit.is_uav = true
+			unit.aircraft_loiter_radius = float(stats.get("loiter_radius", GameBalance.UAV_LOITER_RADIUS))
+			unit.aircraft_loiter_orbit_speed = float(stats.get("loiter_orbit_speed", GameBalance.UAV_LOITER_ORBIT_SPEED))
+			print("[UAV] Spawned UAV with vision_radius: ", unit.vision_radius, " loiter_radius: ", unit.aircraft_loiter_radius)
 	else:
 		var barracks := source_building
 		var production_type := "mixed"
@@ -781,7 +920,9 @@ func _spawn_unit(team_id: String, unit_kind: String, source_building: Building =
 		unit.visual_scene_path = _get_unit_visual_path("infantry")
 		unit.visual_base_radius = 8.0
 	unit.enemy_hq = _hq_p2 if team_id == "p1" else _hq_p1
-	unit.rally_target = _rally_p1 if team_id == "p1" else _rally_p2
+	# Set rally target for infantry and aircraft (vehicles set it earlier with custom logic)
+	if unit_kind != "vehicle":
+		unit.rally_target = _rally_p1 if team_id == "p1" else _rally_p2
 	_units.add_child(unit)
 	return unit
 
@@ -913,6 +1054,7 @@ func _get_wait_point(team_id: String, origin: Vector2) -> Vector2:
 	return Vector2(inside_x, clamped_y)
 
 func _offset_spawn(pos: Vector2) -> Vector2:
+	# Spawn at building center with small random offset
 	return pos + Vector2(
 		_rng.randf_range(-unit_spawn_spread, unit_spawn_spread),
 		_rng.randf_range(-unit_spawn_spread, unit_spawn_spread)
@@ -1117,6 +1259,7 @@ func _load_rally_targets(data: Dictionary) -> void:
 			_rally_p1 = pos
 		elif id == "p2_push":
 			_rally_p2 = pos
+	# Set default rally points for normal vehicles to attack enemy HQ
 	if _rally_p1 == Vector2.ZERO:
 		_rally_p1 = _start_p2
 	if _rally_p2 == Vector2.ZERO:
@@ -1391,7 +1534,7 @@ func _resolve_vehicle_type(requested: String) -> String:
 		return "tank"
 	if requested == "apc":
 		return "ifv"
-	if requested in ["tank", "artillery", "ifv"]:
+	if requested in ["tank", "artillery", "ifv", "himars"]:
 		return requested
 	return "tank"
 
@@ -1406,6 +1549,8 @@ func _resolve_aircraft_type(requested: String) -> String:
 		return "f22"
 	if requested == "f35":
 		return "f35"
+	if requested == "uav":
+		return "uav"
 	return "f16"
 
 func _get_infantry_def(type_id: String) -> Dictionary:
@@ -1458,6 +1603,30 @@ func _get_infantry_def(type_id: String) -> Dictionary:
 
 func _get_vehicle_def(type_id: String) -> Dictionary:
 	match type_id:
+		"himars":
+			return {
+				"range_role": "short",
+				"max_hp": GameBalance.HIMARS_MAX_HP,
+				"damage": 0.0,  # HIMARS doesn't use direct fire
+				"cooldown": 999.0,  # No direct fire
+				"speed": GameBalance.HIMARS_SPEED,
+				"shot_color": Color(1.0, 0.5, 0.0, 0.0),
+				"shot_width": 0.0,
+				"shot_lifetime": 0.0,
+				"body_radius": GameBalance.HIMARS_BODY_RADIUS,
+				"vision_radius": GameBalance.HIMARS_VISION_RADIUS,
+				"is_himars": true,
+				"bombardment_range": GameBalance.HIMARS_BOMBARDMENT_RANGE,
+				"missile_damage": GameBalance.HIMARS_MISSILE_DAMAGE,
+				"missile_speed": GameBalance.HIMARS_MISSILE_SPEED,
+				"missile_lifetime": GameBalance.HIMARS_MISSILE_LIFETIME,
+				"missile_splash_radius": GameBalance.HIMARS_MISSILE_SPLASH_RADIUS,
+				"missiles_per_salvo": GameBalance.HIMARS_MISSILES_PER_SALVO,
+				"salvo_interval": GameBalance.HIMARS_SALVO_INTERVAL,
+				"reload_time": GameBalance.HIMARS_RELOAD_TIME,
+				"visual_scene_path": "res://scenes/units/himars_visual_animated.tscn",
+				"visual_base_radius": 16.0,
+			}
 		"artillery":
 			return {
 				"range_role": "long",
@@ -1637,6 +1806,43 @@ func _get_aircraft_def(type_id: String) -> Dictionary:
 				"damage_vs_vehicle": 1.6,
 				"damage_vs_structure": 1.1,
 			}
+		"uav":
+			return {
+				"range_role": "long",
+				"range_multiplier": 1.0,
+				"max_hp": GameBalance.UAV_MAX_HP,
+				"damage": 0.0,  # No weapons
+				"cooldown": 999.0,
+				"speed": GameBalance.UAV_SPEED,
+				"attack_range": 0.0,  # No combat
+				"body_radius": GameBalance.UAV_BODY_RADIUS,
+				"vision_radius": GameBalance.UAV_VISION_RADIUS,
+				"turn_rate": GameBalance.UAV_TURN_RATE,
+				"loiter_radius": GameBalance.UAV_LOITER_RADIUS,
+				"loiter_orbit_speed": GameBalance.UAV_LOITER_ORBIT_SPEED,
+				"shot_color": Color(0.0, 0.0, 0.0, 0.0),
+				"shot_width": 0.0,
+				"shot_lifetime": 0.0,
+				"gun_ammo": 0,  # No weapons
+				"missile_ammo": 0,  # No weapons
+				"missile_damage": 0.0,
+				"missile_speed": 0.0,
+				"missile_turn_rate": 0.0,
+				"missile_range": 0.0,
+				"missile_cooldown": 999.0,
+				"missile_hit_radius": 0.0,
+				"missile_warhead_size": "small",
+				"missile_splash_radius": 0.0,
+				"missile_splash_scale": 0.0,
+				"missile_lifetime": 0.0,
+				"reload_time": 999.0,
+				"missile_color": Color(0.0, 0.0, 0.0, 0.0),
+				"prefers_vehicle": false,
+				"damage_vs_infantry": 0.0,
+				"damage_vs_vehicle": 0.0,
+				"damage_vs_structure": 0.0,
+				"is_uav": true,  # Special flag for UAV behavior
+			}
 		"f16":
 			return {
 				"range_role": "long",
@@ -1742,6 +1948,8 @@ func _get_aircraft_visual_path(aircraft_type: String) -> String:
 		"f35":
 			# F-35 uses the generic 2D visual for now
 			return "res://scenes/units/aircraft_visual.tscn"
+		"uav":
+			return "res://assets/models/Drones/mq-9_reaper_uav_drone.glb"
 	# Default to generic 2D aircraft visual
 	return "res://scenes/units/aircraft_visual.tscn"
 
@@ -1884,3 +2092,26 @@ func _set_enemy_visibility(is_visible: bool) -> void:
 	for node in get_tree().get_nodes_in_group("hq"):
 		if node is HQ and node.team_id == "p2":
 			node.visible = is_visible
+
+func _on_building_selected(building: Building) -> void:
+	if building != null and is_instance_valid(building) and building.build_id == "factory" and building.team_id == "p1":
+		_selected_factory_p1 = building
+	else:
+		_selected_factory_p1 = null
+	_update_rally_line()
+
+func _update_rally_line() -> void:
+	if _rally_line == null:
+		return
+
+	if _selected_factory_p1 != null and is_instance_valid(_selected_factory_p1):
+		var factory_pos := _selected_factory_p1.global_position
+		# Always show line 200 units forward (HIMARS behavior)
+		var rally_target := factory_pos + Vector2(200.0, 0.0)
+
+		_rally_line.clear_points()
+		_rally_line.add_point(factory_pos)
+		_rally_line.add_point(rally_target)
+		_rally_line.visible = true
+	else:
+		_rally_line.visible = false

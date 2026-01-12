@@ -58,7 +58,7 @@ signal shot_fired(start_pos: Vector2, end_pos: Vector2, color: Color, width: flo
 @export var aircraft_missile_turn_rate := 6.0
 @export var aircraft_missile_damage := 32.0
 @export var aircraft_missile_cooldown := 2.4
-@export var aircraft_missile_lock_time := 0.5  # Reduced from 2.0 for faster engagement
+@export var aircraft_missile_lock_time := 0.25  # Reduced by 50% from 0.5 for faster engagement
 @export var aircraft_missile_focus_limit := 1
 @export var aircraft_missile_color := Color(1.0, 0.55, 0.25, 1.0)
 @export var aircraft_missile_warhead_size := "large"
@@ -75,7 +75,7 @@ signal shot_fired(start_pos: Vector2, end_pos: Vector2, color: Color, width: flo
 @export var aircraft_perimeter_padding := 60.0
 @export var aircraft_perimeter_forward_bias := 0.2
 @export var aircraft_loiter_reload_delay := 5.0
-@export var aircraft_retreat_duration := 5.0  # Increased from 3.0 for safer escape after firing
+@export var aircraft_retreat_duration := 8.0  # Increased from 5.0 - includes 5s retreat + 3s cooldown
 @export var aircraft_turn_rate := 2.2
 @export var aircraft_circulate_speed_mult := 3.0
 @export var aircraft_engage_speed_mult := 4.0
@@ -92,12 +92,33 @@ signal shot_fired(start_pos: Vector2, end_pos: Vector2, color: Color, width: flo
 @export var aircraft_landing_slot_spacing := 32.0
 @export var aircraft_landing_cap := 4
 @export var aircraft_queue_radius := 0.0
-@export var aircraft_squad_enabled := true
+@export var aircraft_squad_enabled := false  # Disabled - each plane fires independently
 @export var aircraft_squad_spacing := 80.0
 @export var aircraft_squad_lateral_ratio := 0.6
 
+@export var vehicle_turn_rate := 3.0  # Radians per second for ground vehicles (0 = instant)
+
+@export var is_uav := false  # UAV reconnaissance drone (no weapons, just vision)
+@export var is_himars := false
+@export var bombardment_range := 800.0
+@export var bombardment_missile_damage := 80.0
+@export var bombardment_missile_speed := 400.0
+@export var bombardment_missile_lifetime := 12.0
+@export var bombardment_missile_splash_radius := 60.0
+@export var bombardment_missiles_per_salvo := 2
+@export var bombardment_salvo_interval := 1.0
+@export var bombardment_reload_time := 15.0
+
 var hp := 0.0
 var unit_kind := "infantry"
+var _bombardment_ready := true
+var _bombardment_cooldown := 0.0
+var _bombardment_salvo_count := 0
+var _bombardment_salvo_timer := 0.0
+var _bombardment_salvo_target := Vector2.ZERO
+var _bombardment_area_active := false
+var _bombardment_area_target := Vector2.ZERO
+var _himars_ground_marker: Node2D = null  # Visual marker on ground showing target area
 var home_pos := Vector2.ZERO
 var target_pos := Vector2.ZERO
 var rally_target := Vector2.ZERO
@@ -132,7 +153,7 @@ var aircraft_altitude_factor := 1.0
 var aircraft_circulating := false
 var _aircraft_no_missile_timer := 0.0
 var _aircraft_retreat_timer := 0.0  # Timer for post-missile retreat behavior
-var _aircraft_retreat_direction := Vector2.ZERO  # Direction to flee when retreating
+var _aircraft_retreat_phase := 0  # 0 = turn away, 1 = arc back to airfield
 var _aircraft_force_reload := false
 var _aircraft_landing_reserved := false
 var _aircraft_landing_on_path := false
@@ -152,6 +173,12 @@ var _nav_path := PackedVector2Array()
 var _nav_index := 0
 var _nav_target := Vector2.ZERO
 var _nav_repath_timer := 0.0
+
+# HIMARS Launcher Control
+var _himars_launcher_node: Node3D = null
+var _himars_launcher_angle := 0.0
+var _himars_setup_timer := 0.0
+var _himars_setup_done := false
 
 func _ready() -> void:
 	hp = max_hp
@@ -185,6 +212,49 @@ func _ready() -> void:
 			aircraft_altitude_factor = 1.0
 		_register_aircraft_squad()
 	_setup_visual()
+	if is_himars:
+		_himars_setup_timer = 0.15  # Try setup after 0.15 seconds
+
+func _setup_himars_launcher() -> void:
+	"""Find the HIMARS launcher mesh for manual rotation"""
+	var world_3d = get_tree().root.get_node_or_null("Main/World3D")
+	if world_3d == null:
+		return
+
+	var visual_proxy = _find_visual_proxy_in_world(world_3d)
+	if visual_proxy == null:
+		return
+
+	# Find launcher mesh by name keywords
+	_himars_launcher_node = _find_launcher_mesh(visual_proxy)
+	if _himars_launcher_node != null:
+		_himars_launcher_angle = 0.0  # Start lowered
+	else:
+		pass  # Launcher mesh not found
+
+func _find_visual_proxy_in_world(world_node: Node) -> Node3D:
+	"""Find the 3D visual proxy node that represents this unit"""
+	var my_id = get_instance_id()
+	for child in world_node.get_children():
+		if child.has_meta("unit_id") and child.get_meta("unit_id") == my_id:
+			return child as Node3D
+	return null
+
+func _find_launcher_mesh(node: Node) -> Node3D:
+	"""Recursively search for launcher mesh node"""
+	var name_lower = node.name.to_lower()
+	var keywords = ["missle", "rocket", "launcher", "pod", "tube"]  # Note: model has "missle" typo
+
+	for keyword in keywords:
+		if keyword in name_lower and node is Node3D:
+			return node as Node3D
+
+	for child in node.get_children():
+		var found = _find_launcher_mesh(child)
+		if found != null:
+			return found
+
+	return null
 
 func _exit_tree() -> void:
 	GameState.unit_count = maxi(0, GameState.unit_count - 1)
@@ -193,6 +263,8 @@ func _exit_tree() -> void:
 		_release_landing_slot()
 		_release_airfield_slot()
 		_release_airfield_f35()
+	if is_himars:
+		_remove_ground_marker()
 
 func take_damage(amount: float, attacker_type: String = "") -> void:
 	var final_damage := amount
@@ -211,24 +283,80 @@ func get_vision_radius() -> float:
 func _process(delta: float) -> void:
 	if hp <= 0.0:
 		return
+
+	# HIMARS launcher setup (delayed to ensure 3D visual is ready)
+	if is_himars and not _himars_setup_done and _himars_setup_timer > 0.0:
+		_himars_setup_timer -= delta
+		if _himars_setup_timer <= 0.0:
+			_setup_himars_launcher()
+			_himars_setup_done = true
+
+	# HIMARS launcher rotation
+	if is_himars and _himars_launcher_node != null:
+		var target_angle = -45.0 if (_bombardment_area_active or _bombardment_area_target != Vector2.ZERO) else 0.0
+		_himars_launcher_angle = move_toward(_himars_launcher_angle, target_angle, 60.0 * delta)
+		_himars_launcher_node.rotation_degrees.x = _himars_launcher_angle
+
 	_cooldown = maxf(0.0, _cooldown - delta)
 	if unit_kind == "aircraft":
 		_aircraft_missile_timer = maxf(0.0, _aircraft_missile_timer - delta)
+	if is_himars:
+		_bombardment_cooldown = maxf(0.0, _bombardment_cooldown - delta)
+		if _bombardment_cooldown <= 0.0:
+			_bombardment_ready = true
+
+		# Handle rotation towards target
+		_update_himars_deployment(delta)
+
+		# Handle salvo firing
+		if _bombardment_salvo_count > 0:
+			_bombardment_salvo_timer -= delta
+			if _bombardment_salvo_timer <= 0.0:
+				_fire_single_missile(_bombardment_salvo_target)
+				_bombardment_salvo_count -= 1
+				_bombardment_salvo_timer = bombardment_salvo_interval
+
+		# HIMARS auto-bombardment behavior (only start new salvo if none active)
+		if _bombardment_ready and _bombardment_salvo_count == 0:
+			# Priority 1: Area bombardment if active
+			if _bombardment_area_active and _bombardment_area_target != Vector2.ZERO:
+				var dist := global_position.distance_to(_bombardment_area_target)
+				if dist <= bombardment_range:
+					launch_bombardment(_bombardment_area_target)
+			# Priority 2: Auto-engage enemies (only when not in manual control)
+			elif not manual_active:
+				var enemy := _find_bombardment_target()
+				if enemy != null:
+					# Launch at enemy position
+					launch_bombardment(enemy.global_position)
 	_update_hold(delta)
 	if unit_kind == "aircraft":
 		_update_aircraft_state(delta)
 		return
-	if not manual_active and not _hold_active:
-		_update_chase_target()
-		_update_structure_target()
-	if not manual_active:
-		_update_combat_spread(delta)
-	var target := _find_attack_target()
-	if target != null:
-		_face_toward(target.global_position)
-		_attack(target)
+	# HIMARS has different behavior - only moves when manually commanded or moving to rally point
+	if is_himars:
+		# HIMARS only moves for: manual commands OR rally target
+		# It does NOT auto-chase enemies or auto-move to HQ
+		var has_rally := not _reached_rally and rally_target != Vector2.ZERO
+		var needs_to_move := (manual_active and manual_target != Vector2.ZERO) or has_rally
+
+		if needs_to_move:
+			_move_toward_target(delta)
 	else:
-		_move_toward_target(delta)
+		# Normal unit behavior
+		if not manual_active and not _hold_active:
+			_update_chase_target()
+			_update_structure_target()
+		if not manual_active:
+			_update_combat_spread(delta)
+		var target := _find_attack_target()
+		if target != null:
+			_face_toward(target.global_position)
+			_attack(target)
+		else:
+			_move_toward_target(delta)
+	# Apply gentle separation for overlapping units
+	_apply_unit_separation(delta)
 	_sync_visual_rotation()
 
 func _draw() -> void:
@@ -299,19 +427,36 @@ func _sync_visual_rotation() -> void:
 
 func _update_aircraft_state(delta: float) -> void:
 	_refresh_aircraft_squad_state()
-	var missile_target := _find_aircraft_missile_target()
-	var gun_target := _find_attack_target()
-	if aircraft_squad_enabled:
-		if _is_aircraft_squad_leader() and missile_target == null and _aircraft_squad_has_missiles():
-			missile_target = _find_aircraft_missile_target(true)
-		if _is_aircraft_squad_leader():
-			var shared := missile_target if missile_target != null else gun_target
-			_set_aircraft_squad_target(shared)
-		else:
-			var shared := _get_aircraft_squad_target()
-			if shared != null:
-				missile_target = shared
-				gun_target = shared
+
+	# UAVs don't engage in combat, they just loiter for reconnaissance
+	if is_uav:
+		# But UAVs still need to take off from the runway first!
+		if _update_aircraft_takeoff(delta):
+			_sync_visual_rotation()
+			return
+		# Once airborne, loiter for reconnaissance
+		_update_aircraft_loiter_reload(delta, null, null)
+		_move_toward_aircraft_loiter(delta)
+		_sync_visual_rotation()
+		return
+
+	# Don't look for targets while retreating!
+	var missile_target: Node2D = null
+	var gun_target: Node2D = null
+	if _aircraft_retreat_timer <= 0.0:
+		missile_target = _find_aircraft_missile_target()
+		gun_target = _find_attack_target()
+		if aircraft_squad_enabled:
+			if _is_aircraft_squad_leader() and missile_target == null and _aircraft_squad_has_missiles():
+				missile_target = _find_aircraft_missile_target(true)
+			if _is_aircraft_squad_leader():
+				var shared := missile_target if missile_target != null else gun_target
+				_set_aircraft_squad_target(shared)
+			else:
+				var shared := _get_aircraft_squad_target()
+				if shared != null:
+					missile_target = shared
+					gun_target = shared
 	_set_aircraft_speed(1.0, false)
 	_update_aircraft_loiter_reload(delta, missile_target, gun_target)
 	# Update retreat timer
@@ -327,7 +472,14 @@ func _update_aircraft_state(delta: float) -> void:
 		_aircraft_missile_lock_id = 0
 		_sync_visual_rotation()
 		return
-	_update_aircraft_missile_lock(delta, missile_target)
+	# Don't update missile lock or engage targets while retreating
+	if _aircraft_retreat_timer <= 0.0:
+		_update_aircraft_missile_lock(delta, missile_target)
+	else:
+		# Clear missile lock during retreat
+		_aircraft_missile_lock_timer = 0.0
+		_aircraft_missile_lock_id = 0
+
 	aircraft_altitude_factor = 1.0
 	_aircraft_landing_on_path = false
 	_aircraft_landing_taxi = false
@@ -335,78 +487,63 @@ func _update_aircraft_state(delta: float) -> void:
 	var fired := false
 	var gun_in_range := gun_target != null and _aircraft_gun_target_in_range(gun_target)
 
-	# Fire weapons if in position
-	if missile_target != null:
+	# Fire weapons if in position (but not while retreating!)
+	if missile_target != null and _aircraft_retreat_timer <= 0.0:
 		_face_aircraft_toward(missile_target.global_position, delta)
 		if _aircraft_missile_lock_timer >= aircraft_missile_lock_time and _can_fire_aircraft_missile():
 			_fire_aircraft_missile(missile_target)
 			_aircraft_missile_lock_timer = 0.0
 			fired = true
-	if not fired and gun_target != null and aircraft_gun_ammo > 0 and gun_in_range:
+	if not fired and gun_target != null and aircraft_gun_ammo > 0 and gun_in_range and _aircraft_retreat_timer <= 0.0:
 		_face_aircraft_toward(gun_target.global_position, delta)
 		_fire_aircraft_gun(gun_target)
 		# Trigger retreat after gun run if enabled
 		if aircraft_retreat_after_gun:
 			_aircraft_retreat_timer = aircraft_retreat_duration
-			if gun_target != null and is_instance_valid(gun_target):
-				var to_target := (gun_target.global_position - global_position).normalized()
-				var retreat_angle := randf_range(2.094, PI)  # 120-180 degrees
-				if randf() < 0.5:
-					retreat_angle = -retreat_angle
-				_aircraft_retreat_direction = to_target.rotated(retreat_angle)
 		fired = true
 
-	# Movement logic with safe standoff distance
+	# SIMPLE MOVEMENT LOGIC: Circle back, approach, fire, retreat
 	if manual_active or _hold_active:
+		_set_aircraft_speed(aircraft_engage_speed_mult, true)  # Full speed with afterburner for manual control
 		var manual_target_pos := _resolve_target()
 		if manual_target_pos != Vector2.ZERO:
 			_move_toward_aircraft_target(manual_target_pos, delta)
 	elif _aircraft_retreat_timer > 0.0:
-		# Retreat after firing - fly away from danger
+		# RETREATING: Turn away 45 degrees, then arc back to airfield
 		_set_aircraft_speed(aircraft_engage_speed_mult, true)
-		if _aircraft_retreat_direction != Vector2.ZERO:
-			var retreat_target := global_position + (_aircraft_retreat_direction * 1000.0)
-			_move_toward_aircraft_target(retreat_target, delta)
+
+		if _aircraft_retreat_phase == 0:
+			# Phase 0: Turn away from enemies for 1.5 seconds
+			if _aircraft_retreat_timer < aircraft_retreat_duration - 1.5:
+				_aircraft_retreat_phase = 1
+			else:
+				# Keep turning away
+				var to_loiter := (aircraft_loiter_pos - global_position).normalized()
+				# Turn 45 degrees from direct loiter direction
+				var turn_away := to_loiter.rotated(PI * 0.25)  # 45 degrees
+				var away_target := global_position + (turn_away * 500.0)
+				_move_toward_aircraft_target(away_target, delta)
 		else:
+			# Phase 1: Arc back towards airfield
 			_move_toward_aircraft_loiter(delta)
-	elif missile_target != null and _aircraft_missile_lock_timer < aircraft_missile_lock_time:
-		# Approaching for missile lock - maintain minimum distance
-		var dist_to_target := global_position.distance_to(missile_target.global_position)
-		if dist_to_target < aircraft_min_engagement_distance:
-			# Too close - orbit at standoff distance instead
-			_set_aircraft_speed(aircraft_engage_speed_mult, true)
+	elif missile_target != null:
+		# HAS TARGET: Approach from safe distance and fire
+		_set_aircraft_speed(aircraft_engage_speed_mult, true)
+		var dist := global_position.distance_to(missile_target.global_position)
+
+		# If too close, orbit around at safe distance
+		if dist < aircraft_min_engagement_distance * 0.8:
 			_move_toward_aircraft_orbit_standoff(missile_target.global_position, aircraft_min_engagement_distance, delta)
+		# If at good distance, approach in a wide arc
 		else:
-			# Far enough - approach but don't get too close
-			_set_aircraft_speed(aircraft_engage_speed_mult, true)
-			var approach_target := _calculate_standoff_position(missile_target.global_position, aircraft_min_engagement_distance)
-			_move_toward_aircraft_target(approach_target, delta)
-	elif missile_target == null and gun_target == null:
+			var approach_pos := _calculate_standoff_position(missile_target.global_position, aircraft_min_engagement_distance * 0.7)
+			_move_toward_aircraft_target(approach_pos, delta)
+	else:
+		# NO TARGET: Circle around perimeter looking for targets
 		aircraft_circulating = true
 		_set_aircraft_speed(aircraft_circulate_speed_mult, false)
 		_move_toward_aircraft_perimeter(delta)
-	elif gun_target != null and aircraft_gun_ammo > 0:
-		var dist_to_gun_target := global_position.distance_to(gun_target.global_position)
-		if dist_to_gun_target > attack_range * 0.95:
-			# Attack run - approach from safe distance
-			_set_aircraft_speed(aircraft_engage_speed_mult, true)
-			var attack_approach := _calculate_standoff_position(gun_target.global_position, attack_range * 0.8)
-			_move_toward_aircraft_target(attack_approach, delta)
-		else:
-			# In range - circle at standoff distance
-			_set_aircraft_speed(aircraft_engage_speed_mult, true)
-			_move_toward_aircraft_orbit_standoff(gun_target.global_position, attack_range * 0.85, delta)
-	elif missile_target != null and aircraft_gun_ammo > 0 and aircraft_missile_ammo <= 0:
-		# Out of missiles but have guns - maintain safer distance
-		var dist := global_position.distance_to(missile_target.global_position)
-		if dist < aircraft_min_engagement_distance * 1.5:
-			_set_aircraft_speed(aircraft_engage_speed_mult, true)
-			_move_toward_aircraft_orbit_standoff(missile_target.global_position, aircraft_min_engagement_distance, delta)
-		else:
-			_set_aircraft_speed(aircraft_engage_speed_mult, true)
-			_move_toward_aircraft_target(missile_target.global_position, delta)
-	else:
-		_move_toward_aircraft_loiter(delta)
+
 	_sync_visual_rotation()
 
 func _update_aircraft_reload(delta: float) -> bool:
@@ -953,16 +1090,12 @@ func _fire_aircraft_missile(target: Node2D) -> void:
 	missile.set_origin(global_position)
 	if missile_visual_path != "":
 		missile.visual_scene_path = missile_visual_path
-		missile.visual_base_radius = 10.0
+		missile.visual_base_radius = 0.1  # EXTREMELY LARGE for testing (1.0/0.1 = 10.0 scale = 1000% size!!)
 	if get_parent() != null:
 		get_parent().add_child(missile)
 	_aircraft_retreat_timer = aircraft_retreat_duration  # Start retreat after firing
-	# Set retreat direction: turn 120-180 degrees away from target
-	var to_target := (target.global_position - global_position).normalized()
-	var retreat_angle := randf_range(2.094, PI)  # 120 to 180 degrees
-	if randf() < 0.5:
-		retreat_angle = -retreat_angle
-	_aircraft_retreat_direction = to_target.rotated(retreat_angle)
+	_aircraft_retreat_phase = 0  # Reset to turn-away phase
+	print("[Aircraft] Missile fired! Starting retreat for ", aircraft_retreat_duration, "s. Ammo remaining: ", aircraft_missile_ammo - 1)
 	aircraft_missile_ammo = maxi(0, aircraft_missile_ammo - 1)
 	_aircraft_missile_timer = aircraft_missile_cooldown
 	if aircraft_missile_ammo <= 0:
@@ -994,11 +1127,17 @@ func _set_canvas_children_visible(value: bool) -> void:
 		if child is CanvasItem:
 			child.visible = value
 
-func _face_toward(pos: Vector2) -> void:
+func _face_toward(pos: Vector2, delta: float = 0.0) -> void:
 	var delta_vec := pos - global_position
 	if delta_vec.length_squared() <= 0.1:
 		return
-	_facing = delta_vec.normalized()
+	var desired := delta_vec.normalized()
+
+	# Apply smooth turning for vehicles
+	if delta > 0.0 and unit_kind != "aircraft" and unit_kind != "infantry" and vehicle_turn_rate > 0.0:
+		_facing = _apply_vehicle_turn(desired, delta)
+	else:
+		_facing = desired
 
 func _face_aircraft_toward(pos: Vector2, delta: float) -> void:
 	var delta_vec := pos - global_position
@@ -1183,8 +1322,13 @@ func _move_toward_position(target: Vector2, delta: float, allow_completion: bool
 				rally_target = Vector2.ZERO
 		return
 	var direction := delta_vec.normalized()
+
+	# Apply smooth turning based on unit type
 	if unit_kind == "aircraft" and not _aircraft_allow_instant_turn() and aircraft_turn_rate > 0.0:
 		direction = _apply_aircraft_turn(direction, delta)
+	elif unit_kind != "aircraft" and unit_kind != "infantry" and vehicle_turn_rate > 0.0:
+		direction = _apply_vehicle_turn(direction, delta)
+
 	var move_speed := speed
 	if unit_kind == "aircraft":
 		move_speed *= maxf(0.0, _aircraft_speed_mult)
@@ -1200,6 +1344,44 @@ func _move_toward_position(target: Vector2, delta: float, allow_completion: bool
 				return
 	global_position += step
 	_facing = direction
+
+func _apply_unit_separation(delta: float) -> void:
+	# Gentle separation for overlapping units
+	if unit_kind == "aircraft":
+		return  # Aircraft handle their own spacing
+
+	var separation_radius := body_radius * 2.2  # Start separating when units get close
+	var separation_strength := 15.0  # Gentle push force
+	var separation_force := Vector2.ZERO
+	var nearby_count := 0
+
+	# Check nearby units of the same team
+	var group_name := "units_%s" % team_id
+	var units := get_tree().get_nodes_in_group(group_name)
+
+	for other_node in units:
+		if other_node == self:
+			continue
+		if not (other_node is Unit):
+			continue
+		var other := other_node as Unit
+		if other.unit_kind == "aircraft":
+			continue  # Don't separate from aircraft
+
+		var to_other := other.global_position - global_position
+		var dist := to_other.length()
+
+		# If units are overlapping or very close
+		if dist < separation_radius and dist > 0.1:
+			# Push away from the other unit
+			var push_strength := 1.0 - (dist / separation_radius)
+			separation_force -= to_other.normalized() * push_strength
+			nearby_count += 1
+
+	# Apply the separation force gently
+	if nearby_count > 0:
+		separation_force = separation_force.normalized()
+		global_position += separation_force * separation_strength * delta
 
 func _move_toward_aircraft_target(target: Vector2, delta: float) -> void:
 	var adjusted := _get_aircraft_formation_target(target)
@@ -1337,6 +1519,18 @@ func _apply_aircraft_turn(desired: Vector2, delta: float) -> Vector2:
 		return desired_dir
 	var angle := _facing.angle_to(desired_dir)
 	var max_turn := aircraft_turn_rate * delta
+	var clamped := clampf(angle, -max_turn, max_turn)
+	var turned := _facing.rotated(clamped)
+	if turned.length_squared() <= 0.01:
+		return desired_dir
+	return turned.normalized()
+
+func _apply_vehicle_turn(desired: Vector2, delta: float) -> Vector2:
+	var desired_dir := desired.normalized()
+	if _facing.length_squared() <= 0.01:
+		return desired_dir
+	var angle := _facing.angle_to(desired_dir)
+	var max_turn := vehicle_turn_rate * delta
 	var clamped := clampf(angle, -max_turn, max_turn)
 	var turned := _facing.rotated(clamped)
 	if turned.length_squared() <= 0.01:
@@ -1674,12 +1868,20 @@ func _resolve_target() -> Vector2:
 	if _hold_active:
 		return _hold_pos
 	var target := Vector2.ZERO
+
+	# HIMARS prioritizes rally target over combat targets
+	if is_himars and not _reached_rally and rally_target != Vector2.ZERO:
+		return rally_target
+
 	if _chase_target != null and is_instance_valid(_chase_target):
 		target = _chase_target.global_position
 	elif _structure_target != null and is_instance_valid(_structure_target):
 		target = _structure_target.global_position
 	elif not _reached_rally and rally_target != Vector2.ZERO:
 		target = rally_target
+	elif is_himars:
+		# HIMARS stays at rally point, doesn't auto-move to HQ
+		target = global_position
 	elif enemy_hq != null and is_instance_valid(enemy_hq):
 		target = enemy_hq.global_position
 	else:
@@ -1803,3 +2005,184 @@ func _update_hold(delta: float) -> void:
 		_hold_timer = 0.0
 		_hold_pos = Vector2.ZERO
 		_hold_reached = false
+
+func launch_bombardment(target_pos: Vector2) -> bool:
+	if not is_himars:
+		print("[BOMBARDMENT] Not a HIMARS unit")
+		return false
+	if not _bombardment_ready:
+		print("[BOMBARDMENT] Not ready (cooldown: ", _bombardment_cooldown, ")")
+		return false
+	var dist := global_position.distance_to(target_pos)
+	if dist > bombardment_range:
+		print("[BOMBARDMENT] Target out of range: ", dist, " > ", bombardment_range)
+		return false
+
+	print("[BOMBARDMENT] Starting salvo of ", bombardment_missiles_per_salvo, " missiles to ", target_pos)
+
+	# Start salvo - fire first missile immediately, rest follow
+	_bombardment_salvo_target = target_pos
+	_bombardment_salvo_count = bombardment_missiles_per_salvo - 1  # Minus the one we fire now
+	_bombardment_salvo_timer = bombardment_salvo_interval
+
+	# Fire first missile immediately
+	_fire_single_missile(target_pos)
+
+	# Start cooldown
+	_bombardment_ready = false
+	_bombardment_cooldown = bombardment_reload_time
+
+	return true
+
+func _fire_single_missile(target_pos: Vector2) -> void:
+	# Calculate direction to target
+	var direction := (target_pos - global_position).normalized()
+
+	# Create ATACMS missile - ballistic, not heat-seeking
+	var missile := Missile.new()
+	missile.global_position = global_position
+	missile.damage = bombardment_missile_damage
+	missile.speed = bombardment_missile_speed
+	missile.lifetime = bombardment_missile_lifetime
+	missile.turn_rate = 0.5  # Small turn rate for minor corrections
+	missile.target = null  # No target tracking
+	missile.warhead_size = "large"
+	missile.splash_enabled = true
+	missile.splash_damage_scale = 1.0  # Full damage in splash zone
+	missile.splash_radius = bombardment_missile_splash_radius
+	missile.team_id = team_id
+	missile.source_kind = "aircraft"  # Use aircraft explosions for larger visual effect
+	missile.color = Color(1.0, 0.4, 0.1, 1.0)
+	missile.trail_color = Color(1.0, 0.7, 0.4, 0.8)
+	missile.source_altitude = 0.0  # Not used for visual height
+	missile.visual_scene_path = "res://scenes/missiles/atacms_visual.tscn"
+	missile.visual_base_radius = 1.0  # Smaller visual
+	missile.render_2d = true  # Enable 2D rendering for trail visibility
+	missile.trail_length = 40.0  # Longer trail for visibility
+	missile.ballistic_arc = 120.0  # Very high ballistic arc for dramatic ground-launched trajectory
+	missile._target_pos = target_pos
+	missile.set_origin(global_position)
+
+	# Initialize velocity to point toward target
+	missile._velocity = direction
+
+	get_parent().add_child(missile)
+	print("[BOMBARDMENT] ATACMS missile fired to ", target_pos)
+
+func is_bombardment_ready() -> bool:
+	return is_himars and _bombardment_ready
+
+func get_bombardment_range() -> float:
+	return bombardment_range if is_himars else 0.0
+
+func _find_bombardment_target() -> Node2D:
+	if not is_himars:
+		return null
+	# Find enemy units or structures within bombardment range
+	var range_sq := bombardment_range * bombardment_range
+	var best_target: Node2D = null
+	var best_dist := INF
+
+	# Check enemy units
+	for node in get_tree().get_nodes_in_group("units"):
+		if node == self:
+			continue
+		var enemy := node as Unit
+		if enemy == null or enemy.team_id == team_id:
+			continue
+		var dist := global_position.distance_squared_to(enemy.global_position)
+		if dist > range_sq:
+			continue
+		if dist < best_dist:
+			best_dist = dist
+			best_target = enemy
+
+	# Check enemy structures
+	for node in get_tree().get_nodes_in_group("buildings"):
+		var building := node as Building
+		if building == null or building.team_id == team_id:
+			continue
+		var dist := global_position.distance_squared_to(building.global_position)
+		if dist > range_sq:
+			continue
+		if dist < best_dist:
+			best_dist = dist
+			best_target = building
+
+	return best_target
+
+func set_bombardment_area(target_area: Vector2) -> void:
+	if not is_himars:
+		return
+	_bombardment_area_active = true
+	_bombardment_area_target = target_area
+	#print("[HIMARS] Area bombardment set to: ", target_area)
+
+	# Create ground marker
+	_create_ground_marker(target_area)
+
+func clear_bombardment_area() -> void:
+	_bombardment_area_active = false
+	_bombardment_area_target = Vector2.ZERO
+	#print("[HIMARS] Area bombardment cleared")
+
+	# Remove ground marker
+	_remove_ground_marker()
+
+func is_area_bombardment_active() -> bool:
+	return _bombardment_area_active
+
+func _create_ground_marker(position: Vector2) -> void:
+	# Remove existing marker if any
+	_remove_ground_marker()
+
+	# Load and instantiate marker script
+	var marker_script = load("res://scripts/core/bombardment_marker.gd")
+	if marker_script == null:
+		#print("[HIMARS] Warning: Could not load bombardment_marker.gd")
+		return
+
+	var marker = Node2D.new()
+	marker.set_script(marker_script)
+	marker.global_position = position
+	marker.target_unit = self
+
+	# Add to parent (game world)
+	if get_parent() != null:
+		get_parent().add_child(marker)
+		_himars_ground_marker = marker
+	else:
+		pass  # No parent for ground marker
+
+func _remove_ground_marker() -> void:
+	if _himars_ground_marker != null and is_instance_valid(_himars_ground_marker):
+		_himars_ground_marker.queue_free()
+		_himars_ground_marker = null
+		#print("[HIMARS] Ground marker removed")
+
+func _update_himars_deployment(delta: float) -> void:
+	if not is_himars:
+		return
+
+	# Rotate HIMARS to face bombardment target when not manually moving
+	if not manual_active:
+		var target_pos := Vector2.ZERO
+
+		# Priority 1: Area bombardment target
+		if _bombardment_area_active and _bombardment_area_target != Vector2.ZERO:
+			target_pos = _bombardment_area_target
+		# Priority 2: Auto-engage enemy
+		else:
+			var enemy := _find_bombardment_target()
+			if enemy != null:
+				target_pos = enemy.global_position
+
+		# Smoothly rotate towards target
+		if target_pos != Vector2.ZERO:
+			var desired_facing := (target_pos - global_position).normalized()
+			# Smooth rotation (similar to aircraft turn rate)
+			var turn_speed := 1.5  # Radians per second
+			var angle_diff := _facing.angle_to(desired_facing)
+			var max_turn := turn_speed * delta
+			var turn_amount := clampf(angle_diff, -max_turn, max_turn)
+			_facing = _facing.rotated(turn_amount).normalized()

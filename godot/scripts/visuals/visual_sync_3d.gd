@@ -24,11 +24,11 @@ extends Node3D
 @export var aircraft_roll_duration := 1.6
 @export var aircraft_roll_min_altitude := 0.4
 @export var aircraft_afterburner_smoke_enabled := true
-@export var aircraft_afterburner_smoke_interval := 0.12
-@export var aircraft_afterburner_smoke_color := Color(0.9, 0.9, 0.95, 0.5)
-@export var aircraft_afterburner_smoke_size := 1.1
-@export var aircraft_afterburner_smoke_duration := 0.6
-@export var aircraft_afterburner_smoke_spread := 1.0
+@export var aircraft_afterburner_smoke_interval := 0.025  # Very frequent for continuous trail
+@export var aircraft_afterburner_smoke_color := Color(0.9, 0.92, 1.0, 0.4)  # Softer, more transparent (less ball-like)
+@export var aircraft_afterburner_smoke_size := 1.2  # Start smaller (will grow larger)
+@export var aircraft_afterburner_smoke_duration := 1.2  # Lasts longer for persistent trail
+@export var aircraft_afterburner_smoke_spread := 2.0  # More spread for less uniform appearance
 @export var aircraft_afterburner_smoke_offset := 8.0
 @export var aircraft_afterburner_smoke_height_offset := -1.5
 @export var collector_height := 7.0
@@ -132,24 +132,24 @@ extends Node3D
 @export var missile_large_scale := 1.7
 @export var missile_model_path := "res://scenes/props/missile_visual.tscn"
 @export var missile_model_scale := 1.0
-@export var missile_impact_flash_size := 3.2
-@export var missile_impact_duration := 0.3
-@export var aircraft_missile_impact_scale := 1.8
-@export var aircraft_missile_impact_duration := 0.45
-@export var aircraft_missile_shockwave_size := 2.6
-@export var aircraft_missile_shockwave_duration := 0.4
-@export var aircraft_missile_smoke_burst := 7
+@export var missile_impact_flash_size := 6.0  # Increased from 3.2 for bigger explosion flash
+@export var missile_impact_duration := 0.5  # Increased from 0.3 for longer flash
+@export var aircraft_missile_impact_scale := 3.0  # Increased from 1.8 for much bigger explosions
+@export var aircraft_missile_impact_duration := 0.7  # Increased from 0.45 for longer explosion
+@export var aircraft_missile_shockwave_size := 5.0  # Increased from 2.6 for bigger shockwave
+@export var aircraft_missile_shockwave_duration := 0.6  # Increased from 0.4 for longer shockwave
+@export var aircraft_missile_smoke_burst := 15  # Increased from 7 for more smoke particles
 @export var aircraft_missile_smoke_color := Color(0.2, 0.2, 0.2, 0.6)
 @export var aircraft_missile_smoke_size := 2.4
 @export var aircraft_missile_smoke_duration := 0.9
 @export var aircraft_missile_smoke_spread := 2.2
 @export var missile_smoke_enabled := true
-@export var missile_smoke_color := Color(0.9, 0.9, 0.9, 0.35)
-@export var missile_smoke_size := 1.4
-@export var missile_smoke_duration := 0.25
-@export var missile_smoke_interval := 0.05
-@export var missile_smoke_spread := 0.35
-@export var missile_smoke_grow := 2.0
+@export var missile_smoke_color := Color(0.9, 0.9, 0.9, 0.6)  # Increased opacity from 0.35 to 0.6
+@export var missile_smoke_size := 2.2  # Increased from 1.4 to 2.2
+@export var missile_smoke_duration := 0.8  # Increased from 0.25 to 0.8 for longer-lasting smoke
+@export var missile_smoke_interval := 0.02  # Decreased from 0.05 to 0.02 for more frequent smoke
+@export var missile_smoke_spread := 0.5  # Increased from 0.35 to 0.5
+@export var missile_smoke_grow := 5.0  # Smoke expands 5x (makes it look less like balls)
 @export var missile_smoke_height_offset := 0.0
 @export var missile_smoke_use_warhead_scale := true
 @export var building_pad_enabled := true
@@ -188,6 +188,7 @@ var _live_ids: Dictionary[int, bool] = {}
 var _shot_connected: Dictionary[int, bool] = {}
 var _missile_connected: Dictionary[int, bool] = {}
 var _missile_trails: Dictionary[int, Dictionary] = {}
+var _missile_visual_state: Dictionary[int, Dictionary] = {}
 var _aircraft_visual_state: Dictionary[int, Dictionary] = {}
 var _hidden_2d := false
 var _ghost_root: Node3D
@@ -303,6 +304,9 @@ func _hide_2d_world_nodes() -> void:
 func _create_proxy(node, group_name: String) -> Node3D:
 	var proxy := Node3D.new()
 	add_child(proxy)
+	# Store the unit ID for lookup (used by HIMARS animation system)
+	if group_name == "units" and node != null:
+		proxy.set_meta("unit_id", node.get_instance_id())
 	match group_name:
 		"units":
 			_build_unit_proxy(proxy, node)
@@ -323,31 +327,70 @@ func _build_unit_proxy(proxy: Node3D, unit) -> void:
 	var unit_kind := str(_get_value(unit, "unit_kind", "infantry"))
 	var base_color := _get_color(unit, "color", Color(0.7, 0.7, 0.7, 1.0))
 	if unit_kind == "vehicle":
-		var hull_height := vehicle_height * 0.45
-		var hull_size := Vector3(radius * 2.1, hull_height, radius * 2.6)
-		var hull := _make_box(hull_size, base_color.darkened(0.12))
-		hull.position = Vector3(0, hull_height * 0.5, 0)
-		proxy.add_child(hull)
-		var cabin := _make_box(Vector3(radius * 1.3, hull_height * 0.6, radius * 1.2), base_color.lightened(0.12))
-		cabin.position = Vector3(0, hull_height * 0.9, -radius * 0.2)
-		proxy.add_child(cabin)
-		var turret_section := vehicle_height * 0.25
-		var turret := _make_cylinder(radius * 0.55, turret_section, base_color.lightened(0.2))
-		turret.position = Vector3(0, hull_height + turret_section * 0.5, 0)
-		proxy.add_child(turret)
-		var barrel := _make_cylinder(radius * 0.12, radius * 1.4, base_color.lightened(0.35))
-		barrel.rotation_degrees = Vector3(90.0, 0.0, 0.0)
-		barrel.position = Vector3(0, hull_height + turret_section * 0.6, -radius * 1.1)
-		proxy.add_child(barrel)
-		var track_size := Vector3(radius * 0.55, hull_height * 0.7, radius * 2.8)
-		var track_color := base_color.darkened(0.35)
-		var track_left := _make_box(track_size, track_color)
-		track_left.position = Vector3(-radius * 0.95, track_size.y * 0.5, 0)
-		proxy.add_child(track_left)
-		var track_right := _make_box(track_size, track_color)
-		track_right.position = Vector3(radius * 0.95, track_size.y * 0.5, 0)
-		proxy.add_child(track_right)
+		# Check for custom visual path (e.g., HIMARS model)
+		var visual_path := str(_get_value(unit, "visual_scene_path", ""))
+		var has_custom_model := visual_path != "" and visual_path != "res://scenes/units/vehicle_visual.tscn"
+
+		if has_custom_model:
+			print("[VISUAL] Loading custom vehicle model: ", visual_path)
+			# Load custom 3D model using the same method as aircraft
+			var visual_base_radius := _get_float(unit, "visual_base_radius", 14.0)
+			var target_size := Vector2(radius * 8.0, radius * 10.0)  # Width and length (quadrupled for double size)
+			var target_height := vehicle_height * 3.6  # Quadruple the height too
+
+			var model_instance := _add_scene_model_instance(
+				proxy,
+				visual_path,
+				target_size,
+				target_height,
+				4.0,  # scale_hint (quadrupled for double size)
+				Vector3.ZERO,  # offset
+				Vector3.ZERO  # rotation
+			)
+
+			if model_instance != null:
+				print("[VISUAL] Custom model loaded successfully")
+				# Use military green/tan color instead of team color for HIMARS
+				var himars_color := Color(0.45, 0.5, 0.35, 1.0)  # Military olive drab
+				# Apply materials to all meshes in the model
+				_apply_materials_to_model(model_instance, himars_color)
+				# Ensure all nodes are visible and on correct layers
+				_ensure_model_visible(model_instance)
+			else:
+				push_warning("Failed to load visual at %s, falling back to procedural" % visual_path)
+				has_custom_model = false
+
+		if not has_custom_model:
+			# Procedural vehicle model (default)
+			var hull_height := vehicle_height * 0.45
+			var hull_size := Vector3(radius * 2.1, hull_height, radius * 2.6)
+			var hull := _make_box(hull_size, base_color.darkened(0.12))
+			hull.position = Vector3(0, hull_height * 0.5, 0)
+			proxy.add_child(hull)
+			var cabin := _make_box(Vector3(radius * 1.3, hull_height * 0.6, radius * 1.2), base_color.lightened(0.12))
+			cabin.position = Vector3(0, hull_height * 0.9, -radius * 0.2)
+			proxy.add_child(cabin)
+			var turret_section := vehicle_height * 0.25
+			var turret := _make_cylinder(radius * 0.55, turret_section, base_color.lightened(0.2))
+			turret.position = Vector3(0, hull_height + turret_section * 0.5, 0)
+			proxy.add_child(turret)
+			var barrel := _make_cylinder(radius * 0.12, radius * 1.4, base_color.lightened(0.35))
+			barrel.rotation_degrees = Vector3(90.0, 0.0, 0.0)
+			barrel.position = Vector3(0, hull_height + turret_section * 0.6, -radius * 1.1)
+			proxy.add_child(barrel)
+			var track_size := Vector3(radius * 0.55, hull_height * 0.7, radius * 2.8)
+			var track_color := base_color.darkened(0.35)
+			var track_left := _make_box(track_size, track_color)
+			track_left.position = Vector3(-radius * 0.95, track_size.y * 0.5, 0)
+			proxy.add_child(track_left)
+			var track_right := _make_box(track_size, track_color)
+			track_right.position = Vector3(radius * 0.95, track_size.y * 0.5, 0)
+			proxy.add_child(track_right)
+
+		# Add health bar and selection ring for all vehicles
 		if show_unit_health:
+			var hull_height := vehicle_height * 0.45
+			var turret_section := vehicle_height * 0.25
 			var bar_width := maxf(12.0, radius * unit_health_width_scale)
 			var bar_height := hull_height + turret_section + (radius * 0.6)
 			_attach_health_bar(proxy, bar_width, bar_height, unit_health_height, unit_health_offset)
@@ -372,6 +415,9 @@ func _build_unit_proxy(proxy: Node3D, unit) -> void:
 			model_rotation = Vector3(0.0, 90.0, 0.0)
 		elif type_id == "f22":
 			model_rotation = Vector3(0.0, 270.0, 0.0)  # F22: 0° - 90° left = 270°
+		elif type_id == "uav":
+			model_rotation = Vector3(0.0, 0.0, 0.0)  # UAV: facing forward (cockpit front)
+			model_scale = 1.5  # Make UAV 1.5x bigger
 		# Legacy fallback for F35
 		elif type_id == "f35" and visual_path == "" and aircraft_model_path_f35 != "":
 			model_path = aircraft_model_path_f35
@@ -680,14 +726,24 @@ func _update_proxy(node, proxy: Node3D, group_name: String) -> void:
 			unit_kind = str(_get_value(node, "unit_kind", "infantry"))
 			if unit_kind == "aircraft":
 				var altitude: float = clampf(_get_float(node, "aircraft_altitude_factor", 1.0), 0.0, 1.0)
+				var is_uav: bool = bool(_get_value(node, "is_uav", false))
+				var height_multiplier := 1.6 if is_uav else 1.0  # UAVs fly 60% higher
 				if not aircraft_follow_terrain:
 					# Only use aircraft_base_height when airborne, not when on the ground
 					if altitude > 0.01:
 						ground_y = aircraft_base_height
-				y_offset += aircraft_height * altitude
+				y_offset += aircraft_height * altitude * height_multiplier
+				if is_uav:
+					print("[UAV Visual] UAV detected, height_multiplier: ", height_multiplier, " final y_offset: ", y_offset)
 		if group_name == "missiles":
 			var missile_scale := _get_missile_scale(node)
 			y_offset += missile_height * missile_scale
+
+			# Add ballistic arc height if present
+			var ballistic_height := _get_float(node, "_ballistic_height", 0.0)
+			if ballistic_height > 0.0:
+				y_offset += ballistic_height
+
 			var source_kind := str(_get_value(node, "source_kind", ""))
 			if source_kind == "aircraft":
 				var altitude := clampf(_get_float(node, "source_altitude", 1.0), 0.0, 1.0)
@@ -698,7 +754,7 @@ func _update_proxy(node, proxy: Node3D, group_name: String) -> void:
 				var start_base := ground_y if aircraft_follow_terrain else aircraft_base_height
 				var start_y := start_base + aircraft_height
 				var interp_y := lerpf(target_ground, start_y, altitude)
-				y_offset = (interp_y - ground_y) + (missile_height * missile_scale)
+				y_offset = (interp_y - ground_y) + (missile_height * missile_scale) + ballistic_height
 		var target_y: float = ground_y + y_offset
 		if group_name == "units" and unit_kind == "aircraft" and aircraft_height_smooth > 0.0:
 			var altitude: float = clampf(_get_float(node, "aircraft_altitude_factor", 1.0), 0.0, 1.0)
@@ -724,8 +780,25 @@ func _update_proxy(node, proxy: Node3D, group_name: String) -> void:
 			if group_name == "missiles":
 				var velocity: Variant = node.get("_velocity")
 				if velocity is Vector2 and velocity.length() > 0.1:
-					var target := proxy.global_position + Vector3(velocity.x, 0.0, velocity.y)
-					proxy.look_at(target, Vector3.UP)
+					# Calculate pitch based on actual 3D position change
+					var missile_state: Dictionary = _missile_visual_state.get(id, {})
+					var prev_pos: Vector3 = missile_state.get("prev_pos", proxy.global_position)
+					var pos_delta := proxy.global_position - prev_pos
+
+					# Store current position for next frame
+					missile_state["prev_pos"] = proxy.global_position
+					_missile_visual_state[id] = missile_state
+
+					# Use the actual 3D movement direction for pitch
+					if pos_delta.length() > 0.01:
+						var forward := Vector3(velocity.x, 0, velocity.y).normalized()
+						var pitch := pos_delta.y / pos_delta.length()  # Vertical component of movement
+						var target := proxy.global_position + forward + Vector3(0, pitch, 0)
+						proxy.look_at(target, Vector3.UP)
+					else:
+						# Fallback to horizontal
+						var target := proxy.global_position + Vector3(velocity.x, 0.0, velocity.y)
+						proxy.look_at(target, Vector3.UP)
 				_update_missile_trail(node, proxy, id)
 			elif facing is Vector2 and facing.length() > 0.1:
 				if group_name == "units" and unit_kind == "aircraft":
@@ -842,6 +915,10 @@ func _apply_aircraft_bank_and_roll(node, proxy: Node3D, id: int, facing: Vector2
 
 func _update_aircraft_afterburner(node, proxy: Node3D, id: int, facing: Vector2) -> void:
 	if not aircraft_afterburner_smoke_enabled:
+		return
+	# UAVs don't have afterburners (they're propeller-driven drones)
+	var is_uav := bool(_get_value(node, "is_uav", false))
+	if is_uav:
 		return
 	var active := bool(_get_value(node, "aircraft_afterburner_active", false))
 	if not active:
@@ -1425,22 +1502,45 @@ func _add_missile_model(proxy: Node3D, missile, base_color: Color, scale: float)
 	var visual_path := str(_get_value(missile, "visual_scene_path", ""))
 	var model_path := visual_path if visual_path != "" else missile_model_path
 
+	print("[3D Missile] visual_path from missile: '", visual_path, "' | final model_path: '", model_path, "' | scale: ", scale)
+
 	if model_path == "" or not ResourceLoader.exists(model_path):
+		print("[3D Missile] Model path empty or doesn't exist!")
 		return false
 	var target_size := Vector2(
 		maxf(0.5, missile_body_radius * 2.6 * scale),
 		maxf(0.5, (missile_body_length + missile_nose_length) * scale)
 	)
+	# Make missiles larger for visibility
+	var debug_scale := 1.25  # 1.25x size (half of the previous 2.5x)
+
+	# ATACMS missiles need different rotation (pointing forward along -Z axis)
+	var rotation := Vector3(0, 180, 0)  # Default rotation for regular missiles
+	if "atacms" in model_path.to_lower():
+		rotation = Vector3(-90, 0, 0)  # Rotate to point forward (nose along -Z)
+		debug_scale *= 0.75  # Make ATACMS smaller
+
+	print("[3D Missile] target_size: ", target_size, " | missile_model_scale: ", missile_model_scale, " | debug_scale: ", debug_scale, " | rotation: ", rotation)
 	var model := _add_scene_model_instance(
 		proxy,
 		model_path,
-		target_size,
+		target_size * debug_scale,
 		0.0,
-		missile_model_scale
+		missile_model_scale * debug_scale,
+		Vector3.ZERO,
+		rotation
 	)
 	if model == null:
+		print("[3D Missile] ERROR: Model returned null from _add_scene_model_instance!")
 		return false
-	_tint_model(model, base_color)
+	print("[3D Missile] SUCCESS: Model created! Node: ", model.name, " | Scale: ", model.scale, " | Local Pos: ", model.position, " | Proxy Global Pos: ", proxy.global_position, " | Visible: ", model.visible)
+
+	# Apply materials to ATACMS to make it visible
+	if "atacms" in model_path.to_lower():
+		var atacms_color := Color(0.5, 0.5, 0.45, 1.0)  # Military gray-green
+		_apply_materials_to_model(model, atacms_color)
+		_ensure_model_visible(model)
+
 	return true
 
 func _tint_model(root: Node3D, base_color: Color) -> void:
@@ -2061,6 +2161,12 @@ func _spawn_smoke(pos: Vector3, color: Color, size: float, duration: float) -> v
 	var root := Node3D.new()
 	add_child(root)
 	root.global_position = pos
+	# Add random rotation to make smoke puffs less uniform
+	root.rotation = Vector3(
+		_smoke_rng.randf_range(0.0, TAU),
+		_smoke_rng.randf_range(0.0, TAU),
+		_smoke_rng.randf_range(0.0, TAU)
+	)
 	var puff := MeshInstance3D.new()
 	var sphere := SphereMesh.new()
 	sphere.radius = 1.0
@@ -2071,14 +2177,22 @@ func _spawn_smoke(pos: Vector3, color: Color, size: float, duration: float) -> v
 	puff.material_override = material
 	puff.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	root.add_child(puff)
-	root.scale = Vector3.ONE * maxf(0.1, size)
+	# Use non-uniform scaling to make it less sphere-like
+	var base_size := maxf(0.1, size)
+	var scale_variation := Vector3(
+		_smoke_rng.randf_range(0.7, 1.3),
+		_smoke_rng.randf_range(0.7, 1.3),
+		_smoke_rng.randf_range(0.7, 1.3)
+	)
+	root.scale = Vector3.ONE * base_size * scale_variation
 	var smoke: Dictionary = {
 		"node": root,
 		"material": material,
 		"time": 0.0,
 		"duration": duration,
 		"alpha": smoke_color.a,
-		"start_scale": maxf(0.1, size),
+		"start_scale": base_size,
+		"scale_variation": scale_variation,
 	}
 	_smokes.append(smoke)
 
@@ -2118,10 +2232,31 @@ func _update_smokes(delta: float) -> void:
 		var start_scale := float(smoke.get("start_scale", 1.0))
 		var end_scale := start_scale * maxf(1.0, missile_smoke_grow)
 		var scale := lerpf(start_scale, end_scale, t)
-		node.scale = Vector3.ONE * scale
+		# Apply the scale variation to maintain non-uniform shape
+		var scale_var: Variant = smoke.get("scale_variation", Vector3.ONE)
+		var scale_variation: Vector3 = scale_var if scale_var is Vector3 else Vector3.ONE
+		node.scale = Vector3.ONE * scale * scale_variation
 		smoke["time"] = time
 		alive.append(smoke)
 	_smokes = alive
+
+func _calculate_missile_pitch(missile_node, id: int) -> float:
+	"""Calculate pitch angle for missile based on ballistic height change"""
+	var ballistic_height := _get_float(missile_node, "_ballistic_height", 0.0)
+	var missile_state: Dictionary = _missile_visual_state.get(id, {})
+	var prev_height := float(missile_state.get("prev_height", ballistic_height))
+	var height_change := ballistic_height - prev_height
+
+	# Store current height for next frame
+	missile_state["prev_height"] = ballistic_height
+	_missile_visual_state[id] = missile_state
+
+	# Calculate pitch angle based on height change
+	# Positive = going up, negative = going down
+	# Much larger multiplier since ballistic height changes are small per frame
+	var pitch_angle := clampf(height_change * 200.0, -1.5, 1.5)
+
+	return pitch_angle
 
 func _update_missile_trail(missile, proxy: Node3D, id: int) -> void:
 	if not missile_smoke_enabled:
@@ -2455,3 +2590,49 @@ func _disable_2d_render(node) -> void:
 func _disable_map_render() -> void:
 	for node in get_tree().get_nodes_in_group("map_loader"):
 		_disable_2d_render(node)
+
+func _debug_print_node_tree(node: Node, depth: int) -> void:
+	var indent := ""
+	for i in range(depth):
+		indent += "  "
+	var mesh_info := ""
+	if node is MeshInstance3D:
+		var mesh_inst := node as MeshInstance3D
+		mesh_info = " [MESH: " + ("null" if mesh_inst.mesh == null else "exists") + "]"
+	print("[TREE] ", indent, node.name, " (", node.get_class(), ")", mesh_info)
+	for child in node.get_children():
+		_debug_print_node_tree(child, depth + 1)
+
+func _apply_materials_to_model(node: Node, base_color: Color) -> void:
+	if node is MeshInstance3D:
+		var mesh_inst := node as MeshInstance3D
+		if mesh_inst.mesh != null:
+			print("[MATERIAL] Applying material to mesh: ", mesh_inst.name, " with ", mesh_inst.mesh.get_surface_count(), " surfaces")
+			# Create a simple StandardMaterial3D
+			var mat := StandardMaterial3D.new()
+			mat.albedo_color = base_color
+			mat.metallic = 0.3
+			mat.roughness = 0.7
+			# Apply to all surface materials
+			for i in range(mesh_inst.mesh.get_surface_count()):
+				mesh_inst.set_surface_override_material(i, mat)
+			print("[MATERIAL] Material applied successfully, visible: ", mesh_inst.visible, " layers: ", mesh_inst.layers)
+	# Recursively apply to children
+	for child in node.get_children():
+		_apply_materials_to_model(child, base_color)
+
+func _ensure_model_visible(node: Node) -> void:
+	# Make sure the node is visible
+	if node is Node3D:
+		var node3d := node as Node3D
+		node3d.visible = true
+
+	# Set render layers for visual instances
+	if node is VisualInstance3D:
+		var visual_inst := node as VisualInstance3D
+		visual_inst.layers = 1  # Default layer
+		print("[VISIBILITY] Set layers for: ", visual_inst.name)
+
+	# Recursively apply to children
+	for child in node.get_children():
+		_ensure_model_visible(child)

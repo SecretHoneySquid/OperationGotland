@@ -12,7 +12,13 @@
       "Bash(gdscript-parser:*)",
       "Bash(\"C:\\\\Program Files\\\\Godot_v4.3-stable_win64.exe\\\\Godot_v4.3-stable_win64.exe\" --headless --check-only --path .)",
       "Bash(git config:*)",
-      "Bash(rm:*)"
+      "Bash(rm:*)",
+      "Bash(\"C:\\\\Program Files\\\\Godot_v4.3-stable_win64.exe\\\\Godot_v4.3-stable_win64.exe\" --headless --check-only --path c:UsersBouncyDesktopprojektOperationGotland-1godot)",
+      "Bash(\"/c/Program Files/Godot_v4.3-stable_win64.exe/Godot_v4.3-stable_win64.exe\" --headless --check-only --path .)",
+      "Bash(\"/c/Program Files/Godot_v4.3-stable_win64.exe/Godot_v4.3-stable_win64.exe\" --headless --script res://test_himars_structure.gd --quit-after 2)",
+      "Bash(\"C:/Program Files/Godot_v4.3-stable_win64.exe/Godot_v4.3-stable_win64.exe\" --headless --script res://test_himars_structure.gd --quit-after 2)",
+      "Bash(\"/c/Program Files/Godot_v4.3-stable_win64.exe/Godot_v4.3-stable_win64.exe\" --headless --script res://setup_himars_animation.gd --quit-after 2)",
+      "Bash(\"C:/Program Files/Godot_v4.3-stable_win64.exe/Godot_v4.3-stable_win64.exe\" --headless --script res://setup_himars_animation.gd --quit-after 2)"
     ]
   }
 }

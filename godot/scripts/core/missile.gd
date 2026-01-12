@@ -23,6 +23,7 @@ signal impact(pos: Vector2, color: Color, warhead_size: String, source_kind: Str
 @export var splash_radius := 0.0
 @export var visual_scene_path := ""
 @export var visual_base_radius := 1.0
+@export var ballistic_arc := 0.0  # Height of ballistic arc (0 = straight, >0 = arcing trajectory)
 
 var target: Node2D
 var _velocity := Vector2.RIGHT
@@ -31,7 +32,10 @@ var _target_pos := Vector2.ZERO
 var _target_lost := false
 var _initial_distance := 0.0
 var _source_altitude_start := 1.0
-var _visual_node: Node2D
+var _visual_node: Node  # Can be either Node2D or Node3D
+var _ballistic_height := 0.0  # Current height in ballistic arc
+var _ballistic_velocity_z := 0.0  # Vertical velocity for ballistic arc
+var _base_speed := 0.0  # Store original speed for acceleration
 
 const _WARHEAD_RADII = {
 	"small": 4.0,
@@ -52,8 +56,16 @@ func _ready() -> void:
 	if target != null and is_instance_valid(target):
 		_target_pos = target.global_position
 		_initial_distance = maxf(_origin.distance_to(_target_pos), 0.01)
+	elif _target_pos != Vector2.ZERO:
+		# Set initial distance for position-targeted missiles (like ATACMS)
+		_initial_distance = maxf(_origin.distance_to(_target_pos), 0.01)
 	_apply_warhead_settings()
 	_setup_visual()
+	# Store base speed before applying ballistic acceleration
+	_base_speed = speed
+	if ballistic_arc > 0.0:
+		speed = _base_speed * 0.5  # Start at 50% speed
+	_init_ballistic_arc()
 
 func _process(delta: float) -> void:
 	lifetime -= delta
@@ -81,6 +93,7 @@ func _process(delta: float) -> void:
 		_update_guidance(_target_pos, delta)
 		_check_ground_hit()
 	_update_altitude_factor()
+	_update_ballistic_arc(delta)
 	global_position += _velocity.normalized() * speed * delta
 	_update_visual_rotation()
 	queue_redraw()
@@ -113,9 +126,11 @@ func _check_hit(target_node: Node2D) -> void:
 		queue_free()
 
 func _check_ground_hit() -> void:
-	if not _target_lost or _target_pos == Vector2.ZERO:
+	if _target_pos == Vector2.ZERO:
 		return
 	if global_position.distance_squared_to(_target_pos) <= hit_radius * hit_radius:
+		# Apply splash damage even for ground hits
+		_apply_splash_damage(null)
 		emit_signal("impact", _target_pos, color, warhead_size, source_kind)
 		queue_free()
 
@@ -197,28 +212,96 @@ func _setup_visual() -> void:
 	if packed == null:
 		push_warning("Missile: missing visual scene at %s" % visual_scene_path)
 		return
+	print("[Missile Visual] Loading: ", visual_scene_path, " | Type: ", packed.get_class())
 	if packed is PackedScene:
 		var instance = packed.instantiate()
-		if instance is Node2D:
+		if instance is Node2D or instance is Node3D:
 			_visual_node = instance
 			add_child(_visual_node)
-			_visual_node.visible = render_2d
+			_visual_node.visible = true  # Always visible for debugging
 			_update_visual_transform()
+			print("[Missile Visual] Successfully loaded as ", instance.get_class(), " | Scale: ", _visual_node.scale, " | Visible: ", _visual_node.visible)
+		else:
+			print("[Missile Visual] WARNING: Instantiated node is not Node2D/Node3D, it's: ", instance.get_class())
 	else:
-		push_warning("Missile: visual scene is not a PackedScene at %s" % visual_scene_path)
+		print("[Missile Visual] WARNING: Not a PackedScene, it's: ", packed.get_class())
 
 func _update_visual_transform() -> void:
 	if _visual_node == null:
 		return
 	if visual_base_radius > 0.0:
 		var scale := 1.0 / visual_base_radius
-		_visual_node.scale = Vector2.ONE * scale
-	_visual_node.rotation = _velocity.angle()
+		if _visual_node is Node3D:
+			_visual_node.scale = Vector3.ONE * scale
+		else:
+			_visual_node.scale = Vector2.ONE * scale
+	if _visual_node is Node3D:
+		# For 3D models, rotate around Y axis (vertical) to face direction
+		_visual_node.rotation = Vector3(0, -_velocity.angle() + PI/2, 0)
+	else:
+		_visual_node.rotation = _velocity.angle()
 
 func _update_visual_rotation() -> void:
 	if _visual_node == null:
 		return
-	_visual_node.rotation = _velocity.angle()
+	if _visual_node is Node3D:
+		# Calculate pitch based on ballistic velocity if active
+		var pitch := 0.0
+		if ballistic_arc > 0.0 and _initial_distance > 0.0:
+			# Tilt missile based on vertical velocity
+			var horizontal_speed := speed
+			if horizontal_speed > 0.0:
+				pitch = atan2(_ballistic_velocity_z, horizontal_speed)
+		_visual_node.rotation = Vector3(pitch, -_velocity.angle() + PI/2, 0)
+	else:
+		_visual_node.rotation = _velocity.angle()
+
+func _init_ballistic_arc() -> void:
+	if ballistic_arc <= 0.0 or _target_pos == Vector2.ZERO:
+		return
+
+	# Calculate proper ballistic trajectory
+	# We want the missile to reach peak height at midpoint and land at target
+	# Use average speed (between 50% and 150%) for flight time estimate
+	var avg_speed := _base_speed if _base_speed > 0.0 else speed
+	var flight_time := _initial_distance / avg_speed if avg_speed > 0.0 else 1.0
+
+	# For a parabolic arc: h = (v0 * t/2) - (g * (t/2)^2) / 2
+	# At peak (t/2): v_vertical = 0
+	# So: v0 = g * t/2
+	# And: h = (g * t/2) * (t/2) - (g * (t/2)^2) / 2 = g * t^2 / 8
+	# Therefore: g = 8h / t^2
+	var gravity := (8.0 * ballistic_arc) / (flight_time * flight_time)
+
+	# Initial vertical velocity to reach peak at midpoint
+	_ballistic_velocity_z = gravity * (flight_time * 0.5)
+
+func _update_ballistic_arc(delta: float) -> void:
+	if ballistic_arc <= 0.0 or _target_pos == Vector2.ZERO or _initial_distance <= 0.0:
+		return
+
+	# Use distance-based parabolic arc instead of time-based physics
+	# This ensures the missile lands at the target regardless of speed changes
+	var dist_to_target := global_position.distance_to(_target_pos)
+	var progress := 1.0 - clampf(dist_to_target / _initial_distance, 0.0, 1.0)
+
+	# Parabolic arc: height = 4h * progress * (1 - progress)
+	# This creates a perfect parabola that starts at 0, peaks at 0.5, and returns to 0 at 1.0
+	var arc_height := 4.0 * ballistic_arc * progress * (1.0 - progress)
+	_ballistic_height = arc_height
+
+	# Calculate vertical velocity for visual rotation (derivative of parabola)
+	# d/dx[4h * x * (1 - x)] = 4h * (1 - 2x)
+	var velocity_factor := 4.0 * ballistic_arc * (1.0 - 2.0 * progress)
+	_ballistic_velocity_z = velocity_factor
+
+	# Accelerate missile based on height (50% at peak, 150% at ground)
+	if _base_speed > 0.0:
+		var height_ratio := clampf(_ballistic_height / ballistic_arc, 0.0, 1.0)
+		# At peak (height_ratio = 1.0): speed_mult = 0.5
+		# At ground (height_ratio = 0.0): speed_mult = 1.5
+		var speed_mult := lerpf(1.5, 0.5, height_ratio)
+		speed = _base_speed * speed_mult
 
 func set_visual_scene_path(path: String) -> void:
 	visual_scene_path = path

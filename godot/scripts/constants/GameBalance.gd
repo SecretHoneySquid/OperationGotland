@@ -48,6 +48,24 @@ const VEHICLE_LONG_RATIO := 0.2
 const VEHICLE_MID_RATIO := 0.3
 
 # =============================================================================
+# UNIT STATS - HIMARS
+# =============================================================================
+
+const HIMARS_SPEED := 55.0
+const HIMARS_MAX_HP := 50.0
+const HIMARS_BODY_RADIUS := 14.0
+const HIMARS_UNIT_COST := 200
+const HIMARS_VISION_RADIUS := 560.0  # Doubled vision like aircraft
+const HIMARS_BOMBARDMENT_RANGE := 1600.0  # Doubled range for long-distance fire
+const HIMARS_MISSILE_DAMAGE := 200.0  # Devastating strikes
+const HIMARS_MISSILE_SPEED := 500.0
+const HIMARS_MISSILE_LIFETIME := 12.0
+const HIMARS_MISSILE_SPLASH_RADIUS := 180.0  # Massive blast radius
+const HIMARS_MISSILES_PER_SALVO := 2  # Fire 2 missiles per salvo
+const HIMARS_SALVO_INTERVAL := 1.0  # 1 second between missiles in salvo
+const HIMARS_RELOAD_TIME := 10.0  # 10 seconds reload
+
+# =============================================================================
 # UNIT STATS - Aircraft
 # =============================================================================
 
@@ -69,7 +87,7 @@ const AIRCRAFT_SHOT_LIFETIME := 0.16
 ## Aircraft missiles
 const AIRCRAFT_MISSILE_CAPACITY := 2
 const AIRCRAFT_MISSILE_DAMAGE := 32.0
-const AIRCRAFT_MISSILE_SPEED := 520.0
+const AIRCRAFT_MISSILE_SPEED := 1170.0  # Increased by 50% from 780.0 (original 520.0 * 2.25)
 const AIRCRAFT_MISSILE_TURN_RATE := 6.0
 const AIRCRAFT_MISSILE_RANGE := 12000.0
 const AIRCRAFT_MISSILE_COOLDOWN := 2.4
@@ -107,6 +125,16 @@ const AIRCRAFT_RUNWAY_OFFSET_RATIO := 0.0
 const AIRCRAFT_LANDING_SLOT_SPACING := 32.0
 const AIRCRAFT_LANDING_CAP := 2
 const AIRCRAFT_QUEUE_RADIUS := 0.0
+
+## UAV (Reconnaissance Drone)
+const UAV_SPEED := 80.0  # Slower than fighter jets
+const UAV_MAX_HP := 25.0  # Fragile
+const UAV_BODY_RADIUS := 10.0
+const UAV_VISION_RADIUS := 800.0  # Very large vision for reconnaissance
+const UAV_TURN_RATE := 1.8
+const UAV_UNIT_COST := 80  # Cheaper than fighter jets
+const UAV_LOITER_RADIUS := 80.0  # Circle radius (tighter circles)
+const UAV_LOITER_ORBIT_SPEED := 0.3  # Slower orbit
 
 ## Aircraft squad formation
 const AIRCRAFT_SQUAD_SPACING := 80.0
