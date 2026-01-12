@@ -149,8 +149,9 @@ var _rally_p1 := Vector2.ZERO
 var _rally_p2 := Vector2.ZERO
 var _rally_mode_team := ""
 var _selected_factory_p1: Building = null
-var _rally_line: Line2D = null
-var _rally_canvas_layer: CanvasLayer = null
+var _rally_line_3d: Node3D = null
+var _rally_line_mesh: MeshInstance3D = null
+var _rally_marker: MeshInstance3D = null
 var _rng := RandomNumberGenerator.new()
 var _ai_queue_timer := 0.0
 var _income_accum_p1 := 0.0
@@ -184,13 +185,33 @@ func _ready() -> void:
 	_sync_collectors("p2")
 	_ai_queue_timer = ai_queue_interval
 	_world_input = _find_world_input()
-	# Create Line2D for rally line visualization (added directly to GameController)
-	_rally_line = Line2D.new()
-	_rally_line.width = 20.0  # Make it very thick
-	_rally_line.default_color = Color(1.0, 0.0, 0.0, 1.0)  # Bright RED to make it obvious
-	_rally_line.z_index = 1000
-	_rally_line.visible = false
-	add_child(_rally_line)
+	# Create 3D rally line visualization (similar to tracer system)
+	_rally_line_3d = Node3D.new()
+	add_child(_rally_line_3d)
+	_rally_line_3d.visible = false
+
+	_rally_line_mesh = MeshInstance3D.new()
+	_rally_line_3d.add_child(_rally_line_mesh)
+
+	# Create white material for visibility
+	var material := StandardMaterial3D.new()
+	material.albedo_color = Color(1.0, 1.0, 1.0, 0.9)  # White with slight transparency
+	material.emission_enabled = true
+	material.emission = Color(1.0, 1.0, 1.0)  # Glowing white
+	material.emission_energy_multiplier = 1.5
+	material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED  # Always visible
+	material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	material.cull_mode = BaseMaterial3D.CULL_DISABLED  # Visible from both sides
+	_rally_line_mesh.material_override = material
+
+	# Create rally marker at the end point (sphere)
+	_rally_marker = MeshInstance3D.new()
+	_rally_line_3d.add_child(_rally_marker)
+	var marker_mesh := SphereMesh.new()
+	marker_mesh.radius = 4.0
+	marker_mesh.height = 8.0
+	_rally_marker.mesh = marker_mesh
+	_rally_marker.material_override = material
 
 	# Connect to selection signals for rally line drawing
 	var selection_controller = get_node_or_null("../SelectionController")
@@ -1183,6 +1204,7 @@ func _set_rally_point(team_id: String, pos: Vector2) -> void:
 	else:
 		_rally_p2 = pos
 	queue_redraw()
+	_update_rally_line()  # Update 3D rally line when rally point changes
 
 func _get_world_mouse_pos() -> Vector2:
 	var input := _world_input
@@ -2101,17 +2123,41 @@ func _on_building_selected(building: Building) -> void:
 	_update_rally_line()
 
 func _update_rally_line() -> void:
-	if _rally_line == null:
+	if _rally_line_3d == null or _rally_line_mesh == null or _rally_marker == null:
 		return
 
 	if _selected_factory_p1 != null and is_instance_valid(_selected_factory_p1):
 		var factory_pos := _selected_factory_p1.global_position
-		# Always show line 200 units forward (HIMARS behavior)
-		var rally_target := factory_pos + Vector2(200.0, 0.0)
+		var rally_target: Vector2
 
-		_rally_line.clear_points()
-		_rally_line.add_point(factory_pos)
-		_rally_line.add_point(rally_target)
-		_rally_line.visible = true
+		# Check if a rally point has been set
+		if _rally_p1 != Vector2.ZERO:
+			# Use the custom rally point
+			rally_target = _rally_p1
+		else:
+			# Default: show line 200 units forward (HIMARS behavior)
+			rally_target = factory_pos + Vector2(200.0, 0.0)
+
+		# Convert 2D positions to 3D (y becomes z, add height)
+		var height := 15.0  # Height above ground to be visible
+		var start3 := Vector3(factory_pos.x, height, factory_pos.y)
+		var end3 := Vector3(rally_target.x, height, rally_target.y)
+		var delta := end3 - start3
+		var line_length := delta.length()
+
+		# Position and orient the 3D line
+		_rally_line_3d.global_position = (start3 + end3) * 0.5
+		_rally_line_3d.look_at(end3, Vector3.UP)
+
+		# Create a thin stretched box as the line
+		var thickness := 1.5  # Thinner line
+		var mesh := BoxMesh.new()
+		mesh.size = Vector3(thickness, thickness, line_length)
+		_rally_line_mesh.mesh = mesh
+
+		# Position marker at the end (in local space relative to parent)
+		_rally_marker.position = Vector3(0, 0, line_length * 0.5)
+
+		_rally_line_3d.visible = true
 	else:
-		_rally_line.visible = false
+		_rally_line_3d.visible = false
