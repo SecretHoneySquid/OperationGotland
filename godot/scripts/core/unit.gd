@@ -173,6 +173,9 @@ var _nav_index := 0
 var _nav_target := Vector2.ZERO
 var _nav_repath_timer := 0.0
 
+# Aircraft behavior component (used when unit_kind == "aircraft")
+var _aircraft_behavior: AircraftBehavior = null
+
 # HIMARS Launcher Control
 var _himars_launcher_node: Node3D = null
 var _himars_visual_proxy: Node3D = null  # Reference to 3D visual for getting rotation
@@ -206,25 +209,21 @@ func _ready() -> void:
 		var light := VisionHelper.create_light(vision_radius)
 		add_child(light)
 	if unit_kind == "aircraft":
-		if aircraft_missile_ammo <= 0:
-			aircraft_missile_ammo = maxi(0, aircraft_missile_capacity)
-		if aircraft_gun_ammo <= 0:
-			aircraft_gun_ammo = maxi(0, aircraft_gun_capacity)
-		if aircraft_loiter_pos == Vector2.ZERO:
-			if rally_target != Vector2.ZERO:
-				aircraft_loiter_pos = rally_target
-			else:
-				aircraft_loiter_pos = _get_aircraft_home_pos()
-		# Check if we spawned with a reserved slot (values set before _ready)
-		# If slot is reserved, we're on the runway and should take off
-		if _aircraft_landing_reserved and _aircraft_landing_slot >= 0:
-			_aircraft_takeoff_active = true
-			_aircraft_takeoff_taxi = false
-			aircraft_altitude_factor = 0.0
-		else:
-			# Otherwise start airborne (for units spawned without slot assignment)
-			aircraft_altitude_factor = 1.0
-		_register_aircraft_squad()
+		# Create aircraft behavior component and delegate initialization
+		_aircraft_behavior = AircraftBehavior.new(self)
+		_aircraft_behavior.landing_reserved = _aircraft_landing_reserved
+		_aircraft_behavior.landing_slot = _aircraft_landing_slot
+		_aircraft_behavior.initialize()
+		# Sync state back to unit for compatibility with existing visual sync code
+		aircraft_missile_ammo = _aircraft_behavior.missile_ammo
+		aircraft_gun_ammo = _aircraft_behavior.gun_ammo
+		aircraft_altitude_factor = _aircraft_behavior.altitude_factor
+		aircraft_circulating = _aircraft_behavior.circulating
+		aircraft_afterburner_active = _aircraft_behavior.afterburner_active
+		_aircraft_landing_reserved = _aircraft_behavior.landing_reserved
+		_aircraft_landing_slot = _aircraft_behavior.landing_slot
+		_aircraft_takeoff_active = _aircraft_behavior.takeoff_active
+		_aircraft_reloading = _aircraft_behavior.reloading
 	_setup_visual()
 	if is_himars:
 		_himars_setup_timer = 0.15  # Try setup after 0.15 seconds
@@ -334,11 +333,8 @@ func _find_animation_player_in_tree(node: Node) -> AnimationPlayer:
 
 func _exit_tree() -> void:
 	GameState.unit_count = maxi(0, GameState.unit_count - 1)
-	if unit_kind == "aircraft":
-		_unregister_aircraft_squad()
-		_release_landing_slot()
-		_release_airfield_slot()
-		_release_airfield_f35()
+	if unit_kind == "aircraft" and _aircraft_behavior != null:
+		_aircraft_behavior.cleanup()
 	if is_himars:
 		_remove_ground_marker()
 
@@ -464,6 +460,31 @@ func _sync_visual_rotation() -> void:
 	_visual_node.rotation = _facing.angle()
 
 func _update_aircraft_state(delta: float) -> void:
+	if _aircraft_behavior == null:
+		return
+
+	# Delegate to aircraft behavior component
+	_aircraft_behavior.update(delta)
+
+	# Sync state back to unit for compatibility with existing visual sync code
+	aircraft_missile_ammo = _aircraft_behavior.missile_ammo
+	aircraft_gun_ammo = _aircraft_behavior.gun_ammo
+	aircraft_altitude_factor = _aircraft_behavior.altitude_factor
+	aircraft_circulating = _aircraft_behavior.circulating
+	aircraft_afterburner_active = _aircraft_behavior.afterburner_active
+	_aircraft_landing_reserved = _aircraft_behavior.landing_reserved
+	_aircraft_landing_slot = _aircraft_behavior.landing_slot
+	_aircraft_landing_on_path = _aircraft_behavior.landing_on_path
+	_aircraft_landing_taxi = _aircraft_behavior.landing_taxi
+	_aircraft_takeoff_active = _aircraft_behavior.takeoff_active
+	_aircraft_takeoff_taxi = _aircraft_behavior.takeoff_taxi
+	_aircraft_reloading = _aircraft_behavior.reloading
+	_aircraft_speed_mult = _aircraft_behavior.speed_mult
+
+	_sync_visual_rotation()
+
+# Legacy aircraft state update - kept for reference but no longer used
+func _update_aircraft_state_legacy(delta: float) -> void:
 	_refresh_aircraft_squad_state()
 
 	# UAVs don't engage in combat, they just loiter for reconnaissance
@@ -2173,16 +2194,24 @@ func _fire_single_missile(target_pos: Vector2) -> void:
 	# Get the launcher's actual facing direction from the 3D visual
 	var direction := _get_himars_launch_direction()
 
+	# Calculate spawn position at the rear of the HIMARS (where the launcher is)
+	# The launcher is at the back of the truck, offset behind and to the right of vehicle center
+	const LAUNCHER_OFFSET_BACK := 20.0  # Distance behind center
+	const LAUNCHER_OFFSET_RIGHT := 10.0  # Distance to the right
+	var right_dir := Vector2(_facing.y, -_facing.x)  # Perpendicular to facing (right side)
+	var spawn_offset := -_facing * LAUNCHER_OFFSET_BACK + right_dir * LAUNCHER_OFFSET_RIGHT
+	var spawn_pos := global_position + spawn_offset
+
 	# Calculate target position based on launcher direction (missiles fire where launcher points)
 	# The missile still needs a target_pos for its ballistic arc calculation
 	var launch_distance := global_position.distance_to(target_pos)
-	var actual_target := global_position + direction * launch_distance
+	var actual_target := spawn_pos + direction * launch_distance
 
-	print("[HIMARS] Launcher direction: ", direction, " | Target adjusted from ", target_pos, " to ", actual_target)
+	print("[HIMARS] Launcher direction: ", direction, " | Spawn pos: ", spawn_pos, " | Target: ", actual_target)
 
 	# Create ATACMS missile - ballistic, not heat-seeking
 	var missile := Missile.new()
-	missile.global_position = global_position
+	missile.global_position = spawn_pos
 	missile.damage = bombardment_missile_damage
 	missile.speed = bombardment_missile_speed
 	missile.lifetime = bombardment_missile_lifetime
@@ -2203,7 +2232,7 @@ func _fire_single_missile(target_pos: Vector2) -> void:
 	missile.trail_length = 40.0  # Longer trail for visibility
 	missile.ballistic_arc = 120.0  # Very high ballistic arc for dramatic ground-launched trajectory
 	missile._target_pos = actual_target  # Use the adjusted target based on launcher direction
-	missile.set_origin(global_position)
+	missile.set_origin(spawn_pos)  # Origin at the launcher position
 
 	# Initialize velocity to point in launcher direction
 	missile._velocity = direction
@@ -2302,29 +2331,8 @@ func _remove_ground_marker() -> void:
 		_himars_ground_marker = null
 		#print("[HIMARS] Ground marker removed")
 
-func _update_himars_deployment(delta: float) -> void:
-	if not is_himars:
-		return
-
-	# Rotate HIMARS to face bombardment target when not manually moving
-	if not manual_active:
-		var target_pos := Vector2.ZERO
-
-		# Priority 1: Area bombardment target
-		if _bombardment_area_active and _bombardment_area_target != Vector2.ZERO:
-			target_pos = _bombardment_area_target
-		# Priority 2: Auto-engage enemy
-		else:
-			var enemy := _find_bombardment_target()
-			if enemy != null:
-				target_pos = enemy.global_position
-
-		# Smoothly rotate towards target
-		if target_pos != Vector2.ZERO:
-			var desired_facing := (target_pos - global_position).normalized()
-			# Smooth rotation (similar to aircraft turn rate)
-			var turn_speed := 1.5  # Radians per second
-			var angle_diff := _facing.angle_to(desired_facing)
-			var max_turn := turn_speed * delta
-			var turn_amount := clampf(angle_diff, -max_turn, max_turn)
-			_facing = _facing.rotated(turn_amount).normalized()
+func _update_himars_deployment(_delta: float) -> void:
+	# HIMARS rotation is now handled entirely by the ROTATING state when firing is requested
+	# No auto-rotation when IDLE - the vehicle stays in its current orientation
+	# This prevents unnecessary spinning after retracting the launcher
+	pass

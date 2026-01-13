@@ -543,6 +543,26 @@ func _build_ui() -> void:
 	)
 	_bombardment_panel.add_child(_cancel_bombardment_button)
 
+	# Minimap - top right corner
+	var minimap_script := load("res://scripts/ui/minimap.gd")
+	if minimap_script != null:
+		var minimap_container := PanelContainer.new()
+		minimap_container.name = "MinimapContainer"
+		minimap_container.anchor_left = 1.0
+		minimap_container.anchor_top = 0.0
+		minimap_container.anchor_right = 1.0
+		minimap_container.anchor_bottom = 0.0
+		minimap_container.offset_left = -220.0
+		minimap_container.offset_top = 12.0
+		minimap_container.offset_right = -12.0
+		minimap_container.offset_bottom = 220.0
+		add_child(minimap_container)
+
+		var minimap := Control.new()
+		minimap.set_script(minimap_script)
+		minimap.name = "Minimap"
+		minimap_container.add_child(minimap)
+
 	# Tooltip Panel - initially hidden, shown on hover
 	_tooltip_panel = PanelContainer.new()
 	_tooltip_panel.visible = false

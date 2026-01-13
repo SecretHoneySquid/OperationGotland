@@ -20,6 +20,7 @@ var _pan_last_screen := Vector2.ZERO
 @onready var _camera := $"Camera3D" as Camera3D
 
 func _ready() -> void:
+	add_to_group("camera_controller")
 	if focus_from_map:
 		var focus := _load_map_focus(map_path, focus_team_id, focus_use_build_zone)
 		if focus != Vector2.ZERO:
@@ -117,6 +118,61 @@ func _load_map_size(path: String) -> Vector2:
 		return Vector2.ZERO
 	var size_data: Dictionary = data.get("size", {})
 	return Vector2(float(size_data.get("width", 0.0)), float(size_data.get("height", 0.0)))
+
+# =============================================================================
+# PUBLIC API - For minimap integration
+# =============================================================================
+
+func move_to_position(world_pos: Vector2) -> void:
+	position = Vector3(world_pos.x, 0.0, world_pos.y)
+
+func get_visible_world_rect() -> Rect2:
+	if _camera == null:
+		return Rect2()
+
+	# Get viewport corners in screen space
+	var viewport := get_viewport()
+	if viewport == null:
+		return Rect2()
+
+	var viewport_size := viewport.get_visible_rect().size
+	var corners := [
+		Vector2(0, 0),
+		Vector2(viewport_size.x, 0),
+		Vector2(viewport_size.x, viewport_size.y),
+		Vector2(0, viewport_size.y)
+	]
+
+	# Convert to world positions
+	var world_corners: Array[Vector2] = []
+	for corner in corners:
+		var world_pos := _screen_to_world(corner)
+		if world_pos != Vector2.ZERO:
+			world_corners.append(world_pos)
+
+	if world_corners.is_empty():
+		return Rect2()
+
+	# Find bounding rect
+	var min_x := world_corners[0].x
+	var max_x := world_corners[0].x
+	var min_y := world_corners[0].y
+	var max_y := world_corners[0].y
+
+	for corner in world_corners:
+		min_x = minf(min_x, corner.x)
+		max_x = maxf(max_x, corner.x)
+		min_y = minf(min_y, corner.y)
+		max_y = maxf(max_y, corner.y)
+
+	return Rect2(Vector2(min_x, min_y), Vector2(max_x - min_x, max_y - min_y))
+
+func get_world_position() -> Vector2:
+	return Vector2(position.x, position.z)
+
+# =============================================================================
+# MAP LOADING
+# =============================================================================
 
 func _load_map_focus(path: String, team_id: String, use_build_zone: bool) -> Vector2:
 	var file := FileAccess.open(path, FileAccess.READ)

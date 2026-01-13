@@ -1,1 +1,4 @@
 res://scripts/core/unit.gd
+res://scripts/core/camera_controller_3d.gd
+res://scripts/ui/build_ui.gd
+res://scripts/ui/minimap.gd
