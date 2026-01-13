@@ -32,7 +32,6 @@ extends Node2D
 @export var visual_scene_path := ""
 @export var visual_base_size := Vector2.ZERO
 @export var visual_offset := Vector2.ZERO
-@export var render_2d := true
 
 var hp := 0.0
 var _visual_node: Node2D
@@ -58,60 +57,6 @@ func take_damage(amount: float, attacker_type: String = "") -> void:
 func get_vision_radius() -> float:
 	return vision_radius
 
-func _draw() -> void:
-	if not render_2d:
-		return
-	var height := minf(22.0, size.y * 0.22)
-	if _visual_node == null:
-		var base_rect := Rect2(-size / 2.0, size)
-		var top_offset := Vector2(-height * 0.4, -height)
-		var b_tl := base_rect.position
-		var b_tr := base_rect.position + Vector2(size.x, 0.0)
-		var b_br := base_rect.position + size
-		var b_bl := base_rect.position + Vector2(0.0, size.y)
-		var t_tl := b_tl + top_offset
-		var t_tr := b_tr + top_offset
-		var t_br := b_br + top_offset
-		var t_bl := b_bl + top_offset
-		draw_colored_polygon(
-			PackedVector2Array([b_tl + Vector2(4.0, 5.0), b_tr + Vector2(4.0, 5.0), b_br + Vector2(4.0, 5.0), b_bl + Vector2(4.0, 5.0)]),
-			Color(0.0, 0.0, 0.0, 0.22)
-		)
-		draw_colored_polygon(PackedVector2Array([b_tr, b_br, t_br, t_tr]), _shade(fill_color, -0.08))
-		draw_colored_polygon(PackedVector2Array([b_bl, b_br, t_br, t_bl]), _shade(fill_color, -0.18))
-		draw_colored_polygon(PackedVector2Array([t_tl, t_tr, t_br, t_bl]), _shade(fill_color, 0.12))
-		var outline := PackedVector2Array([t_tl, t_tr, t_br, t_bl, t_tl])
-		draw_polyline(outline, _shade(outline_color, -0.25), outline_width)
-		_draw_details(t_tl, t_tr, t_br, t_bl, height)
-	if show_health and max_hp > 0.0:
-		var bar_width := size.x
-		var bar_pos := Vector2(-bar_width / 2.0, -size.y / 2.0 - health_bar_offset - height)
-		var bar_rect := Rect2(bar_pos, Vector2(bar_width, health_bar_height))
-		draw_rect(bar_rect, Color(0.2, 0.2, 0.2, 0.8), true)
-		var pct := clampf(hp / max_hp, 0.0, 1.0)
-		var fill_rect := Rect2(bar_pos, Vector2(bar_width * pct, health_bar_height))
-		draw_rect(fill_rect, Color(0.2, 0.85, 0.25, 0.9), true)
-
-func _shade(src: Color, amount: float) -> Color:
-	return Color(
-		clampf(src.r + amount, 0.0, 1.0),
-		clampf(src.g + amount, 0.0, 1.0),
-		clampf(src.b + amount, 0.0, 1.0),
-		src.a
-	)
-
-func _draw_details(t_tl: Vector2, t_tr: Vector2, t_br: Vector2, t_bl: Vector2, height: float) -> void:
-	var accent := _shade(fill_color, 0.24)
-	var top_center := (t_tl + t_br) * 0.5
-	var pad_size := size * 0.32
-	var pad_rect := Rect2(top_center - pad_size * 0.5, pad_size)
-	draw_rect(pad_rect, accent, true)
-	var ring_radius := minf(size.x, size.y) * 0.12
-	draw_circle(top_center, ring_radius, _shade(fill_color, 0.32))
-	var mast_top := top_center + Vector2(0.0, -height * 1.6)
-	draw_line(top_center, mast_top, accent, 2.0)
-	draw_circle(mast_top, height * 0.3, accent)
-
 func _setup_visual() -> void:
 	if visual_scene_path == "":
 		return
@@ -124,7 +69,7 @@ func _setup_visual() -> void:
 		if instance is Node2D:
 			_visual_node = instance
 			add_child(_visual_node)
-			_visual_node.visible = render_2d
+			_visual_node.visible = false  # 2D visuals are hidden - 3D used instead
 			_update_visual_transform()
 			_update_visual_color()
 	else:
@@ -143,13 +88,3 @@ func _update_visual_color() -> void:
 	if _visual_node == null:
 		return
 	_visual_node.modulate = fill_color
-
-func set_render_2d(value: bool) -> void:
-	render_2d = value
-	_set_canvas_children_visible(value)
-	queue_redraw()
-
-func _set_canvas_children_visible(value: bool) -> void:
-	for child in get_children():
-		if child is CanvasItem:
-			child.visible = value

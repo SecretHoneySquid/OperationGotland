@@ -47,7 +47,6 @@ signal shot_fired(start_pos: Vector2, end_pos: Vector2, color: Color, width: flo
 @export var visual_scene_path := ""
 @export var visual_base_radius := 10.0
 @export var visual_offset := Vector2.ZERO
-@export var render_2d := true
 @export var missile_visual_path := ""
 
 @export var aircraft_missile_capacity := 2
@@ -176,9 +175,24 @@ var _nav_repath_timer := 0.0
 
 # HIMARS Launcher Control
 var _himars_launcher_node: Node3D = null
+var _himars_visual_proxy: Node3D = null  # Reference to 3D visual for getting rotation
 var _himars_launcher_angle := 0.0
 var _himars_setup_timer := 0.0
 var _himars_setup_done := false
+
+# HIMARS Firing State Machine
+enum HimarsState { IDLE, ROTATING, DEPLOYING, READY, FIRING, RETRACTING }
+var _himars_state := HimarsState.IDLE
+var _himars_state_timer := 0.0
+var _himars_pending_target := Vector2.ZERO
+var _himars_target_facing := Vector2.RIGHT  # Target _facing direction for rotation
+var _himars_animation_player: AnimationPlayer = null
+const HIMARS_DEPLOY_TIME_FALLBACK := 2.5  # Fallback if no animation found
+const HIMARS_RETRACT_TIME_FALLBACK := 2.5  # Fallback if no animation found
+const HIMARS_FIRE_DELAY := 0.5  # Delay after animation completes before first shot
+const HIMARS_LAUNCHER_OFFSET_ANGLE := 45.0  # Launcher rotates 45 deg RIGHT during raise (degrees)
+const HIMARS_ROTATION_SPEED := 3.0  # Radians per second for rotating to target
+var _himars_animation_length := 2.5  # Will be set from actual animation
 
 func _ready() -> void:
 	hp = max_hp
@@ -216,21 +230,73 @@ func _ready() -> void:
 		_himars_setup_timer = 0.15  # Try setup after 0.15 seconds
 
 func _setup_himars_launcher() -> void:
-	"""Find the HIMARS launcher mesh for manual rotation"""
-	var world_3d = get_tree().root.get_node_or_null("Main/World3D")
-	if world_3d == null:
+	"""Find the HIMARS launcher mesh and AnimationPlayer for animation control"""
+	print("[HIMARS] Setting up launcher...")
+
+	# The visual proxies are in World3D/VisualSync, not directly in World3D
+	var visual_sync = get_tree().root.get_node_or_null("Main/World3D/VisualSync")
+	if visual_sync == null:
+		print("[HIMARS] ERROR: Could not find VisualSync node")
 		return
 
-	var visual_proxy = _find_visual_proxy_in_world(world_3d)
+	print("[HIMARS] Found VisualSync with ", visual_sync.get_child_count(), " children")
+
+	var visual_proxy = _find_visual_proxy_in_world(visual_sync)
 	if visual_proxy == null:
+		print("[HIMARS] ERROR: Could not find visual proxy for unit ID ", get_instance_id())
+		# Debug: list all children with unit_id meta
+		for child in visual_sync.get_children():
+			if child.has_meta("unit_id"):
+				print("[HIMARS] Found proxy with unit_id: ", child.get_meta("unit_id"))
 		return
+
+	print("[HIMARS] Found visual proxy: ", visual_proxy.name)
+	_himars_visual_proxy = visual_proxy  # Store reference for getting rotation later
+
+	# Debug: print the full tree structure
+	_debug_print_tree(visual_proxy, 0)
 
 	# Find launcher mesh by name keywords
 	_himars_launcher_node = _find_launcher_mesh(visual_proxy)
 	if _himars_launcher_node != null:
 		_himars_launcher_angle = 0.0  # Start lowered
+		print("[HIMARS] Found launcher node: ", _himars_launcher_node.name)
+
+	# Find AnimationPlayer in the model hierarchy
+	_himars_animation_player = _find_animation_player_in_tree(visual_proxy)
+	if _himars_animation_player != null:
+		print("[HIMARS] Found AnimationPlayer: ", _himars_animation_player.name)
+		var anim_list = _himars_animation_player.get_animation_list()
+		print("[HIMARS] Animations available: ", anim_list)
+		# Get the actual animation length
+		for anim_name in anim_list:
+			if "CINEMA" in anim_name or "cinema" in anim_name.to_lower():
+				var anim = _himars_animation_player.get_animation(anim_name)
+				if anim:
+					_himars_animation_length = anim.length
+					print("[HIMARS] Animation length: ", _himars_animation_length, " seconds")
+				break
+		# Fallback: check first animation
+		if _himars_animation_length <= 0.1 and anim_list.size() > 0:
+			var anim = _himars_animation_player.get_animation(anim_list[0])
+			if anim:
+				_himars_animation_length = anim.length
+				print("[HIMARS] Animation length (fallback): ", _himars_animation_length, " seconds")
 	else:
-		pass  # Launcher mesh not found
+		print("[HIMARS] No AnimationPlayer found, will use manual rotation")
+
+func _debug_print_tree(node: Node, depth: int) -> void:
+	"""Debug helper to print node tree"""
+	var indent = "  ".repeat(depth)
+	var type_info = ""
+	if node is AnimationPlayer:
+		type_info = " [ANIMPLAYER]"
+	elif node is MeshInstance3D:
+		type_info = " [MESH]"
+	print("[HIMARS] ", indent, "- ", node.name, " (", node.get_class(), ")", type_info)
+	if depth < 4:  # Limit depth to avoid spam
+		for child in node.get_children():
+			_debug_print_tree(child, depth + 1)
 
 func _find_visual_proxy_in_world(world_node: Node) -> Node3D:
 	"""Find the 3D visual proxy node that represents this unit"""
@@ -254,6 +320,16 @@ func _find_launcher_mesh(node: Node) -> Node3D:
 		if found != null:
 			return found
 
+	return null
+
+func _find_animation_player_in_tree(node: Node) -> AnimationPlayer:
+	"""Recursively search for AnimationPlayer in node tree"""
+	if node is AnimationPlayer:
+		return node as AnimationPlayer
+	for child in node.get_children():
+		var found = _find_animation_player_in_tree(child)
+		if found != null:
+			return found
 	return null
 
 func _exit_tree() -> void:
@@ -291,12 +367,6 @@ func _process(delta: float) -> void:
 			_setup_himars_launcher()
 			_himars_setup_done = true
 
-	# HIMARS launcher rotation
-	if is_himars and _himars_launcher_node != null:
-		var target_angle = -45.0 if (_bombardment_area_active or _bombardment_area_target != Vector2.ZERO) else 0.0
-		_himars_launcher_angle = move_toward(_himars_launcher_angle, target_angle, 60.0 * delta)
-		_himars_launcher_node.rotation_degrees.x = _himars_launcher_angle
-
 	_cooldown = maxf(0.0, _cooldown - delta)
 	if unit_kind == "aircraft":
 		_aircraft_missile_timer = maxf(0.0, _aircraft_missile_timer - delta)
@@ -305,42 +375,40 @@ func _process(delta: float) -> void:
 		if _bombardment_cooldown <= 0.0:
 			_bombardment_ready = true
 
-		# Handle rotation towards target
-		_update_himars_deployment(delta)
+		# Handle rotation towards target (only when IDLE or auto-targeting)
+		if _himars_state == HimarsState.IDLE:
+			_update_himars_deployment(delta)
 
-		# Handle salvo firing
-		if _bombardment_salvo_count > 0:
-			_bombardment_salvo_timer -= delta
-			if _bombardment_salvo_timer <= 0.0:
-				_fire_single_missile(_bombardment_salvo_target)
-				_bombardment_salvo_count -= 1
-				_bombardment_salvo_timer = bombardment_salvo_interval
+		# HIMARS State Machine
+		_update_himars_state_machine(delta)
 
-		# HIMARS auto-bombardment behavior (only start new salvo if none active)
-		if _bombardment_ready and _bombardment_salvo_count == 0:
+		# HIMARS auto-bombardment behavior (only start new salvo if IDLE and ready)
+		if _himars_state == HimarsState.IDLE and _bombardment_ready:
 			# Priority 1: Area bombardment if active
 			if _bombardment_area_active and _bombardment_area_target != Vector2.ZERO:
 				var dist := global_position.distance_to(_bombardment_area_target)
 				if dist <= bombardment_range:
-					launch_bombardment(_bombardment_area_target)
+					_request_bombardment(_bombardment_area_target)
 			# Priority 2: Auto-engage enemies (only when not in manual control)
 			elif not manual_active:
 				var enemy := _find_bombardment_target()
 				if enemy != null:
-					# Launch at enemy position
-					launch_bombardment(enemy.global_position)
+					_request_bombardment(enemy.global_position)
 	_update_hold(delta)
 	if unit_kind == "aircraft":
 		_update_aircraft_state(delta)
 		return
 	# HIMARS has different behavior - only moves when manually commanded or moving to rally point
+	# AND only when not in a firing sequence (IDLE or RETRACTING allowed)
 	if is_himars:
 		# HIMARS only moves for: manual commands OR rally target
 		# It does NOT auto-chase enemies or auto-move to HQ
+		# CRITICAL: Cannot move while deploying, ready, or firing
+		var can_move := _himars_state == HimarsState.IDLE
 		var has_rally := not _reached_rally and rally_target != Vector2.ZERO
 		var needs_to_move := (manual_active and manual_target != Vector2.ZERO) or has_rally
 
-		if needs_to_move:
+		if can_move and needs_to_move:
 			_move_toward_target(delta)
 	else:
 		# Normal unit behavior
@@ -359,36 +427,6 @@ func _process(delta: float) -> void:
 	_apply_unit_separation(delta)
 	_sync_visual_rotation()
 
-func _draw() -> void:
-	if not render_2d:
-		return
-	if _visual_node == null:
-		var angle := _facing.angle()
-		var base_color := color
-		var scale := body_radius / (10.0 if unit_kind == "vehicle" else 8.0)
-		var hull := _get_hull_points()
-		var shadow_color := Color(0.0, 0.0, 0.0, 0.22)
-		draw_circle(Vector2(2.0, 3.0), body_radius * 0.95, shadow_color)
-		var base_points := _transform_points(hull, angle, scale)
-		var top_points := _transform_points(hull, angle, scale * 0.7, Vector2(-1.0, -1.0))
-		draw_colored_polygon(base_points, _shade(base_color, -0.12))
-		draw_colored_polygon(top_points, _shade(base_color, 0.12))
-		var outline := base_points.duplicate()
-		if outline.size() > 0:
-			outline.append(base_points[0])
-			draw_polyline(outline, _shade(base_color, -0.35), 1.5)
-		if unit_kind == "vehicle":
-			_draw_vehicle_details(angle, base_color)
-		else:
-			_draw_infantry_details(angle, base_color)
-	if is_selected:
-		draw_circle(Vector2.ZERO, body_radius + 5.0, Color(0.2, 0.9, 1.0, 0.6), false, 2.0)
-
-func set_render_2d(value: bool) -> void:
-	render_2d = value
-	_set_canvas_children_visible(value)
-	queue_redraw()
-
 func _setup_visual() -> void:
 	if visual_scene_path == "":
 		return
@@ -401,7 +439,7 @@ func _setup_visual() -> void:
 		if instance is Node2D:
 			_visual_node = instance
 			add_child(_visual_node)
-			_visual_node.visible = render_2d
+			_visual_node.visible = false  # 2D visuals are hidden - 3D used instead
 			_update_visual_transform()
 			_update_visual_color()
 	else:
@@ -1122,11 +1160,6 @@ func _fire_aircraft_gun(target: Node) -> void:
 	_cooldown = attack_cooldown
 	aircraft_gun_ammo = maxi(0, aircraft_gun_ammo - 1)
 
-func _set_canvas_children_visible(value: bool) -> void:
-	for child in get_children():
-		if child is CanvasItem:
-			child.visible = value
-
 func _face_toward(pos: Vector2, delta: float = 0.0) -> void:
 	var delta_vec := pos - global_position
 	if delta_vec.length_squared() <= 0.1:
@@ -1148,62 +1181,6 @@ func _face_aircraft_toward(pos: Vector2, delta: float) -> void:
 		_facing = desired
 		return
 	_facing = _apply_aircraft_turn(desired, delta)
-
-func _shade(src: Color, amount: float) -> Color:
-	return Color(
-		clampf(src.r + amount, 0.0, 1.0),
-		clampf(src.g + amount, 0.0, 1.0),
-		clampf(src.b + amount, 0.0, 1.0),
-		src.a
-	)
-
-func _transform_points(points: Array, angle: float, scale: float, offset := Vector2.ZERO) -> PackedVector2Array:
-	var transformed := PackedVector2Array()
-	for point in points:
-		if point is Vector2:
-			transformed.append((point * scale).rotated(angle) + offset)
-	return transformed
-
-func _get_hull_points() -> Array:
-	if unit_kind == "vehicle":
-		return [
-			Vector2(11, 0),
-			Vector2(7, -6),
-			Vector2(-7, -6),
-			Vector2(-11, 0),
-			Vector2(-7, 6),
-			Vector2(7, 6),
-		]
-	return [
-		Vector2(8, 0),
-		Vector2(3, -5),
-		Vector2(-6, -4),
-		Vector2(-8, 0),
-		Vector2(-6, 4),
-		Vector2(3, 5),
-	]
-
-func _draw_infantry_details(angle: float, base_color: Color) -> void:
-	var weapon_len := body_radius * 0.9
-	var weapon_width := 2.0
-	if unit_type == "sniper":
-		weapon_len = body_radius * 1.35
-		weapon_width = 2.0
-	elif unit_type == "rocket":
-		weapon_len = body_radius * 1.05
-		weapon_width = 3.0
-	var weapon_color := _shade(base_color, 0.35)
-	draw_line(Vector2.ZERO, Vector2(weapon_len, 0.0).rotated(angle), weapon_color, weapon_width)
-
-func _draw_vehicle_details(angle: float, base_color: Color) -> void:
-	var turret_radius := body_radius * 0.35
-	var turret_color := _shade(base_color, 0.2)
-	draw_circle(Vector2.ZERO, turret_radius, turret_color)
-	draw_line(Vector2.ZERO, Vector2(body_radius * 0.9, 0.0).rotated(angle), _shade(base_color, 0.4), 2.5)
-	var track_offset := Vector2(0.0, body_radius * 0.55).rotated(angle)
-	var track_half := Vector2(body_radius * 0.7, 0.0).rotated(angle)
-	draw_line(-track_offset - track_half, -track_offset + track_half, _shade(base_color, -0.25), 1.5)
-	draw_line(track_offset - track_half, track_offset + track_half, _shade(base_color, -0.25), 1.5)
 
 func _find_attack_target() -> Node2D:
 	var unit_target := _find_enemy_unit_in_range(attack_range)
@@ -2006,37 +1983,202 @@ func _update_hold(delta: float) -> void:
 		_hold_pos = Vector2.ZERO
 		_hold_reached = false
 
-func launch_bombardment(target_pos: Vector2) -> bool:
+# ========== HIMARS STATE MACHINE ==========
+
+func _request_bombardment(target_pos: Vector2) -> bool:
+	"""Request a bombardment - this starts the deploy sequence instead of firing immediately"""
 	if not is_himars:
-		print("[BOMBARDMENT] Not a HIMARS unit")
 		return false
 	if not _bombardment_ready:
-		print("[BOMBARDMENT] Not ready (cooldown: ", _bombardment_cooldown, ")")
 		return false
+	if _himars_state != HimarsState.IDLE:
+		return false  # Already in a firing sequence
 	var dist := global_position.distance_to(target_pos)
 	if dist > bombardment_range:
-		print("[BOMBARDMENT] Target out of range: ", dist, " > ", bombardment_range)
 		return false
 
-	print("[BOMBARDMENT] Starting salvo of ", bombardment_missiles_per_salvo, " missiles to ", target_pos)
+	print("[HIMARS] Bombardment requested at ", target_pos, " - starting rotation")
+	_himars_pending_target = target_pos
 
-	# Start salvo - fire first missile immediately, rest follow
-	_bombardment_salvo_target = target_pos
-	_bombardment_salvo_count = bombardment_missiles_per_salvo - 1  # Minus the one we fire now
-	_bombardment_salvo_timer = bombardment_salvo_interval
+	# Calculate the direction to target
+	var dir_to_target := (target_pos - global_position).normalized()
 
-	# Fire first missile immediately
-	_fire_single_missile(target_pos)
+	# The launcher rotates during the raise animation by HIMARS_LAUNCHER_OFFSET_ANGLE degrees
+	# So we need to pre-rotate the vehicle in the opposite direction
+	# so that after the animation, the launcher points at the target
+	var offset_radians := deg_to_rad(HIMARS_LAUNCHER_OFFSET_ANGLE)
+	_himars_target_facing = dir_to_target.rotated(-offset_radians)
 
-	# Start cooldown
-	_bombardment_ready = false
-	_bombardment_cooldown = bombardment_reload_time
+	print("[HIMARS] Direction to target: ", dir_to_target, " | Target facing (with offset): ", _himars_target_facing)
+
+	_himars_state = HimarsState.ROTATING
 
 	return true
 
+func _update_himars_state_machine(delta: float) -> void:
+	"""Process the HIMARS firing state machine"""
+	match _himars_state:
+		HimarsState.IDLE:
+			# Animate launcher back to stowed position if needed
+			_update_himars_launcher_angle(delta, 0.0)
+
+		HimarsState.ROTATING:
+			# Rotate the HIMARS to face the target by updating _facing
+			# The visual_sync_3d system reads _facing and rotates the 3D proxy accordingly
+			var current_angle := atan2(_facing.y, _facing.x)
+			var target_angle := atan2(_himars_target_facing.y, _himars_target_facing.x)
+			var angle_diff := target_angle - current_angle
+
+			# Normalize angle difference to -PI to PI
+			while angle_diff > PI:
+				angle_diff -= TAU
+			while angle_diff < -PI:
+				angle_diff += TAU
+
+			# Check if we're close enough
+			if abs(angle_diff) < 0.05:  # About 3 degrees tolerance
+				_facing = _himars_target_facing
+				print("[HIMARS] Rotation complete - starting deploy")
+				_himars_state = HimarsState.DEPLOYING
+				# Use actual animation length if available, otherwise fallback
+				_himars_state_timer = _himars_animation_length if _himars_animation_length > 0.1 else HIMARS_DEPLOY_TIME_FALLBACK
+				print("[HIMARS] Deploy timer set to: ", _himars_state_timer, " seconds")
+				# Start the raise animation
+				_play_himars_animation("raise")
+			else:
+				# Rotate towards target
+				var rot_step := HIMARS_ROTATION_SPEED * delta
+				if angle_diff > 0:
+					current_angle += min(rot_step, angle_diff)
+				else:
+					current_angle -= min(rot_step, -angle_diff)
+				_facing = Vector2(cos(current_angle), sin(current_angle))
+
+		HimarsState.DEPLOYING:
+			# Raising the launcher - wait for animation to complete
+			_update_himars_launcher_angle(delta, -45.0)
+			_himars_state_timer -= delta
+			# Check if animation finished OR timer expired (whichever is longer for safety)
+			var anim_done := _himars_animation_player == null or not _himars_animation_player.is_playing()
+			var timer_done := _himars_state_timer <= 0.0
+			if anim_done and timer_done:
+				print("[HIMARS] Launcher raised - ready to fire")
+				_himars_state = HimarsState.READY
+				_himars_state_timer = HIMARS_FIRE_DELAY
+
+		HimarsState.READY:
+			# Small delay after raising before firing
+			_himars_state_timer -= delta
+			if _himars_state_timer <= 0.0:
+				print("[HIMARS] Starting salvo of ", bombardment_missiles_per_salvo, " missiles")
+				_himars_state = HimarsState.FIRING
+				_bombardment_salvo_target = _himars_pending_target
+				_bombardment_salvo_count = bombardment_missiles_per_salvo
+				_bombardment_salvo_timer = 0.0  # Fire first missile immediately
+
+		HimarsState.FIRING:
+			# Fire missiles in salvo
+			_bombardment_salvo_timer -= delta
+			if _bombardment_salvo_timer <= 0.0 and _bombardment_salvo_count > 0:
+				_fire_single_missile(_bombardment_salvo_target)
+				_bombardment_salvo_count -= 1
+				_bombardment_salvo_timer = bombardment_salvo_interval
+
+			# Check if salvo is complete
+			if _bombardment_salvo_count <= 0:
+				print("[HIMARS] Salvo complete - retracting launcher")
+				_himars_state = HimarsState.RETRACTING
+				# Use actual animation length if available, otherwise fallback
+				_himars_state_timer = _himars_animation_length if _himars_animation_length > 0.1 else HIMARS_RETRACT_TIME_FALLBACK
+				# Start cooldown after firing
+				_bombardment_ready = false
+				_bombardment_cooldown = bombardment_reload_time
+				# Start the lower animation
+				_play_himars_animation("lower")
+
+		HimarsState.RETRACTING:
+			# Lowering the launcher - wait for animation to complete
+			_update_himars_launcher_angle(delta, 0.0)
+			_himars_state_timer -= delta
+			# Check if animation finished OR timer expired (whichever is longer for safety)
+			var anim_done := _himars_animation_player == null or not _himars_animation_player.is_playing()
+			var timer_done := _himars_state_timer <= 0.0
+			if anim_done and timer_done:
+				print("[HIMARS] Launcher stowed - returning to IDLE")
+				_himars_state = HimarsState.IDLE
+				_himars_pending_target = Vector2.ZERO
+
+func _update_himars_launcher_angle(delta: float, target_angle: float) -> void:
+	"""Smoothly animate the launcher angle (fallback for when no AnimationPlayer)"""
+	if _himars_launcher_node == null:
+		return
+	# Only use manual rotation if we don't have an AnimationPlayer controlling it
+	if _himars_animation_player == null or not _himars_animation_player.is_playing():
+		_himars_launcher_angle = move_toward(_himars_launcher_angle, target_angle, 60.0 * delta)
+		_himars_launcher_node.rotation_degrees.x = _himars_launcher_angle
+
+func _play_himars_animation(action: String) -> void:
+	"""Play HIMARS animation - tries AnimationPlayer first, falls back to manual rotation"""
+	if _himars_animation_player == null:
+		return
+
+	var anim_list := _himars_animation_player.get_animation_list()
+	print("[HIMARS] Available animations: ", anim_list)
+
+	# The GLB model has a single animation from Cinema 4D export (CINEMA_4D_________)
+	# Find it by looking for "CINEMA" or just use the first animation available
+	var main_anim := ""
+	for anim_name in anim_list:
+		if "CINEMA" in anim_name or "cinema" in anim_name.to_lower():
+			main_anim = anim_name
+			break
+	# Fallback: just use the first animation if no CINEMA_4D found
+	if main_anim == "" and anim_list.size() > 0:
+		main_anim = anim_list[0]
+
+	if main_anim == "":
+		print("[HIMARS] No animation found!")
+		return
+
+	if action == "raise":
+		# Play the animation forward to raise the launcher
+		_himars_animation_player.play(main_anim)
+		print("[HIMARS] Playing animation forward: ", main_anim)
+
+	elif action == "lower":
+		# Play the animation backwards to lower the launcher
+		_himars_animation_player.play_backwards(main_anim)
+		print("[HIMARS] Playing animation backwards: ", main_anim)
+
+func is_himars_firing() -> bool:
+	"""Returns true if HIMARS is in a firing sequence (cannot move)"""
+	return is_himars and _himars_state != HimarsState.IDLE
+
+func _get_himars_launch_direction() -> Vector2:
+	"""Get the 2D direction the HIMARS launcher is pointing based on vehicle facing + launcher offset"""
+	# The launcher has rotated by HIMARS_LAUNCHER_OFFSET_ANGLE during the raise animation
+	# So the launch direction is the vehicle's _facing rotated by that offset
+	var offset_radians := deg_to_rad(HIMARS_LAUNCHER_OFFSET_ANGLE)
+	var launch_dir := _facing.rotated(offset_radians)
+
+	print("[HIMARS] Vehicle facing: ", _facing, " + offset ", HIMARS_LAUNCHER_OFFSET_ANGLE, " deg = launch dir: ", launch_dir)
+
+	return launch_dir.normalized()
+
+func launch_bombardment(target_pos: Vector2) -> bool:
+	"""Legacy function - now redirects to state machine"""
+	return _request_bombardment(target_pos)
+
 func _fire_single_missile(target_pos: Vector2) -> void:
-	# Calculate direction to target
-	var direction := (target_pos - global_position).normalized()
+	# Get the launcher's actual facing direction from the 3D visual
+	var direction := _get_himars_launch_direction()
+
+	# Calculate target position based on launcher direction (missiles fire where launcher points)
+	# The missile still needs a target_pos for its ballistic arc calculation
+	var launch_distance := global_position.distance_to(target_pos)
+	var actual_target := global_position + direction * launch_distance
+
+	print("[HIMARS] Launcher direction: ", direction, " | Target adjusted from ", target_pos, " to ", actual_target)
 
 	# Create ATACMS missile - ballistic, not heat-seeking
 	var missile := Missile.new()
@@ -2060,14 +2202,14 @@ func _fire_single_missile(target_pos: Vector2) -> void:
 	missile.render_2d = true  # Enable 2D rendering for trail visibility
 	missile.trail_length = 40.0  # Longer trail for visibility
 	missile.ballistic_arc = 120.0  # Very high ballistic arc for dramatic ground-launched trajectory
-	missile._target_pos = target_pos
+	missile._target_pos = actual_target  # Use the adjusted target based on launcher direction
 	missile.set_origin(global_position)
 
-	# Initialize velocity to point toward target
+	# Initialize velocity to point in launcher direction
 	missile._velocity = direction
 
 	get_parent().add_child(missile)
-	print("[BOMBARDMENT] ATACMS missile fired to ", target_pos)
+	print("[BOMBARDMENT] ATACMS missile fired to ", actual_target)
 
 func is_bombardment_ready() -> bool:
 	return is_himars and _bombardment_ready

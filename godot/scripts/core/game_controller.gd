@@ -1,172 +1,85 @@
 class_name GameController
 extends Node2D
 
+## Game Controller
+##
+## Main orchestrator for the game. Delegates to specialized controllers:
+## - SpawnController: Unit and building spawning
+## - ProductionController: Production pools and queues
+## - VisibilityController: Fog of war
+##
+## Uses TeamState to consolidate per-team state.
+
+# =============================================================================
+# EXPORTS - Configuration
+# =============================================================================
+
 @export var map_path := "res://data/maps/test_map.json"
 @export var structures_path := NodePath("Structures")
 @export var units_path := NodePath("Units")
 
 @export var unit_spawn_limit := 50
-@export var unit_spawn_spread := 22.0
-@export var max_infantry_pool := 5.0
-@export var max_aircraft_pool := 2.0
-
-@export var starting_p1_credits := 700
-@export var starting_p2_credits := 700
-@export var starting_p1_barracks := 0
-@export var starting_p2_barracks := 1
-@export var starting_p1_factory := 0
-@export var starting_p2_factory := 1
-@export var starting_p1_airfield := 0
-@export var starting_p2_airfield := 0
-@export var starting_p1_supply := 0
-@export var starting_p2_supply := 1
-
-@export var barracks_infantry_rate := 0.6
-@export var factory_vehicle_rate := 0.25
-@export var airfield_aircraft_rate := 0.2
-@export var airfield_aircraft_cap := 3
-@export var airfield_landing_cap := 4
-@export var infantry_unit_cost := 25
-@export var vehicle_unit_cost := 60
-@export var aircraft_unit_cost := 120
-@export var factory_queue_max := 6
-
-@export var unit_speed := 63.0
-@export var unit_hp := 30.0
-@export var unit_damage := 6.0
-@export var unit_attack_range := 26.0
-@export var infantry_long_multiplier := 10.0
-@export var infantry_mid_multiplier := 5.0
-@export var infantry_long_ratio := 0.2
-@export var infantry_mid_ratio := 0.3
-@export var unit_attack_cooldown := 0.6
-@export var unit_body_radius := 8.0
-@export var infantry_wait_duration := 10.0
-@export var wait_edge_padding := 12.0
-
-@export var vehicle_speed := 49.0
-@export var vehicle_hp := 60.0
-@export var vehicle_damage := 12.0
-@export var vehicle_attack_range := 34.0
-@export var vehicle_long_multiplier := 10.0
-@export var vehicle_mid_multiplier := 5.0
-@export var vehicle_long_ratio := 0.2
-@export var vehicle_mid_ratio := 0.3
-@export var vehicle_attack_cooldown := 0.9
-@export var vehicle_body_radius := 11.0
-
-@export var aircraft_speed := 125.0
-@export var aircraft_hp := 70.0
-@export var aircraft_damage := 4.5
-@export var aircraft_attack_range := 180.0
-@export var aircraft_attack_cooldown := 0.12
-@export var aircraft_body_radius := 12.0
-@export var aircraft_vision_radius := 560.0  # Doubled
-@export var aircraft_shot_width := 2.6
-@export var aircraft_shot_lifetime := 0.16
-@export var aircraft_gun_ammo := 20
-@export var aircraft_missile_ammo := 2
-@export var aircraft_missile_damage := 32.0
-@export var aircraft_missile_speed := 520.0
-@export var aircraft_missile_turn_rate := 6.0
-@export var aircraft_missile_range := 2500.0  # Reduced from 12000 - planes were targeting too far away
-@export var aircraft_missile_cooldown := 2.4
-@export var aircraft_missile_hit_radius := 16.0
-@export var aircraft_missile_warhead_size := "large"
-@export var aircraft_missile_splash_radius := 80.0
-@export var aircraft_missile_splash_scale := 0.85
-@export var aircraft_missile_lifetime := 24.0
-@export var aircraft_reload_time := 7.0
-@export var aircraft_missile_color := Color(1.0, 0.55, 0.25, 1.0)
-@export var aircraft_upgrade_cost := 500
-@export var f35_cost := 100
-@export var f35_airfield_cap := 1
-
-@export var collector_speed := 80.0
-@export var collector_capacity := 100.0
-@export var collector_harvest_time := 1.0
+@export var ai_queue_interval := 2.5
 @export var collectors_per_supply := 1
 @export var supply_bonus := 25
 
-@export var defense_range := 260.0
-@export var defense_damage := 10.0
-@export var defense_fire_rate := 0.8
-@export var defense_range_multiplier := 1.5
-@export var defense_fire_rate_multiplier := 0.75
-@export var defense_color := Color(0.7, 0.7, 0.7, 1.0)
 
-@export var hq_size := Vector2(140, 140)
-@export var hq_hp := 500.0
+# Airfield settings
+@export var airfield_aircraft_cap := 3
+@export var f35_airfield_cap := 1
+@export var f35_cost := 100
+@export var aircraft_upgrade_cost := 500
 
-@export var p1_unit_color := Color(0.2, 0.5, 1.0, 1.0)
-@export var p2_unit_color := Color(1.0, 0.3, 0.3, 1.0)
-@export var p1_vehicle_color := Color(0.25, 0.7, 1.0, 1.0)
-@export var p2_vehicle_color := Color(1.0, 0.45, 0.3, 1.0)
-@export var p1_aircraft_color := Color(0.2, 0.65, 1.0, 1.0)
-@export var p2_aircraft_color := Color(1.0, 0.5, 0.3, 1.0)
-@export var p1_hq_color := Color(0.2, 0.35, 0.7, 1.0)
-@export var p2_hq_color := Color(0.7, 0.2, 0.2, 1.0)
-@export var p1_collector_color := Color(0.9, 0.85, 0.2, 1.0)
-@export var p2_collector_color := Color(0.9, 0.6, 0.2, 1.0)
+# Unit costs (for UI compatibility - values from GameBalance)
+var vehicle_unit_cost: int:
+	get: return GameBalance.VEHICLE_UNIT_COST
+var infantry_unit_cost: int:
+	get: return GameBalance.INFANTRY_UNIT_COST
+var aircraft_unit_cost: int:
+	get: return GameBalance.AIRCRAFT_UNIT_COST
+var factory_queue_max: int:
+	get: return _production_controller.factory_queue_max if _production_controller else 6
 
-@export var show_rally_marker := false  # Disabled - was showing as diagonal line
-@export var rally_marker_radius := 12.0
-@export var rally_marker_outline := Color(0.9, 0.9, 0.9, 0.8)
-@export var rally_line_color := Color(0.8, 0.8, 0.8, 0.4)
+# Fog of war settings (delegated to visibility controller for UI compatibility)
+var fog_enabled: bool:
+	get: return _visibility_controller.fog_enabled if _visibility_controller else true
+	set(value):
+		if _visibility_controller:
+			_visibility_controller.fog_enabled = value
+var fog_hide_enemies: bool:
+	get: return _visibility_controller.fog_hide_enemies if _visibility_controller else true
+	set(value):
+		if _visibility_controller:
+			_visibility_controller.fog_hide_enemies = value
 
-@export var show_resource_nodes := true
-@export var resource_full_color := Color(0.95, 0.75, 0.2, 0.9)
-@export var resource_empty_color := Color(0.25, 0.25, 0.25, 0.7)
-@export var resource_min_radius := 6.0
-@export var resource_max_radius := 18.0
-
-@export var ai_queue_interval := 2.5
-@export var fog_enabled := true
-@export var fog_hide_enemies := true
-@export var base_vision_enabled := true
-@export var base_vision_padding := 40.0
-@export var base_vision_energy := 2.2
+# =============================================================================
+# STATE
+# =============================================================================
 
 var _structures: Node2D
 var _units: Node2D
-var _infantry_pool_p1 := 0.0
-var _infantry_pool_p2 := 0.0
-var _aircraft_pool_p1 := 0.0
-var _aircraft_pool_p2 := 0.0
-var _vehicle_progress_p1 := 0.0
-var _vehicle_progress_p2 := 0.0
-var _factory_queue_p1: Array[Dictionary] = []
-var _factory_queue_p2: Array[Dictionary] = []
-var _collectors_p1: Array[Collector] = []
-var _collectors_p2: Array[Collector] = []
+var _p1: TeamState
+var _p2: TeamState
 var _resource_nodes: Array[Dictionary] = []
 var _supply_remaining := 0.0
-var _hq_p1: HQ
-var _hq_p2: HQ
-var _start_p1 := Vector2(200, 600)
-var _start_p2 := Vector2(1800, 600)
-var _rally_p1 := Vector2.ZERO
-var _rally_p2 := Vector2.ZERO
 var _rally_mode_team := ""
-var _selected_factory_p1: Building = null
+var _rng := RandomNumberGenerator.new()
+var _ai_queue_timer := 0.0
+var _world_input: Node
+
+# Controllers
+var _spawn_controller: SpawnController
+var _production_controller: ProductionController
+var _visibility_controller: VisibilityController
+
+# Rally line 3D visualization
 var _rally_line_3d: Node3D = null
 var _rally_line_mesh: MeshInstance3D = null
 var _rally_marker: MeshInstance3D = null
-var _rng := RandomNumberGenerator.new()
-var _ai_queue_timer := 0.0
-var _income_accum_p1 := 0.0
-var _income_accum_p2 := 0.0
-var _income_timer := 0.0
-var _p1_build_zone := Rect2()
-var _p2_build_zone := Rect2()
-var _base_vision: BaseVision
-var _barracks_spawn_index_p1 := 0
-var _barracks_spawn_index_p2 := 0
-var _airfield_spawn_index_p1 := 0
-var _airfield_spawn_index_p2 := 0
-var _supply_spawn_index_p1 := 0
-var _supply_spawn_index_p2 := 0
-var _world_input: Node
+
+# =============================================================================
+# LIFECYCLE
+# =============================================================================
 
 func _ready() -> void:
 	_structures = get_node_or_null(structures_path) as Node2D
@@ -175,65 +88,56 @@ func _ready() -> void:
 	_units = get_node_or_null(units_path) as Node2D
 	if _units == null:
 		_units = self
-	GameState.reset(starting_p1_credits, starting_p2_credits)
+
 	_rng.randomize()
+	_init_teams()
+	_init_controllers()
 	_load_map_data(map_path)
-	_setup_base_vision()
+	_visibility_controller.setup_base_vision(self)
 	_spawn_hqs()
 	_spawn_starting_buildings()
 	_sync_collectors("p1")
 	_sync_collectors("p2")
 	_ai_queue_timer = ai_queue_interval
 	_world_input = _find_world_input()
-	# Create 3D rally line visualization (similar to tracer system)
-	_rally_line_3d = Node3D.new()
-	add_child(_rally_line_3d)
-	_rally_line_3d.visible = false
+	_setup_rally_line_3d()
 
-	_rally_line_mesh = MeshInstance3D.new()
-	_rally_line_3d.add_child(_rally_line_mesh)
-
-	# Create white material for visibility
-	var material := StandardMaterial3D.new()
-	material.albedo_color = Color(1.0, 1.0, 1.0, 0.9)  # White with slight transparency
-	material.emission_enabled = true
-	material.emission = Color(1.0, 1.0, 1.0)  # Glowing white
-	material.emission_energy_multiplier = 1.5
-	material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED  # Always visible
-	material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	material.cull_mode = BaseMaterial3D.CULL_DISABLED  # Visible from both sides
-	_rally_line_mesh.material_override = material
-
-	# Create rally marker at the end point (sphere)
-	_rally_marker = MeshInstance3D.new()
-	_rally_line_3d.add_child(_rally_marker)
-	var marker_mesh := SphereMesh.new()
-	marker_mesh.radius = 4.0
-	marker_mesh.height = 8.0
-	_rally_marker.mesh = marker_mesh
-	_rally_marker.material_override = material
-
-	# Connect to selection signals for rally line drawing
 	var selection_controller = get_node_or_null("../SelectionController")
 	if selection_controller != null and selection_controller.has_signal("building_selected"):
 		selection_controller.building_selected.connect(_on_building_selected)
-	queue_redraw()
+
+func _init_teams() -> void:
+	_p1 = TeamState.new("p1")
+	_p2 = TeamState.new("p2")
+	GameState.reset(700, 700)  # starting credits
+
+func _init_controllers() -> void:
+	var teams := {"p1": _p1, "p2": _p2}
+
+	_spawn_controller = SpawnController.new()
+	_spawn_controller.configure(_units, _structures, teams)
+	add_child(_spawn_controller)
+
+	_production_controller = ProductionController.new()
+	_production_controller.configure(teams)
+	_production_controller.infantry_ready.connect(_on_infantry_ready)
+	_production_controller.vehicle_ready.connect(_on_vehicle_ready)
+	_production_controller.aircraft_ready.connect(_on_aircraft_ready)
+	add_child(_production_controller)
+
+	_visibility_controller = VisibilityController.new()
+	_visibility_controller.configure(teams)
+	add_child(_visibility_controller)
 
 func _process(delta: float) -> void:
 	_update_hq_state()
-	_update_production()
-	_update_income_rate(delta)
+	_production_controller.update(delta)
 	_sync_collectors("p1")
 	_sync_collectors("p2")
 	_update_defenses(delta)
-	_update_infantry(delta)
-	_update_factory_queue(delta)
-	_update_aircraft(delta)
 	_update_ai_queue(delta)
 	_update_state_counters()
-	_update_visibility()
-
-	# Update rally line when factory is selected
+	_visibility_controller.update()
 	_update_rally_line()
 
 func _unhandled_input(event: InputEvent) -> void:
@@ -243,33 +147,14 @@ func _unhandled_input(event: InputEvent) -> void:
 		_set_rally_point(_rally_mode_team, _get_world_mouse_pos())
 		_rally_mode_team = ""
 	elif event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_RIGHT and event.pressed:
-		# Right-click clears the rally point
 		_set_rally_point(_rally_mode_team, Vector2.ZERO)
 		_rally_mode_team = ""
 	elif event is InputEventKey and event.pressed and event.keycode == KEY_ESCAPE:
 		_rally_mode_team = ""
 
-func _draw() -> void:
-	# Draw HIMARS rally line when factory is selected
-	if _selected_factory_p1 != null and is_instance_valid(_selected_factory_p1):
-		var factory_pos := _selected_factory_p1.global_position
-		var target_pos := factory_pos + Vector2(200.0, 0.0)
-		draw_line(factory_pos, target_pos, Color(1.0, 1.0, 0.0, 1.0), 8.0)
-		draw_circle(target_pos, 15.0, Color(1.0, 1.0, 0.0, 0.5))
-
-	if not show_rally_marker:
-		pass
-	else:
-		if _rally_p1 != Vector2.ZERO:
-			draw_circle(_rally_p1, rally_marker_radius, p1_unit_color)
-			draw_circle(_rally_p1, rally_marker_radius, rally_marker_outline, false, 2.0)
-			draw_line(_start_p1, _rally_p1, rally_line_color, 2.0)
-		if _rally_p2 != Vector2.ZERO:
-			draw_circle(_rally_p2, rally_marker_radius, p2_unit_color)
-			draw_circle(_rally_p2, rally_marker_radius, rally_marker_outline, false, 2.0)
-			draw_line(_start_p2, _rally_p2, rally_line_color, 2.0)
-	if show_resource_nodes:
-		_draw_resource_nodes()
+# =============================================================================
+# PUBLIC API - Rally Points
+# =============================================================================
 
 func start_rally_mode(team_id: String) -> void:
 	if _rally_mode_team == team_id:
@@ -281,65 +166,29 @@ func is_rally_mode(team_id: String) -> bool:
 	return _rally_mode_team == team_id
 
 func get_rally_point(team_id: String) -> Vector2:
-	return _rally_p1 if team_id == "p1" else _rally_p2
+	return _get_team(team_id).rally_pos
+
+# =============================================================================
+# PUBLIC API - Vehicle Queue
+# =============================================================================
 
 func queue_vehicle(team_id: String, vehicle_type: String = "mixed", factory: Building = null) -> bool:
-	if not _has_team_credits(team_id, vehicle_unit_cost):
-		return false
-	if _get_factory_count(team_id) <= 0:
-		return false
-	if _get_factory_queue(team_id).size() >= factory_queue_max:
-		return false
-	var chosen_factory: Building = null
-	if factory != null and is_instance_valid(factory):
-		if factory.build_id == "factory" and factory.team_id == team_id:
-			chosen_factory = factory
-	var type_id := vehicle_type
-	if type_id == "" and chosen_factory != null:
-		type_id = chosen_factory.vehicle_production_type
-	_deduct_team_credits(team_id, vehicle_unit_cost)
-	var entry := {
-		"type": type_id,
-		"factory": chosen_factory,
-	}
-	if team_id == "p1":
-		_factory_queue_p1.append(entry)
-	else:
-		_factory_queue_p2.append(entry)
-	return true
+	return _production_controller.queue_vehicle(team_id, vehicle_type, factory)
 
 func queue_himars(team_id: String, factory: Building = null) -> bool:
-	if not _has_team_credits(team_id, GameBalance.HIMARS_UNIT_COST):
-		#print("[HIMARS] Not enough credits")
-		return false
-	if _get_factory_count(team_id) <= 0:
-		#print("[HIMARS] No factory")
-		return false
-	if _get_factory_queue(team_id).size() >= factory_queue_max:
-		#print("[HIMARS] Queue full")
-		return false
-	var chosen_factory: Building = null
-	if factory != null and is_instance_valid(factory):
-		if factory.build_id == "factory" and factory.team_id == team_id:
-			chosen_factory = factory
-	_deduct_team_credits(team_id, GameBalance.HIMARS_UNIT_COST)
-	var entry := {
-		"type": "himars",
-		"factory": chosen_factory,
-	}
-	if team_id == "p1":
-		_factory_queue_p1.append(entry)
-	else:
-		_factory_queue_p2.append(entry)
-	#print("[HIMARS] Queued successfully! Queue size: ", _get_factory_queue(team_id).size())
-	return true
+	return _production_controller.queue_himars(team_id, factory)
+
+# =============================================================================
+# PUBLIC API - Airfield
+# =============================================================================
 
 func buy_airfield_f35(team_id: String, airfield: Building) -> bool:
 	if airfield == null or not is_instance_valid(airfield):
 		return false
 	if airfield.build_id != "airfield" or airfield.team_id != team_id:
 		return false
-	if not _has_team_credits(team_id, f35_cost):
+	var team := _get_team(team_id)
+	if not team.has_credits(f35_cost):
 		return false
 	if unit_spawn_limit > 0 and _count_units(team_id) >= unit_spawn_limit:
 		return false
@@ -354,8 +203,8 @@ func buy_airfield_f35(team_id: String, airfield: Building) -> bool:
 		var current_aircraft := int(airfield.get_meta("aircraft_active", 0))
 		if current_aircraft >= airfield_aircraft_cap:
 			return false
-	_deduct_team_credits(team_id, f35_cost)
-	var unit := _spawn_unit(team_id, "aircraft", airfield, "f35")
+	team.deduct_credits(f35_cost)
+	var unit := _spawn_controller.spawn_unit(team_id, "aircraft", airfield, "f35")
 	if unit == null:
 		return false
 	_register_airfield_aircraft(airfield)
@@ -367,7 +216,8 @@ func upgrade_airfield_aircraft(team_id: String, airfield: Building) -> bool:
 		return false
 	if airfield.build_id != "airfield" or airfield.team_id != team_id:
 		return false
-	if not _has_team_credits(team_id, aircraft_upgrade_cost):
+	var team := _get_team(team_id)
+	if not team.has_credits(aircraft_upgrade_cost):
 		return false
 	var current_tier := str(airfield.get_meta("aircraft_tier", "f16"))
 	var new_tier := ""
@@ -377,14 +227,13 @@ func upgrade_airfield_aircraft(team_id: String, airfield: Building) -> bool:
 		new_tier = "f22"
 	else:
 		return false
-	_deduct_team_credits(team_id, aircraft_upgrade_cost)
+	team.deduct_credits(aircraft_upgrade_cost)
 	airfield.set_meta("aircraft_tier", new_tier)
 	return true
 
 func get_airfield_aircraft_tier(airfield: Building) -> String:
 	if airfield == null or not is_instance_valid(airfield):
 		return "f16"
-	# Ensure the tier is set (for backwards compatibility with old saves)
 	if not airfield.has_meta("aircraft_tier"):
 		airfield.set_meta("aircraft_tier", "f16")
 	return str(airfield.get_meta("aircraft_tier", "f16"))
@@ -394,7 +243,6 @@ func cycle_airfield_production_type(team_id: String, airfield: Building) -> bool
 		return false
 	if airfield.build_id != "airfield" or airfield.team_id != team_id:
 		return false
-	# Toggle between "fighter" and "uav"
 	if airfield.aircraft_production_type == "fighter":
 		airfield.aircraft_production_type = "uav"
 	else:
@@ -402,25 +250,46 @@ func cycle_airfield_production_type(team_id: String, airfield: Building) -> bool
 	print("[Airfield] Production type changed to: ", airfield.aircraft_production_type)
 	return true
 
+func spawn_aircraft(team_id: String, airfield: Building = null, aircraft_type: String = "") -> bool:
+	var target_airfield := airfield if airfield != null else _get_airfield_for_spawn(team_id)
+	if target_airfield == null:
+		return false
+	var type_to_spawn := aircraft_type if aircraft_type != "" else (
+		"uav" if target_airfield.aircraft_production_type == "uav" else get_airfield_aircraft_tier(target_airfield)
+	)
+	var slot_map_value: Variant = target_airfield.get_meta("aircraft_landing_slots", {})
+	var slot_map: Dictionary = slot_map_value if slot_map_value is Dictionary else {}
+	var assigned_slot := -1
+	for i in range(4):
+		if not slot_map.has(i):
+			assigned_slot = i
+			break
+	if assigned_slot >= 0:
+		target_airfield.set_meta("_spawn_slot_temp", assigned_slot)
+		target_airfield.set_meta("_spawn_slot_reserved", true)
+	var unit := _spawn_controller.spawn_unit(team_id, "aircraft", target_airfield, type_to_spawn)
+	if unit != null and target_airfield != null and assigned_slot >= 0:
+		slot_map[assigned_slot] = unit.get_instance_id()
+		target_airfield.set_meta("aircraft_landing_slots", slot_map)
+		target_airfield.remove_meta("_spawn_slot_temp")
+		target_airfield.remove_meta("_spawn_slot_reserved")
+	return unit != null
+
+# =============================================================================
+# PUBLIC API - Credits & Resources
+# =============================================================================
+
 func deposit_credits(team_id: String, amount: int) -> void:
 	if amount <= 0:
 		return
 	var bonus := supply_bonus if supply_bonus > 0 else 0
 	var total := amount + bonus
-	if team_id == "p1":
-		GameState.p1_credits += total
-		_income_accum_p1 += total
-	else:
-		GameState.p2_credits += total
-		_income_accum_p2 += total
+	_get_team(team_id).add_income(total)
 
 func debug_add_credits(team_id: String, amount: int) -> void:
 	if amount == 0:
 		return
-	if team_id == "p1":
-		GameState.p1_credits += amount
-	else:
-		GameState.p2_credits += amount
+	_get_team(team_id).add_credits(amount)
 
 func debug_spawn_unit(team_id: String, unit_kind: String, count: int = 1, unit_type_id: String = "") -> int:
 	if count <= 0:
@@ -431,21 +300,20 @@ func debug_spawn_unit(team_id: String, unit_kind: String, count: int = 1, unit_t
 	for _i in range(count):
 		if unit_spawn_limit > 0 and _count_units(team_id) >= unit_spawn_limit:
 			break
-		var unit := _spawn_unit(team_id, unit_kind, null, unit_type_id)
+		var unit := _spawn_controller.spawn_unit(team_id, unit_kind, null, unit_type_id)
 		if unit == null:
 			break
 		spawned += 1
 	return spawned
 
 func debug_clear_units() -> void:
-	var groups := ["units", "collectors", "missiles"]
-	for group_name in groups:
+	for group_name in ["units", "collectors", "missiles"]:
 		for node in get_tree().get_nodes_in_group(group_name):
 			if node != null and is_instance_valid(node):
 				node.queue_free()
 
 func request_resource_node(team_id: String) -> Dictionary:
-	var base := _start_p1 if team_id == "p1" else _start_p2
+	var team := _get_team(team_id)
 	var best_index := -1
 	var best_dist := INF
 	for i in range(_resource_nodes.size()):
@@ -454,7 +322,7 @@ func request_resource_node(team_id: String) -> Dictionary:
 		if remaining <= 0.0:
 			continue
 		var pos := node.get("pos", Vector2.ZERO) as Vector2
-		var dist := base.distance_squared_to(pos)
+		var dist := team.start_pos.distance_squared_to(pos)
 		if dist < best_dist:
 			best_dist = dist
 			best_index = i
@@ -477,223 +345,46 @@ func harvest_resource(index: int, amount: float) -> float:
 	_resource_nodes[index] = node
 	_supply_remaining = maxf(0.0, _supply_remaining - taken)
 	GameState.total_supply_remaining = _supply_remaining
-	queue_redraw()
 	return taken
 
-func _spawn_hqs() -> void:
-	_hq_p1 = HQ.new()
-	_hq_p1.team_id = "p1"
-	_hq_p1.visual_scene_path = _get_hq_visual_path()
-	_hq_p1.visual_base_size = Vector2(140, 140)
-	_hq_p1.position = _start_p1
-	_hq_p1.size = hq_size
-	_hq_p1.max_hp = hq_hp
-	_hq_p1.fill_color = p1_hq_color
-	_structures.add_child(_hq_p1)
+# =============================================================================
+# PUBLIC API - Type Options
+# =============================================================================
 
-	_hq_p2 = HQ.new()
-	_hq_p2.team_id = "p2"
-	_hq_p2.visual_scene_path = _get_hq_visual_path()
-	_hq_p2.visual_base_size = Vector2(140, 140)
-	_hq_p2.position = _start_p2
-	_hq_p2.size = hq_size
-	_hq_p2.max_hp = hq_hp
-	_hq_p2.fill_color = p2_hq_color
-	_structures.add_child(_hq_p2)
+func get_infantry_type_options() -> Array:
+	return UnitDefinitions.get_infantry_type_options()
 
-func _spawn_starting_buildings() -> void:
-	for i in range(starting_p1_barracks):
-		_spawn_building("p1", "barracks", _start_p1 + Vector2(160, -100 + i * 100))
-	for i in range(starting_p2_barracks):
-		_spawn_building("p2", "barracks", _start_p2 + Vector2(-160, -100 + i * 100))
-	for i in range(starting_p1_factory):
-		_spawn_building("p1", "factory", _start_p1 + Vector2(260, -120 + i * 120))
-	for i in range(starting_p2_factory):
-		_spawn_building("p2", "factory", _start_p2 + Vector2(-260, -120 + i * 120))
-	for i in range(starting_p1_airfield):
-		_spawn_building("p1", "airfield", _start_p1 + Vector2(340, -80 + i * 140))
-	for i in range(starting_p2_airfield):
-		_spawn_building("p2", "airfield", _start_p2 + Vector2(-340, -80 + i * 140))
-	for i in range(starting_p1_supply):
-		_spawn_building("p1", "supply", _start_p1 + Vector2(120, 140 + i * 90))
-	for i in range(starting_p2_supply):
-		_spawn_building("p2", "supply", _start_p2 + Vector2(-120, 140 + i * 90))
+func get_vehicle_type_options() -> Array:
+	return UnitDefinitions.get_vehicle_type_options()
 
-func _spawn_building(team_id: String, build_id: String, pos: Vector2) -> void:
-	var building := Building.new()
-	building.team_id = team_id
-	building.build_id = build_id
-	building.visual_scene_path = _get_building_visual_path(build_id)
-	building.visual_base_size = _get_building_visual_base_size(build_id)
-	if build_id == "barracks":
-		building.size = Vector2(90, 90)
-		building.fill_color = p1_hq_color if team_id == "p1" else p2_hq_color
-		building.production_type = "mixed"
-		building.wait_mode = false
-	elif build_id == "factory":
-		building.size = Vector2(140, 110)
-		building.fill_color = Color(0.6, 0.45, 0.2, 1.0)
-		building.vehicle_production_type = "mixed"
-	elif build_id == "airfield":
-		building.size = Vector2(432, 288)
-		building.fill_color = Color(0.28, 0.38, 0.55, 1.0)
-		building.set_meta("aircraft_tier", "f16")
-		building.set_meta("aircraft_active", 0)
-		building.set_meta("aircraft_landing", 0)
-		building.aircraft_production_type = "fighter"  # Default to fighters
-	elif build_id == "supply":
-		building.size = Vector2(100, 80)
-		building.fill_color = Color(0.7, 0.6, 0.2, 1.0)
-	elif build_id == "command_center":
-		building.size = Vector2(130, 110)
-		building.fill_color = Color(0.35, 0.35, 0.5, 1.0)
-	elif build_id.begins_with("defense"):
-		building.size = Vector2(70, 70)
-		building.fill_color = _get_defense_color(build_id)
-		var turret := _spawn_defense_turret(team_id, pos, build_id)
-		building.set_meta("linked_turret", turret)
-	else:
-		building.size = Vector2(80, 80)
-		building.fill_color = Color(0.2, 0.6, 0.35, 1.0)
-	building.max_hp = _get_building_hp(build_id)
-	building.position = pos
-	_structures.add_child(building)
-	_increment_building_count(team_id, build_id)
+# =============================================================================
+# PRODUCTION SIGNAL HANDLERS
+# =============================================================================
 
-func _update_infantry(delta: float) -> void:
-	if GameState.winner != "":
+func _on_infantry_ready(team: TeamState) -> void:
+	if unit_spawn_limit > 0 and _count_units(team.team_id) >= unit_spawn_limit:
 		return
-	_infantry_pool_p1 = minf(_infantry_pool_p1 + GameState.p1_infantry_prod * delta, max_infantry_pool)
-	_infantry_pool_p2 = minf(_infantry_pool_p2 + GameState.p2_infantry_prod * delta, max_infantry_pool)
-	_infantry_pool_p1 = _spawn_from_pool("p1", _infantry_pool_p1)
-	_infantry_pool_p2 = _spawn_from_pool("p2", _infantry_pool_p2)
-	GameState.p1_infantry_pool = _infantry_pool_p1
-	GameState.p2_infantry_pool = _infantry_pool_p2
-	GameState.p1_infantry_eta = _pool_eta(GameState.p1_infantry_prod, _infantry_pool_p1)
-	GameState.p2_infantry_eta = _pool_eta(GameState.p2_infantry_prod, _infantry_pool_p2)
-
-func _update_factory_queue(delta: float) -> void:
-	if GameState.winner != "":
-		return
-	if _factory_queue_p1.is_empty():
-		_vehicle_progress_p1 = 0.0
-	else:
-		_vehicle_progress_p1 += GameState.p1_vehicle_prod * delta
-		_vehicle_progress_p1 = _spawn_from_factory_queue("p1", _vehicle_progress_p1)
-	if _factory_queue_p2.is_empty():
-		_vehicle_progress_p2 = 0.0
-	else:
-		_vehicle_progress_p2 += GameState.p2_vehicle_prod * delta
-		_vehicle_progress_p2 = _spawn_from_factory_queue("p2", _vehicle_progress_p2)
-
-func _update_aircraft(delta: float) -> void:
-	if GameState.winner != "":
-		return
-	_aircraft_pool_p1 = minf(_aircraft_pool_p1 + GameState.p1_aircraft_prod * delta, max_aircraft_pool)
-	_aircraft_pool_p2 = minf(_aircraft_pool_p2 + GameState.p2_aircraft_prod * delta, max_aircraft_pool)
-	_aircraft_pool_p1 = _spawn_from_aircraft_pool("p1", _aircraft_pool_p1)
-	_aircraft_pool_p2 = _spawn_from_aircraft_pool("p2", _aircraft_pool_p2)
-	GameState.p1_aircraft_pool = _aircraft_pool_p1
-	GameState.p2_aircraft_pool = _aircraft_pool_p2
-	GameState.p1_aircraft_eta = _pool_eta(GameState.p1_aircraft_prod, _aircraft_pool_p1)
-	GameState.p2_aircraft_eta = _pool_eta(GameState.p2_aircraft_prod, _aircraft_pool_p2)
-
-func _update_ai_queue(delta: float) -> void:
-	_ai_queue_timer -= delta
-	if _ai_queue_timer > 0.0:
-		return
-	_ai_queue_timer = ai_queue_interval
-	if GameState.p2_factory <= 0:
-		return
-	if _factory_queue_p2.size() >= mini(3, factory_queue_max):
-		return
-	queue_vehicle("p2", "mixed")
-
-func _spawn_from_pool(team_id: String, pool: float) -> float:
-	if pool < 1.0:
-		return pool
-	if not _hq_alive(_hq_p1) and team_id == "p1":
-		return 0.0
-	if not _hq_alive(_hq_p2) and team_id == "p2":
-		return 0.0
-	while pool >= 1.0:
-		if unit_spawn_limit > 0 and _count_units(team_id) >= unit_spawn_limit:
-			break
-		if not _has_team_credits(team_id, infantry_unit_cost):
-			break
-		if not _spawn_infantry(team_id):
-			break
-		_deduct_team_credits(team_id, infantry_unit_cost)
-		pool -= 1.0
-	return pool
-
-func _spawn_from_aircraft_pool(team_id: String, pool: float) -> float:
-	if pool < 1.0:
-		return pool
-	if not _hq_alive(_hq_p1) and team_id == "p1":
-		return 0.0
-	if not _hq_alive(_hq_p2) and team_id == "p2":
-		return 0.0
-	while pool >= 1.0:
-		if unit_spawn_limit > 0 and _count_units(team_id) >= unit_spawn_limit:
-			break
-		if not _has_team_credits(team_id, aircraft_unit_cost):
-			break
-		if not _spawn_aircraft(team_id):
-			break
-		_deduct_team_credits(team_id, aircraft_unit_cost)
-		pool -= 1.0
-	return pool
-
-func _spawn_infantry(team_id: String) -> bool:
-	var barracks := _get_barracks_for_spawn(team_id)
+	var barracks := _get_barracks_for_spawn(team.team_id)
 	if barracks == null:
-		return false
-	_spawn_unit(team_id, "infantry", barracks)
-	return true
+		return
+	_spawn_controller.spawn_unit(team.team_id, "infantry", barracks)
 
-func spawn_aircraft(team_id: String, airfield: Building = null, aircraft_type: String = "") -> bool:
-	"""Spawn a specific aircraft type immediately (for direct purchase)"""
-	var target_airfield := airfield if airfield != null else _get_airfield_for_spawn(team_id)
-	if target_airfield == null:
-		return false
+func _on_vehicle_ready(team: TeamState, entry: Dictionary) -> void:
+	if unit_spawn_limit > 0 and _count_units(team.team_id) >= unit_spawn_limit:
+		return
+	var vehicle_type := str(entry.get("type", "mixed"))
+	var factory: Building = null
+	var candidate = entry.get("factory")
+	if candidate is Building and is_instance_valid(candidate):
+		factory = candidate
+	_spawn_controller.spawn_unit(team.team_id, "vehicle", factory, vehicle_type)
 
-	# Use specified type or determine from airfield settings
-	var type_to_spawn := aircraft_type if aircraft_type != "" else (
-		"uav" if target_airfield.aircraft_production_type == "uav" else get_airfield_aircraft_tier(target_airfield)
-	)
-
-	# Pre-find an available parking slot
-	var slot_map_value: Variant = target_airfield.get_meta("aircraft_landing_slots", {})
-	var slot_map: Dictionary = slot_map_value if slot_map_value is Dictionary else {}
-	var assigned_slot := -1
-	for i in range(4):
-		if not slot_map.has(i):
-			assigned_slot = i
-			break
-
-	# Store the slot temporarily
-	if assigned_slot >= 0:
-		target_airfield.set_meta("_spawn_slot_temp", assigned_slot)
-		target_airfield.set_meta("_spawn_slot_reserved", true)
-
-	var unit := _spawn_unit(team_id, "aircraft", target_airfield, type_to_spawn)
-
-	# Reserve the slot for this unit
-	if unit != null and target_airfield != null and assigned_slot >= 0:
-		slot_map[assigned_slot] = unit.get_instance_id()
-		target_airfield.set_meta("aircraft_landing_slots", slot_map)
-		target_airfield.remove_meta("_spawn_slot_temp")
-		target_airfield.remove_meta("_spawn_slot_reserved")
-
-	return unit != null
-
-func _spawn_aircraft(team_id: String) -> bool:
-	var airfield := _get_airfield_for_spawn(team_id)
+func _on_aircraft_ready(team: TeamState) -> void:
+	if unit_spawn_limit > 0 and _count_units(team.team_id) >= unit_spawn_limit:
+		return
+	var airfield := _get_airfield_for_spawn(team.team_id)
 	if airfield == null:
-		return false
-
-	# Pre-find an available parking slot before spawning
+		return
 	var slot_map_value: Variant = airfield.get_meta("aircraft_landing_slots", {})
 	var slot_map: Dictionary = slot_map_value if slot_map_value is Dictionary else {}
 	var assigned_slot := -1
@@ -701,305 +392,53 @@ func _spawn_aircraft(team_id: String) -> bool:
 		if not slot_map.has(i):
 			assigned_slot = i
 			break
-
-	# Store the slot temporarily so _spawn_at_airfield and the unit can use it
 	if assigned_slot >= 0:
 		airfield.set_meta("_spawn_slot_temp", assigned_slot)
 		airfield.set_meta("_spawn_slot_reserved", true)
-
-	# Check if airfield is set to produce UAVs or fighters
 	var aircraft_type := "uav" if airfield.aircraft_production_type == "uav" else get_airfield_aircraft_tier(airfield)
-	var unit := _spawn_unit(team_id, "aircraft", airfield, aircraft_type)
-
-	# Reserve the slot for this unit (after unit is added to tree)
+	var unit := _spawn_controller.spawn_unit(team.team_id, "aircraft", airfield, aircraft_type)
 	if unit != null and airfield != null and assigned_slot >= 0:
 		slot_map[assigned_slot] = unit.get_instance_id()
 		airfield.set_meta("aircraft_landing_slots", slot_map)
 		airfield.remove_meta("_spawn_slot_temp")
 		airfield.remove_meta("_spawn_slot_reserved")
-
 	_register_airfield_aircraft(airfield)
-	return true
 
-func _spawn_from_factory_queue(team_id: String, progress: float) -> float:
-	var queue := _get_factory_queue(team_id)
-	if queue.is_empty():
-		return 0.0
-	while progress >= 1.0 and not queue.is_empty():
-		if unit_spawn_limit > 0 and _count_units(team_id) >= unit_spawn_limit:
-			break
-		var entry = queue[0]
-		var vehicle_type := "mixed"
-		var factory: Building = null
-		if typeof(entry) == TYPE_DICTIONARY:
-			vehicle_type = str(entry.get("type", "mixed"))
-			var candidate = entry.get("factory")
-			if candidate is Building and is_instance_valid(candidate):
-				factory = candidate
-		elif typeof(entry) == TYPE_STRING:
-			vehicle_type = str(entry)
-		_spawn_unit(team_id, "vehicle", factory, vehicle_type)
-		queue.remove_at(0)
-		progress -= 1.0
-	_set_factory_queue(team_id, queue)
-	return progress
+# =============================================================================
+# SPAWNING
+# =============================================================================
 
-func _pool_eta(rate: float, pool: float) -> float:
-	if rate <= 0.0:
-		return -1.0
-	if pool >= 1.0:
-		return 0.0
-	return maxf(0.0, (1.0 - pool) / rate)
+func _spawn_hqs() -> void:
+	_spawn_controller.spawn_hq(_p1)
+	_spawn_controller.spawn_hq(_p2)
 
-func _spawn_unit(team_id: String, unit_kind: String, source_building: Building = null, unit_type_id: String = "") -> Unit:
-	var unit := Unit.new()
-	unit.team_id = team_id
-	unit.home_pos = _start_p1 if team_id == "p1" else _start_p2
-	if unit_kind == "vehicle":
-		var factory := source_building
-		var production_type := unit_type_id
-		if production_type == "" and factory != null and is_instance_valid(factory):
-			production_type = factory.vehicle_production_type
-		var type_id := _resolve_vehicle_type(production_type)
-		print("[SPAWN] Spawning vehicle: production_type='", production_type, "' resolved_type='", type_id, "'")
-		var stats := _get_vehicle_def(type_id)
-		var range_role := str(stats.get("range_role", "short"))
-		var range_mult := _range_multiplier(range_role, vehicle_long_multiplier, vehicle_mid_multiplier)
-		var attack_range := vehicle_attack_range * range_mult
-		unit.unit_kind = "vehicle"
-		unit.unit_type = type_id
-		unit.range_role = range_role
-		unit.range_multiplier = range_mult
-		unit.prefers_vehicle = bool(stats.get("prefers_vehicle", false))
-		unit.prefers_infantry = bool(stats.get("prefers_infantry", false))
-		unit.damage_vs_infantry = float(stats.get("damage_vs_infantry", 1.0))
-		unit.damage_vs_vehicle = float(stats.get("damage_vs_vehicle", 1.0))
-		unit.damage_vs_structure = float(stats.get("damage_vs_structure", 1.0))
-		unit.speed = float(stats.get("speed", vehicle_speed))
-		unit.max_hp = float(stats.get("max_hp", vehicle_hp))
-		unit.attack_damage = float(stats.get("damage", vehicle_damage))
-		unit.attack_range = attack_range
-		unit.attack_cooldown = float(stats.get("cooldown", vehicle_attack_cooldown))
-		unit.body_radius = float(stats.get("body_radius", vehicle_body_radius))
-		unit.color = p1_vehicle_color if team_id == "p1" else p2_vehicle_color
-		unit.aggro_range = maxf(260.0, attack_range * 1.05)
-		unit.chase_leash = maxf(360.0, attack_range * 1.1)
-		unit.structure_aggro_range = maxf(320.0, attack_range * 1.1)
-		unit.shot_width = float(stats.get("shot_width", 3.0))
-		unit.shot_lifetime = float(stats.get("shot_lifetime", 0.14))
-		var shot_color = stats.get("shot_color", Color(1.0, 0.8, 0.5, 0.8))
-		if shot_color is Color:
-			unit.shot_color = shot_color
-		unit.vehicle_turn_rate = float(stats.get("turn_rate", 3.0))  # Default 3.0 rad/s for smooth turning
-		var spawn_pos := _spawn_at_factory(team_id, factory)
-		unit.position = spawn_pos
+func _spawn_starting_buildings() -> void:
+	var offsets := {
+		"barracks": {"p1": Vector2(160, -100), "p2": Vector2(-160, -100), "spacing": 100},
+		"factory": {"p1": Vector2(260, -120), "p2": Vector2(-260, -120), "spacing": 120},
+		"airfield": {"p1": Vector2(340, -80), "p2": Vector2(-340, -80), "spacing": 140},
+		"supply": {"p1": Vector2(120, 140), "p2": Vector2(-120, 140), "spacing": 90},
+	}
+	var starting_counts := {
+		"barracks": {"p1": 0, "p2": 1},
+		"factory": {"p1": 0, "p2": 1},
+		"airfield": {"p1": 0, "p2": 0},
+		"supply": {"p1": 0, "p2": 1},
+	}
+	for build_id in starting_counts:
+		var counts: Dictionary = starting_counts[build_id]
+		var offs: Dictionary = offsets[build_id]
+		for i in range(counts["p1"]):
+			_spawn_controller.spawn_building("p1", build_id, _p1.start_pos + offs["p1"] + Vector2(0, i * offs["spacing"]))
+		for i in range(counts["p2"]):
+			_spawn_controller.spawn_building("p2", build_id, _p2.start_pos + offs["p2"] + Vector2(0, i * offs["spacing"]))
 
-		# Check if vehicle def has custom visual path (e.g., HIMARS)
-		var custom_visual_path = stats.get("visual_scene_path", "")
-		if custom_visual_path != "":
-			unit.visual_scene_path = str(custom_visual_path)
-			unit.visual_base_radius = float(stats.get("visual_base_radius", 14.0))
-		else:
-			unit.visual_scene_path = _get_unit_visual_path("vehicle")
-			unit.visual_base_radius = 14.0
-
-		# Set HIMARS-specific properties
-		var is_himars_unit := bool(stats.get("is_himars", false))
-		if is_himars_unit:
-			unit.is_himars = true
-			unit.vision_radius = float(stats.get("vision_radius", GameBalance.HIMARS_VISION_RADIUS))
-			unit.bombardment_range = float(stats.get("bombardment_range", GameBalance.HIMARS_BOMBARDMENT_RANGE))
-			unit.bombardment_missile_damage = float(stats.get("missile_damage", GameBalance.HIMARS_MISSILE_DAMAGE))
-			unit.bombardment_missile_speed = float(stats.get("missile_speed", GameBalance.HIMARS_MISSILE_SPEED))
-			unit.bombardment_missile_lifetime = float(stats.get("missile_lifetime", GameBalance.HIMARS_MISSILE_LIFETIME))
-			unit.bombardment_missile_splash_radius = float(stats.get("missile_splash_radius", GameBalance.HIMARS_MISSILE_SPLASH_RADIUS))
-			unit.bombardment_missiles_per_salvo = int(stats.get("missiles_per_salvo", GameBalance.HIMARS_MISSILES_PER_SALVO))
-			unit.bombardment_salvo_interval = float(stats.get("salvo_interval", GameBalance.HIMARS_SALVO_INTERVAL))
-			unit.bombardment_reload_time = float(stats.get("reload_time", GameBalance.HIMARS_RELOAD_TIME))
-			#print("[HIMARS] Unit spawned with bombardment properties, visual_path: ", unit.visual_scene_path, " vision_radius: ", unit.vision_radius)
-
-		# HIMARS always drives forward 200 units and stops, never goes to rally point
-		var forward_dir := Vector2(1.0, 0.0) if team_id == "p1" else Vector2(-1.0, 0.0)
-		unit.rally_target = spawn_pos + forward_dir * 200.0
-	elif unit_kind == "aircraft":
-		var airfield := source_building
-		var type_id := _resolve_aircraft_type(unit_type_id)
-		var stats := _get_aircraft_def(type_id)
-		var range_role := str(stats.get("range_role", "long"))
-		var range_mult := float(stats.get("range_multiplier", 1.0))
-		var attack_range := float(stats.get("attack_range", aircraft_attack_range)) * range_mult
-		unit.unit_kind = "aircraft"
-		unit.unit_type = type_id
-		unit.range_role = range_role
-		unit.range_multiplier = range_mult
-		unit.prefers_vehicle = bool(stats.get("prefers_vehicle", true))
-		unit.prefers_infantry = bool(stats.get("prefers_infantry", false))
-		unit.damage_vs_infantry = float(stats.get("damage_vs_infantry", 0.6))
-		unit.damage_vs_vehicle = float(stats.get("damage_vs_vehicle", 1.6))
-		unit.damage_vs_structure = float(stats.get("damage_vs_structure", 1.0))
-		unit.speed = float(stats.get("speed", aircraft_speed))
-		unit.max_hp = float(stats.get("max_hp", aircraft_hp))
-		unit.attack_damage = float(stats.get("damage", aircraft_damage))
-		unit.attack_range = attack_range
-		unit.attack_cooldown = float(stats.get("cooldown", aircraft_attack_cooldown))
-		unit.body_radius = float(stats.get("body_radius", aircraft_body_radius))
-		unit.vision_radius = float(stats.get("vision_radius", aircraft_vision_radius))
-		unit.color = p1_aircraft_color if team_id == "p1" else p2_aircraft_color
-		unit.aggro_range = maxf(320.0, attack_range * 1.1)
-		unit.chase_leash = maxf(420.0, attack_range * 1.2)
-		unit.structure_aggro_range = maxf(360.0, attack_range * 1.15)
-		unit.shot_width = float(stats.get("shot_width", aircraft_shot_width))
-		unit.shot_lifetime = float(stats.get("shot_lifetime", aircraft_shot_lifetime))
-		var shot_color = stats.get("shot_color", Color(1.0, 0.9, 0.8, 0.8))
-		if shot_color is Color:
-			unit.shot_color = shot_color
-		unit.aircraft_gun_capacity = int(stats.get("gun_ammo", aircraft_gun_ammo))
-		unit.aircraft_gun_ammo = unit.aircraft_gun_capacity
-		unit.aircraft_missile_capacity = int(stats.get("missile_ammo", aircraft_missile_ammo))
-		unit.aircraft_missile_ammo = unit.aircraft_missile_capacity
-		unit.aircraft_reload_time = float(stats.get("reload_time", aircraft_reload_time))
-		unit.aircraft_missile_damage = float(stats.get("missile_damage", aircraft_missile_damage))
-		unit.aircraft_missile_speed = float(stats.get("missile_speed", aircraft_missile_speed))
-		unit.aircraft_missile_turn_rate = float(stats.get("missile_turn_rate", aircraft_missile_turn_rate))
-		unit.aircraft_missile_range = float(stats.get("missile_range", aircraft_missile_range))
-		unit.aircraft_missile_cooldown = float(stats.get("missile_cooldown", aircraft_missile_cooldown))
-		unit.aircraft_missile_hit_radius = float(stats.get("missile_hit_radius", aircraft_missile_hit_radius))
-		unit.aircraft_missile_warhead_size = str(stats.get("missile_warhead_size", aircraft_missile_warhead_size))
-		unit.aircraft_missile_splash_radius = float(stats.get("missile_splash_radius", aircraft_missile_splash_radius))
-		unit.aircraft_missile_splash_scale = float(stats.get("missile_splash_scale", aircraft_missile_splash_scale))
-		unit.aircraft_missile_lifetime = float(stats.get("missile_lifetime", aircraft_missile_lifetime))
-		unit.aircraft_landing_cap = airfield_landing_cap
-		var missile_color = stats.get("missile_color", aircraft_missile_color)
-		if missile_color is Color:
-			unit.aircraft_missile_color = missile_color
-		if airfield != null and is_instance_valid(airfield):
-			unit.aircraft_home = airfield
-			unit.aircraft_home_pos = airfield.global_position
-			# Check if this unit is spawning on the runway with a reserved slot
-			if airfield.has_meta("_spawn_slot_reserved"):
-				var slot_id := int(airfield.get_meta("_spawn_slot_temp", -1))
-				print("[Spawn] Airfield has reserved slot: ", slot_id)
-				if slot_id >= 0:
-					unit._aircraft_landing_slot = slot_id
-					unit._aircraft_landing_reserved = true
-					print("[Spawn] Assigned slot ", slot_id, " to aircraft BEFORE _ready")
-		else:
-			unit.aircraft_home = null
-			unit.aircraft_home_pos = unit.home_pos
-		unit.position = _spawn_at_airfield(team_id, airfield)
-		unit.visual_scene_path = _get_unit_visual_path("aircraft", type_id)
-		unit.visual_base_radius = 20.0
-		unit.missile_visual_path = _get_missile_visual_path(type_id, "ground")
-		# Set UAV flag if this is a UAV
-		if stats.get("is_uav", false):
-			unit.is_uav = true
-			unit.aircraft_loiter_radius = float(stats.get("loiter_radius", GameBalance.UAV_LOITER_RADIUS))
-			unit.aircraft_loiter_orbit_speed = float(stats.get("loiter_orbit_speed", GameBalance.UAV_LOITER_ORBIT_SPEED))
-			print("[UAV] Spawned UAV with vision_radius: ", unit.vision_radius, " loiter_radius: ", unit.aircraft_loiter_radius)
-	else:
-		var barracks := source_building
-		var production_type := "mixed"
-		var wait_mode := false
-		var spawn_origin := unit.home_pos
-		if barracks != null and is_instance_valid(barracks):
-			production_type = barracks.production_type
-			wait_mode = barracks.wait_mode
-			spawn_origin = barracks.global_position
-		var type_id := _resolve_infantry_type(production_type)
-		var stats := _get_infantry_def(type_id)
-		var range_role := str(stats.get("range_role", "short"))
-		var range_mult := _range_multiplier(range_role, infantry_long_multiplier, infantry_mid_multiplier)
-		var attack_range := unit_attack_range * range_mult
-		unit.unit_kind = "infantry"
-		unit.unit_type = type_id
-		unit.range_role = range_role
-		unit.range_multiplier = range_mult
-		unit.prefers_vehicle = bool(stats.get("prefers_vehicle", false))
-		unit.prefers_infantry = bool(stats.get("prefers_infantry", false))
-		unit.damage_vs_infantry = float(stats.get("damage_vs_infantry", 1.0))
-		unit.damage_vs_vehicle = float(stats.get("damage_vs_vehicle", 1.0))
-		unit.damage_vs_structure = float(stats.get("damage_vs_structure", 1.0))
-		unit.speed = float(stats.get("speed", unit_speed))
-		unit.max_hp = float(stats.get("max_hp", unit_hp))
-		unit.attack_damage = float(stats.get("damage", unit_damage))
-		unit.attack_range = attack_range
-		unit.attack_cooldown = float(stats.get("cooldown", unit_attack_cooldown))
-		unit.body_radius = unit_body_radius
-		unit.color = p1_unit_color if team_id == "p1" else p2_unit_color
-		unit.aggro_range = maxf(220.0, attack_range * 1.05)
-		unit.chase_leash = maxf(320.0, attack_range * 1.1)
-		unit.structure_aggro_range = maxf(260.0, attack_range * 1.1)
-		unit.shot_width = float(stats.get("shot_width", 2.0))
-		unit.shot_lifetime = float(stats.get("shot_lifetime", 0.12))
-		var shot_color = stats.get("shot_color", Color(1.0, 1.0, 1.0, 0.75))
-		if shot_color is Color:
-			unit.shot_color = shot_color
-		unit.position = _spawn_at_barracks(team_id, barracks)
-		if wait_mode:
-			var wait_pos := _get_wait_point(team_id, spawn_origin)
-			unit.assign_hold(wait_pos, infantry_wait_duration)
-		unit.visual_scene_path = _get_unit_visual_path("infantry")
-		unit.visual_base_radius = 8.0
-	unit.enemy_hq = _hq_p2 if team_id == "p1" else _hq_p1
-	# Set rally target for infantry and aircraft (vehicles set it earlier with custom logic)
-	if unit_kind != "vehicle":
-		unit.rally_target = _rally_p1 if team_id == "p1" else _rally_p2
-	_units.add_child(unit)
-	return unit
-
-func _spawn_at_barracks(team_id: String, barracks: Building = null) -> Vector2:
-	if barracks != null and is_instance_valid(barracks):
-		return _offset_spawn(barracks.global_position)
-	return _spawn_at_building(team_id, "barracks", _start_p1 if team_id == "p1" else _start_p2)
-
-func _spawn_at_factory(team_id: String, factory: Building = null) -> Vector2:
-	if factory != null and is_instance_valid(factory):
-		return _offset_spawn(factory.global_position)
-	return _spawn_at_building(team_id, "factory", _start_p1 if team_id == "p1" else _start_p2)
-
-func _spawn_at_airfield(team_id: String, airfield: Building = null) -> Vector2:
-	if airfield != null and is_instance_valid(airfield):
-		# Spawn aircraft on runway parking spot instead of in the air
-		var runway_dir := Vector2(1.0, 0.0) if team_id == "p1" else Vector2(-1.0, 0.0)
-		var size_value: Variant = airfield.get("size")
-		var size2d: Vector2 = size_value if size_value is Vector2 else Vector2.ZERO
-
-		# Calculate spawn position at the start of the runway (opposite end from touchdown)
-		# Touchdown is at +0.5 * size.x, so spawn at -0.5 * size.x for full runway length
-		var offset_ratio := 0.0  # aircraft_runway_offset_ratio (usually 0)
-		var lateral := Vector2(-runway_dir.y, runway_dir.x).normalized()
-		var runway_offset: Vector2 = lateral * (size2d.y * offset_ratio) if size2d != Vector2.ZERO else Vector2.ZERO
-		var runway_start: Vector2 = airfield.global_position + runway_offset
-		if size2d != Vector2.ZERO:
-			# Spawn at the opposite end of the runway from touchdown
-			runway_start = airfield.global_position - (runway_dir * (size2d.x * 0.5)) + runway_offset
-
-		# Get the pre-assigned slot from temporary metadata
-		var slot_index := int(airfield.get_meta("_spawn_slot_temp", 0))
-
-		# Calculate lateral offset for parking spot
-		var spacing := 32.0  # aircraft_landing_slot_spacing
-		var center_index := 1.5  # (4-1)/2 for 4 slots
-		var offset_amount := (float(slot_index) - center_index) * spacing
-		var lateral_offset := lateral * offset_amount
-
-		# Final parking position at start of runway
-		var parking_pos: Vector2 = runway_start + lateral_offset
-		return parking_pos
-	return _spawn_at_building(team_id, "airfield", _start_p1 if team_id == "p1" else _start_p2)
-
-func _spawn_at_building(team_id: String, build_id: String, fallback: Vector2) -> Vector2:
-	var group_name := "building_%s_%s" % [build_id, team_id]
-	var buildings := get_tree().get_nodes_in_group(group_name)
-	if buildings.is_empty():
-		return _offset_spawn(fallback)
-	var index := _rng.randi_range(0, buildings.size() - 1)
-	var building := buildings[index] as Node2D
-	if building == null:
-		return _offset_spawn(fallback)
-	return _offset_spawn(building.global_position)
+# =============================================================================
+# BUILDING HELPERS
+# =============================================================================
 
 func _get_barracks_for_spawn(team_id: String) -> Building:
+	var team := _get_team(team_id)
 	var group_name := "building_barracks_%s" % team_id
 	var nodes := get_tree().get_nodes_in_group(group_name)
 	var barracks_list: Array[Building] = []
@@ -1009,16 +448,13 @@ func _get_barracks_for_spawn(team_id: String) -> Building:
 			barracks_list.append(barracks)
 	if barracks_list.is_empty():
 		return null
-	var index := _barracks_spawn_index_p1 if team_id == "p1" else _barracks_spawn_index_p2
-	index = index % barracks_list.size()
+	var index := team.barracks_spawn_index % barracks_list.size()
 	var chosen := barracks_list[index]
-	if team_id == "p1":
-		_barracks_spawn_index_p1 = (index + 1) % barracks_list.size()
-	else:
-		_barracks_spawn_index_p2 = (index + 1) % barracks_list.size()
+	team.barracks_spawn_index = (index + 1) % barracks_list.size()
 	return chosen
 
 func _get_airfield_for_spawn(team_id: String) -> Building:
+	var team := _get_team(team_id)
 	var group_name := "building_airfield_%s" % team_id
 	var nodes := get_tree().get_nodes_in_group(group_name)
 	var airfield_list: Array[Building] = []
@@ -1028,7 +464,7 @@ func _get_airfield_for_spawn(team_id: String) -> Building:
 			airfield_list.append(airfield)
 	if airfield_list.is_empty():
 		return null
-	var index := _airfield_spawn_index_p1 if team_id == "p1" else _airfield_spawn_index_p2
+	var index := team.airfield_spawn_index
 	var total := airfield_list.size()
 	index = index % total
 	var chosen: Building = null
@@ -1037,13 +473,8 @@ func _get_airfield_for_spawn(team_id: String) -> Building:
 		var candidate := airfield_list[idx]
 		if _airfield_has_capacity(candidate):
 			chosen = candidate
-			if team_id == "p1":
-				_airfield_spawn_index_p1 = (idx + 1) % total
-			else:
-				_airfield_spawn_index_p2 = (idx + 1) % total
+			team.airfield_spawn_index = (idx + 1) % total
 			break
-	if chosen == null:
-		return null
 	return chosen
 
 func _airfield_has_capacity(airfield: Building) -> bool:
@@ -1060,78 +491,23 @@ func _register_airfield_aircraft(airfield: Building) -> void:
 	var current = int(airfield.get_meta("aircraft_active", 0))
 	airfield.set_meta("aircraft_active", current + 1)
 
-func _get_wait_point(team_id: String, origin: Vector2) -> Vector2:
-	var zone := _p1_build_zone if team_id == "p1" else _p2_build_zone
-	var enemy_pos := _start_p2 if team_id == "p1" else _start_p1
-	if zone == Rect2():
-		var dir := (enemy_pos - origin).normalized()
-		return origin + dir * 120.0
-	var edge_x := zone.position.x + zone.size.x if enemy_pos.x >= origin.x else zone.position.x
-	var pad := maxf(0.0, wait_edge_padding)
-	var inside_x := edge_x - pad if enemy_pos.x >= origin.x else edge_x + pad
-	var min_y := zone.position.y + pad
-	var max_y := zone.position.y + zone.size.y - pad
-	var clamped_y := clampf(origin.y, min_y, max_y)
-	return Vector2(inside_x, clamped_y)
-
-func _offset_spawn(pos: Vector2) -> Vector2:
-	# Spawn at building center with small random offset
-	return pos + Vector2(
-		_rng.randf_range(-unit_spawn_spread, unit_spawn_spread),
-		_rng.randf_range(-unit_spawn_spread, unit_spawn_spread)
-	)
-
-func _count_units(team_id: String) -> int:
-	var group_name := "units_%s" % team_id
-	return get_tree().get_nodes_in_group(group_name).size()
-
-func _update_production() -> void:
-	GameState.p1_infantry_prod = GameState.p1_barracks * barracks_infantry_rate
-	GameState.p2_infantry_prod = GameState.p2_barracks * barracks_infantry_rate
-	GameState.p1_vehicle_prod = GameState.p1_factory * factory_vehicle_rate
-	GameState.p2_vehicle_prod = GameState.p2_factory * factory_vehicle_rate
-	GameState.p1_aircraft_prod = GameState.p1_airfield * airfield_aircraft_rate
-	GameState.p2_aircraft_prod = GameState.p2_airfield * airfield_aircraft_rate
-	GameState.p1_total_prod = GameState.p1_infantry_prod + GameState.p1_vehicle_prod + GameState.p1_aircraft_prod
-	GameState.p2_total_prod = GameState.p2_infantry_prod + GameState.p2_vehicle_prod + GameState.p2_aircraft_prod
-
-func _update_income_rate(delta: float) -> void:
-	_income_timer += delta
-	if _income_timer < 1.0:
-		return
-	var sample_time := _income_timer
-	GameState.p1_income_rate = _income_accum_p1 / sample_time
-	GameState.p2_income_rate = _income_accum_p2 / sample_time
-	_income_accum_p1 = 0.0
-	_income_accum_p2 = 0.0
-	_income_timer = 0.0
+# =============================================================================
+# COLLECTORS
+# =============================================================================
 
 func _sync_collectors(team_id: String) -> void:
-	var desired := _get_supply_count(team_id) * collectors_per_supply
-	var collectors := _collectors_p1 if team_id == "p1" else _collectors_p2
-	while collectors.size() < desired:
-		var collector := Collector.new()
-		collector.team_id = team_id
-		collector.speed = collector_speed
-		collector.carry_capacity = collector_capacity
-		collector.harvest_time = collector_harvest_time
-		collector.color = p1_collector_color if team_id == "p1" else p2_collector_color
-		collector.visual_scene_path = _get_unit_visual_path("collector")
-		collector.visual_base_radius = 10.0
-		var base_pos := _start_p1 if team_id == "p1" else _start_p2
+	var team := _get_team(team_id)
+	var desired := team.get_supply_count() * collectors_per_supply
+	while team.collectors.size() < desired:
 		var supply := _get_supply_for_spawn(team_id)
+		var base_pos := team.start_pos
 		if supply != null and is_instance_valid(supply):
 			base_pos = supply.global_position
-		collector.global_position = _offset_spawn(base_pos)
+		var collector := _spawn_controller.spawn_collector(team, base_pos)
 		collector.configure(self, team_id, base_pos)
-		_units.add_child(collector)
-		collectors.append(collector)
-	if team_id == "p1":
-		_collectors_p1 = collectors
-	else:
-		_collectors_p2 = collectors
 
 func _get_supply_for_spawn(team_id: String) -> Building:
+	var team := _get_team(team_id)
 	var group_name := "building_supply_%s" % team_id
 	var nodes := get_tree().get_nodes_in_group(group_name)
 	var supply_list: Array[Building] = []
@@ -1141,70 +517,61 @@ func _get_supply_for_spawn(team_id: String) -> Building:
 			supply_list.append(supply)
 	if supply_list.is_empty():
 		return null
-	var index := _supply_spawn_index_p1 if team_id == "p1" else _supply_spawn_index_p2
-	index = index % supply_list.size()
+	var index := team.supply_spawn_index % supply_list.size()
 	var chosen := supply_list[index]
-	if team_id == "p1":
-		_supply_spawn_index_p1 = (index + 1) % supply_list.size()
-	else:
-		_supply_spawn_index_p2 = (index + 1) % supply_list.size()
+	team.supply_spawn_index = (index + 1) % supply_list.size()
 	return chosen
 
-func _update_state_counters() -> void:
-	GameState.p1_collectors = _collectors_p1.size()
-	GameState.p2_collectors = _collectors_p2.size()
-	GameState.p1_factory_queue = _factory_queue_p1.size()
-	GameState.p2_factory_queue = _factory_queue_p2.size()
-	GameState.total_supply_remaining = _supply_remaining
+# =============================================================================
+# UPDATE HELPERS
+# =============================================================================
 
 func _update_hq_state() -> void:
-	if _hq_p1 != null and not is_instance_valid(_hq_p1):
-		_hq_p1 = null
-	if _hq_p2 != null and not is_instance_valid(_hq_p2):
-		_hq_p2 = null
-	var p1_alive := _hq_alive(_hq_p1)
-	var p2_alive := _hq_alive(_hq_p2)
-	GameState.p1_hq_hp = int(_hq_p1.hp) if p1_alive else 0
-	GameState.p2_hq_hp = int(_hq_p2.hp) if p2_alive else 0
-	if not p1_alive and GameState.winner == "":
+	if _p1.hq != null and not is_instance_valid(_p1.hq):
+		_p1.hq = null
+	if _p2.hq != null and not is_instance_valid(_p2.hq):
+		_p2.hq = null
+	GameState.p1_hq_hp = int(_p1.hq.hp) if _p1.is_hq_alive() else 0
+	GameState.p2_hq_hp = int(_p2.hq.hp) if _p2.is_hq_alive() else 0
+	if not _p1.is_hq_alive() and GameState.winner == "":
 		GameState.winner = "P2"
-	elif not p2_alive and GameState.winner == "":
+	elif not _p2.is_hq_alive() and GameState.winner == "":
 		GameState.winner = "P1"
 
-func _hq_alive(hq) -> bool:
-	return hq != null and is_instance_valid(hq) and hq.hp > 0.0
+func _update_defenses(delta: float) -> void:
+	for turret in get_tree().get_nodes_in_group("defense_turret"):
+		if turret is DefenseTurret:
+			turret.update_targeting(delta)
 
-func _has_team_credits(team_id: String, cost: int) -> bool:
-	return GameState.p1_credits >= cost if team_id == "p1" else GameState.p2_credits >= cost
+func _update_ai_queue(delta: float) -> void:
+	_ai_queue_timer -= delta
+	if _ai_queue_timer > 0.0:
+		return
+	_ai_queue_timer = ai_queue_interval
+	if GameState.p2_factory <= 0:
+		return
+	if _production_controller.get_factory_queue_size("p2") >= mini(3, 6):
+		return
+	queue_vehicle("p2", "mixed")
 
-func _deduct_team_credits(team_id: String, cost: int) -> void:
-	if team_id == "p1":
-		GameState.p1_credits = maxi(0, GameState.p1_credits - cost)
-	else:
-		GameState.p2_credits = maxi(0, GameState.p2_credits - cost)
+func _update_state_counters() -> void:
+	_p1.sync_to_game_state()
+	_p2.sync_to_game_state()
+	GameState.total_supply_remaining = _supply_remaining
 
-func _get_factory_queue(team_id: String) -> Array[Dictionary]:
-	return _factory_queue_p1 if team_id == "p1" else _factory_queue_p2
+func _count_units(team_id: String) -> int:
+	return get_tree().get_nodes_in_group("units_%s" % team_id).size()
 
-func _set_factory_queue(team_id: String, queue: Array[Dictionary]) -> void:
-	if team_id == "p1":
-		_factory_queue_p1 = queue
-	else:
-		_factory_queue_p2 = queue
-
-func _get_factory_count(team_id: String) -> int:
-	return GameState.p1_factory if team_id == "p1" else GameState.p2_factory
-
-func _get_supply_count(team_id: String) -> int:
-	return GameState.p1_supply if team_id == "p1" else GameState.p2_supply
+# =============================================================================
+# RALLY POINTS
+# =============================================================================
 
 func _set_rally_point(team_id: String, pos: Vector2) -> void:
-	if team_id == "p1":
-		_rally_p1 = pos
-	else:
-		_rally_p2 = pos
-	queue_redraw()
-	_update_rally_line()  # Update 3D rally line when rally point changes
+	_get_team(team_id).rally_pos = pos
+	_update_rally_line()
+
+func _get_team(team_id: String) -> TeamState:
+	return _p1 if team_id == "p1" else _p2
 
 func _get_world_mouse_pos() -> Vector2:
 	var input := _world_input
@@ -1220,6 +587,10 @@ func _find_world_input() -> Node:
 	if nodes.is_empty():
 		return null
 	return nodes[0] as Node
+
+# =============================================================================
+# MAP LOADING
+# =============================================================================
 
 func _load_map_data(path: String) -> void:
 	var file := FileAccess.open(path, FileAccess.READ)
@@ -1245,30 +616,25 @@ func _load_start_positions(data: Dictionary) -> void:
 		var id := str(start.get("id", ""))
 		var pos := Vector2(float(start.get("x", 0.0)), float(start.get("y", 0.0)))
 		if id == "p1":
-			_start_p1 = pos
+			_p1.start_pos = pos
 		elif id == "p2":
-			_start_p2 = pos
+			_p2.start_pos = pos
 
 func _load_build_zones(data: Dictionary) -> void:
-	_p1_build_zone = Rect2()
-	_p2_build_zone = Rect2()
 	var zones: Array = data.get("build_zones", [])
 	for zone in zones:
 		if typeof(zone) != TYPE_DICTIONARY:
 			continue
 		var zone_id := str(zone.get("id", ""))
-		if zone_id != "p1" and zone_id != "p2":
-			continue
+		var rect := Rect2(
+			Vector2(float(zone.get("x", 0.0)), float(zone.get("y", 0.0))),
+			Vector2(float(zone.get("width", 0.0)), float(zone.get("height", 0.0)))
+		)
 		if zone_id == "p1":
-			_p1_build_zone = Rect2(
-				Vector2(float(zone.get("x", 0.0)), float(zone.get("y", 0.0))),
-				Vector2(float(zone.get("width", 0.0)), float(zone.get("height", 0.0)))
-			)
-		else:
-			_p2_build_zone = Rect2(
-				Vector2(float(zone.get("x", 0.0)), float(zone.get("y", 0.0))),
-				Vector2(float(zone.get("width", 0.0)), float(zone.get("height", 0.0)))
-			)
+			_p1.build_zone = rect
+			_visibility_controller.set_build_zone("p1", rect)
+		elif zone_id == "p2":
+			_p2.build_zone = rect
 
 func _load_rally_targets(data: Dictionary) -> void:
 	var rally_targets: Array = data.get("rally_targets", [])
@@ -1278,14 +644,13 @@ func _load_rally_targets(data: Dictionary) -> void:
 		var id := str(target.get("id", ""))
 		var pos := Vector2(float(target.get("x", 0.0)), float(target.get("y", 0.0)))
 		if id == "p1_push":
-			_rally_p1 = pos
+			_p1.rally_pos = pos
 		elif id == "p2_push":
-			_rally_p2 = pos
-	# Set default rally points for normal vehicles to attack enemy HQ
-	if _rally_p1 == Vector2.ZERO:
-		_rally_p1 = _start_p2
-	if _rally_p2 == Vector2.ZERO:
-		_rally_p2 = _start_p1
+			_p2.rally_pos = pos
+	if _p1.rally_pos == Vector2.ZERO:
+		_p1.rally_pos = _p2.start_pos
+	if _p2.rally_pos == Vector2.ZERO:
+		_p2.rally_pos = _p1.start_pos
 
 func _load_resource_nodes(data: Dictionary) -> void:
 	_resource_nodes.clear()
@@ -1304,860 +669,65 @@ func _load_resource_nodes(data: Dictionary) -> void:
 		_supply_remaining += amount
 	GameState.total_supply_remaining = _supply_remaining
 
-func _setup_base_vision() -> void:
-	if not base_vision_enabled:
-		return
-	if _p1_build_zone == Rect2():
-		return
-	var center := _p1_build_zone.position + (_p1_build_zone.size * 0.5)
-	var radius := (_p1_build_zone.size.length() * 0.5) + base_vision_padding
-	if _base_vision != null and is_instance_valid(_base_vision):
-		_base_vision.queue_free()
-	_base_vision = BaseVision.new()
-	_base_vision.vision_radius = radius
-	_base_vision.light_energy = base_vision_energy
-	_base_vision.position = center
-	add_child(_base_vision)
+# =============================================================================
+# RALLY LINE 3D
+# =============================================================================
 
-func _draw_resource_nodes() -> void:
-	for node in _resource_nodes:
-		var pos := node.get("pos", Vector2.ZERO) as Vector2
-		var remaining := float(node.get("amount", 0.0))
-		var initial := float(node.get("initial", remaining))
-		if initial <= 0.0:
-			continue
-		var ratio := clampf(remaining / initial, 0.0, 1.0)
-		var radius := lerpf(resource_min_radius, resource_max_radius, ratio)
-		var color := resource_full_color.lerp(resource_empty_color, 1.0 - ratio)
-		var poly := _regular_polygon_points(pos, radius, 6, TAU / 12.0)
-		draw_colored_polygon(poly, color)
-		var outline := poly.duplicate()
-		if outline.size() > 0:
-			outline.append(poly[0])
-			draw_polyline(outline, Color(0.1, 0.1, 0.1, 0.6), 2.0)
+func _setup_rally_line_3d() -> void:
+	_rally_line_3d = Node3D.new()
+	add_child(_rally_line_3d)
+	_rally_line_3d.visible = false
 
-func _regular_polygon_points(center: Vector2, radius: float, sides: int, rotation: float) -> PackedVector2Array:
-	var points := PackedVector2Array()
-	if sides < 3 or radius <= 0.0:
-		return points
-	for i in range(sides):
-		var ang := rotation + TAU * float(i) / float(sides)
-		points.append(center + Vector2(cos(ang), sin(ang)) * radius)
-	return points
+	_rally_line_mesh = MeshInstance3D.new()
+	_rally_line_3d.add_child(_rally_line_mesh)
 
-func _increment_building_count(team_id: String, build_id: String) -> void:
-	if team_id == "p1":
-		GameState.p1_building_count += 1
-		match build_id:
-			"barracks":
-				GameState.p1_barracks += 1
-			"factory":
-				GameState.p1_factory += 1
-			"airfield":
-				GameState.p1_airfield += 1
-			"supply":
-				GameState.p1_supply += 1
-			"power":
-				GameState.p1_power += 1
-			"command_center":
-				GameState.p1_command_center += 1
-			_:
-				if build_id.begins_with("defense"):
-					GameState.p1_defense += 1
-	else:
-		GameState.p2_building_count += 1
-		match build_id:
-			"barracks":
-				GameState.p2_barracks += 1
-			"factory":
-				GameState.p2_factory += 1
-			"airfield":
-				GameState.p2_airfield += 1
-			"supply":
-				GameState.p2_supply += 1
-			"power":
-				GameState.p2_power += 1
-			"command_center":
-				GameState.p2_command_center += 1
-			_:
-				if build_id.begins_with("defense"):
-					GameState.p2_defense += 1
+	var material := StandardMaterial3D.new()
+	material.albedo_color = Color(1.0, 1.0, 1.0, 0.9)
+	material.emission_enabled = true
+	material.emission = Color(1.0, 1.0, 1.0)
+	material.emission_energy_multiplier = 1.5
+	material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	material.cull_mode = BaseMaterial3D.CULL_DISABLED
+	_rally_line_mesh.material_override = material
 
-func _spawn_defense_turret(team_id: String, pos: Vector2, build_id: String = "defense") -> DefenseTurret:
-	var turret := DefenseTurret.new()
-	turret.team_id = team_id
-	var profile := _get_defense_profile(build_id)
-	var base_range := float(profile.get("range", defense_range)) * defense_range_multiplier
-	turret.attack_range = _compute_defense_range(team_id, pos, base_range)
-	turret.damage = float(profile.get("damage", defense_damage))
-	turret.fire_rate = float(profile.get("fire_rate", defense_fire_rate)) * defense_fire_rate_multiplier
-	turret.missile_speed = float(profile.get("missile_speed", 260.0))
-	turret.missile_turn_rate = float(profile.get("missile_turn_rate", 10.0))
-	var missile_color = profile.get("missile_color")
-	if missile_color is Color:
-		turret.missile_color = missile_color
-	turret.missile_warhead_size = str(profile.get("warhead_size", "medium"))
-	turret.prefers_infantry = bool(profile.get("prefers_infantry", false))
-	turret.prefers_vehicle = bool(profile.get("prefers_vehicle", false))
-	turret.damage_vs_infantry = float(profile.get("damage_vs_infantry", 1.0))
-	turret.damage_vs_vehicle = float(profile.get("damage_vs_vehicle", 1.0))
-	turret.hitscan_enabled = bool(profile.get("hitscan", false))
-	var shot_color = profile.get("shot_color")
-	if shot_color is Color:
-		turret.shot_color = shot_color
-	turret.shot_width = float(profile.get("shot_width", turret.shot_width))
-	turret.shot_lifetime = float(profile.get("shot_lifetime", turret.shot_lifetime))
-	turret.visual_scene_path = _get_turret_visual_path(build_id)
-	turret.visual_base_radius = 16.0
-	turret.position = pos
-	_structures.add_child(turret)
-	return turret
-
-func _get_defense_profile(build_id: String) -> Dictionary:
-	match build_id:
-		"defense_gun":
-			return {
-				"range": 150.0,
-				"damage": 6.0,
-				"fire_rate": 0.25,
-				"missile_speed": 320.0,
-				"missile_turn_rate": 12.0,
-				"missile_color": Color(1.0, 0.95, 0.7, 0.9),
-				"warhead_size": "small",
-				"hitscan": true,
-				"shot_color": Color(1.0, 0.95, 0.7, 0.9),
-				"shot_width": 2.2,
-				"shot_lifetime": 0.1,
-				"prefers_infantry": true,
-				"damage_vs_infantry": 1.5,
-				"damage_vs_vehicle": 0.6,
-			}
-		"defense_laser":
-			return {
-				"range": 190.0,
-				"damage": 16.0,
-				"fire_rate": 1.1,
-				"missile_speed": 340.0,
-				"missile_turn_rate": 14.0,
-				"missile_color": Color(0.4, 0.9, 1.0, 1.0),
-				"warhead_size": "small",
-				"damage_vs_infantry": 1.1,
-				"damage_vs_vehicle": 1.0,
-			}
-		"defense_missile", "defense":
-			return {
-				"range": defense_range,
-				"damage": defense_damage,
-				"fire_rate": defense_fire_rate,
-				"missile_speed": 260.0,
-				"missile_turn_rate": 9.0,
-				"missile_color": Color(1.0, 0.6, 0.2, 1.0),
-				"warhead_size": "medium",
-				"prefers_vehicle": true,
-				"damage_vs_infantry": 0.7,
-				"damage_vs_vehicle": 1.6,
-			}
-	return {
-		"range": defense_range,
-		"damage": defense_damage,
-		"fire_rate": defense_fire_rate,
-		"missile_speed": 260.0,
-		"missile_turn_rate": 9.0,
-		"missile_color": Color(1.0, 0.6, 0.2, 1.0),
-		"warhead_size": "medium",
-		"prefers_vehicle": true,
-		"damage_vs_infantry": 0.7,
-		"damage_vs_vehicle": 1.6,
-	}
-
-func _get_defense_color(build_id: String) -> Color:
-	match build_id:
-		"defense_gun":
-			return Color(0.35, 0.5, 0.35, 1.0)
-		"defense_laser":
-			return Color(0.2, 0.6, 0.65, 1.0)
-		_:
-			return defense_color
-
-func _compute_defense_range(team_id: String, pos: Vector2, base_range: float) -> float:
-	var zone := _p1_build_zone if team_id == "p1" else _p2_build_zone
-	if zone == Rect2():
-		return base_range
-	var left := pos.x - zone.position.x
-	var right := (zone.position.x + zone.size.x) - pos.x
-	var top := pos.y - zone.position.y
-	var bottom := (zone.position.y + zone.size.y) - pos.y
-	var min_edge := minf(minf(left, right), minf(top, bottom))
-	var capped := maxf(0.0, min_edge * 0.9)
-	return minf(base_range, capped)
-
-func _get_building_hp(build_id: String) -> float:
-	match build_id:
-		"barracks":
-			return 220.0
-		"factory":
-			return 260.0
-		"airfield":
-			return 260.0
-		"supply":
-			return 200.0
-		"power":
-			return 180.0
-		"command_center":
-			return 280.0
-		"defense_gun":
-			return 220.0
-		"defense_missile":
-			return 240.0
-		"defense_laser":
-			return 230.0
-		"defense":
-			return 240.0
-	return 200.0
-
-func _roll_range_role(long_ratio: float, mid_ratio: float) -> String:
-	var roll := _rng.randf()
-	if roll < long_ratio:
-		return "long"
-	if roll < long_ratio + mid_ratio:
-		return "mid"
-	return "short"
-
-func _range_multiplier(role: String, long_mult: float, mid_mult: float) -> float:
-	if role == "long":
-		return long_mult
-	if role == "mid":
-		return mid_mult
-	return 1.0
-
-func _resolve_infantry_type(requested: String) -> String:
-	if requested == "mixed":
-		var long_ratio := clampf(infantry_long_ratio, 0.0, 1.0)
-		var mid_ratio := clampf(infantry_mid_ratio, 0.0, 1.0 - long_ratio)
-		var roll := _rng.randf()
-		if roll < long_ratio:
-			return "sniper"
-		if roll < long_ratio + mid_ratio:
-			return "rocket"
-		return "rifle"
-	if requested in ["rifle", "sniper", "rocket"]:
-		return requested
-	return "rifle"
-
-func _resolve_vehicle_type(requested: String) -> String:
-	if requested == "mixed" or requested == "":
-		var long_ratio := clampf(vehicle_long_ratio, 0.0, 1.0)
-		var mid_ratio := clampf(vehicle_mid_ratio, 0.0, 1.0 - long_ratio)
-		var roll := _rng.randf()
-		if roll < long_ratio:
-			return "artillery"
-		if roll < long_ratio + mid_ratio:
-			return "ifv"
-		return "tank"
-	if requested == "apc":
-		return "ifv"
-	if requested in ["tank", "artillery", "ifv", "himars"]:
-		return requested
-	return "tank"
-
-func _resolve_aircraft_type(requested: String) -> String:
-	if requested == "" or requested == "mixed":
-		return "f16"
-	if requested == "f16":
-		return "f16"
-	if requested == "gripen":
-		return "gripen"
-	if requested == "f22":
-		return "f22"
-	if requested == "f35":
-		return "f35"
-	if requested == "uav":
-		return "uav"
-	return "f16"
-
-func _get_infantry_def(type_id: String) -> Dictionary:
-	match type_id:
-		"sniper":
-			return {
-				"range_role": "long",
-				"max_hp": unit_hp * 0.8,
-				"damage": unit_damage * 2.2,
-				"cooldown": unit_attack_cooldown * 1.8,
-				"speed": unit_speed * 0.85,
-				"shot_color": Color(1.0, 0.95, 0.6, 0.85),
-				"shot_width": 2.5,
-				"shot_lifetime": 0.2,
-				"prefers_infantry": true,
-				"damage_vs_infantry": 2.0,
-				"damage_vs_vehicle": 0.5,
-				"damage_vs_structure": 0.6,
-			}
-		"rocket":
-			return {
-				"range_role": "mid",
-				"max_hp": unit_hp * 1.15,
-				"damage": unit_damage * 1.6,
-				"cooldown": unit_attack_cooldown * 1.4,
-				"speed": unit_speed * 0.8,
-				"shot_color": Color(1.0, 0.7, 0.3, 0.85),
-				"shot_width": 3.0,
-				"shot_lifetime": 0.18,
-				"prefers_vehicle": true,
-				"damage_vs_infantry": 0.7,
-				"damage_vs_vehicle": 1.8,
-				"damage_vs_structure": 1.2,
-			}
-		_:
-			return {
-				"range_role": "short",
-				"max_hp": unit_hp,
-				"damage": unit_damage * 0.6,
-				"cooldown": unit_attack_cooldown * 0.45,
-				"speed": unit_speed,
-				"shot_color": Color(1.0, 1.0, 1.0, 0.7),
-				"shot_width": 1.6,
-				"shot_lifetime": 0.08,
-				"prefers_infantry": true,
-				"damage_vs_infantry": 1.3,
-				"damage_vs_vehicle": 0.6,
-				"damage_vs_structure": 0.8,
-			}
-
-func _get_vehicle_def(type_id: String) -> Dictionary:
-	match type_id:
-		"himars":
-			return {
-				"range_role": "short",
-				"max_hp": GameBalance.HIMARS_MAX_HP,
-				"damage": 0.0,  # HIMARS doesn't use direct fire
-				"cooldown": 999.0,  # No direct fire
-				"speed": GameBalance.HIMARS_SPEED,
-				"shot_color": Color(1.0, 0.5, 0.0, 0.0),
-				"shot_width": 0.0,
-				"shot_lifetime": 0.0,
-				"body_radius": GameBalance.HIMARS_BODY_RADIUS,
-				"vision_radius": GameBalance.HIMARS_VISION_RADIUS,
-				"is_himars": true,
-				"bombardment_range": GameBalance.HIMARS_BOMBARDMENT_RANGE,
-				"missile_damage": GameBalance.HIMARS_MISSILE_DAMAGE,
-				"missile_speed": GameBalance.HIMARS_MISSILE_SPEED,
-				"missile_lifetime": GameBalance.HIMARS_MISSILE_LIFETIME,
-				"missile_splash_radius": GameBalance.HIMARS_MISSILE_SPLASH_RADIUS,
-				"missiles_per_salvo": GameBalance.HIMARS_MISSILES_PER_SALVO,
-				"salvo_interval": GameBalance.HIMARS_SALVO_INTERVAL,
-				"reload_time": GameBalance.HIMARS_RELOAD_TIME,
-				"visual_scene_path": "res://scenes/units/himars_visual_animated.tscn",
-				"visual_base_radius": 16.0,
-			}
-		"artillery":
-			return {
-				"range_role": "long",
-				"max_hp": vehicle_hp * 0.85,
-				"damage": vehicle_damage * 2.4,
-				"cooldown": vehicle_attack_cooldown * 1.8,
-				"speed": vehicle_speed * 0.75,
-				"shot_color": Color(1.0, 0.6, 0.35, 0.9),
-				"shot_width": 4.0,
-				"shot_lifetime": 0.22,
-				"damage_vs_infantry": 1.1,
-				"damage_vs_vehicle": 1.3,
-				"damage_vs_structure": 1.8,
-			}
-		"ifv":
-			return {
-				"range_role": "mid",
-				"max_hp": vehicle_hp * 1.1,
-				"damage": vehicle_damage * 1.2,
-				"cooldown": vehicle_attack_cooldown * 1.1,
-				"speed": vehicle_speed * 1.1,
-				"shot_color": Color(1.0, 0.8, 0.5, 0.85),
-				"shot_width": 3.0,
-				"shot_lifetime": 0.16,
-				"prefers_infantry": true,
-				"damage_vs_infantry": 1.6,
-				"damage_vs_vehicle": 0.7,
-				"damage_vs_structure": 0.8,
-			}
-		_:
-			return {
-				"range_role": "short",
-				"max_hp": vehicle_hp,
-				"damage": vehicle_damage,
-				"cooldown": vehicle_attack_cooldown,
-				"speed": vehicle_speed,
-				"shot_color": Color(1.0, 0.85, 0.6, 0.8),
-				"shot_width": 3.0,
-				"shot_lifetime": 0.14,
-				"prefers_vehicle": true,
-				"damage_vs_infantry": 0.9,
-				"damage_vs_vehicle": 1.2,
-				"damage_vs_structure": 1.1,
-			}
-
-func _get_aircraft_def(type_id: String) -> Dictionary:
-	match type_id:
-		"f16":
-			return {
-				"range_role": "long",
-				"range_multiplier": 1.0,
-				"max_hp": aircraft_hp,
-				"damage": aircraft_damage,
-				"cooldown": aircraft_attack_cooldown,
-				"speed": aircraft_speed,
-				"attack_range": aircraft_attack_range,
-				"body_radius": aircraft_body_radius,
-				"vision_radius": aircraft_vision_radius,
-				"shot_color": Color(1.0, 0.9, 0.75, 0.85),
-				"shot_width": aircraft_shot_width,
-				"shot_lifetime": aircraft_shot_lifetime,
-				"gun_ammo": aircraft_gun_ammo,
-				"missile_ammo": aircraft_missile_ammo,
-				"missile_damage": aircraft_missile_damage,
-				"missile_speed": aircraft_missile_speed,
-				"missile_turn_rate": aircraft_missile_turn_rate,
-				"missile_range": aircraft_missile_range,
-				"missile_cooldown": aircraft_missile_cooldown,
-				"missile_hit_radius": aircraft_missile_hit_radius,
-				"missile_warhead_size": aircraft_missile_warhead_size,
-				"missile_splash_radius": aircraft_missile_splash_radius,
-				"missile_splash_scale": aircraft_missile_splash_scale,
-				"missile_lifetime": aircraft_missile_lifetime,
-				"reload_time": aircraft_reload_time,
-				"missile_color": aircraft_missile_color,
-				"prefers_vehicle": true,
-				"damage_vs_infantry": 0.6,
-				"damage_vs_vehicle": 1.6,
-				"damage_vs_structure": 1.0,
-			}
-		"gripen":
-			return {
-				"range_role": "long",
-				"range_multiplier": 1.0,
-				"max_hp": aircraft_hp * 1.1,
-				"damage": aircraft_damage * 1.15,
-				"cooldown": aircraft_attack_cooldown * 0.95,
-				"speed": aircraft_speed * 1.05,
-				"attack_range": aircraft_attack_range,
-				"body_radius": aircraft_body_radius,
-				"vision_radius": aircraft_vision_radius,
-				"shot_color": Color(1.0, 0.9, 0.75, 0.85),
-				"shot_width": aircraft_shot_width,
-				"shot_lifetime": aircraft_shot_lifetime,
-				"gun_ammo": aircraft_gun_ammo + 5,
-				"missile_ammo": aircraft_missile_ammo,
-				"missile_damage": aircraft_missile_damage * 1.1,
-				"missile_speed": aircraft_missile_speed,
-				"missile_turn_rate": aircraft_missile_turn_rate,
-				"missile_range": aircraft_missile_range,
-				"missile_cooldown": aircraft_missile_cooldown,
-				"missile_hit_radius": aircraft_missile_hit_radius,
-				"missile_warhead_size": aircraft_missile_warhead_size,
-				"missile_splash_radius": aircraft_missile_splash_radius,
-				"missile_splash_scale": aircraft_missile_splash_scale,
-				"missile_lifetime": aircraft_missile_lifetime,
-				"reload_time": aircraft_reload_time * 0.9,
-				"missile_color": aircraft_missile_color,
-				"prefers_vehicle": true,
-				"damage_vs_infantry": 0.6,
-				"damage_vs_vehicle": 1.6,
-				"damage_vs_structure": 1.1,
-			}
-		"f22":
-			return {
-				"range_role": "long",
-				"range_multiplier": 1.0,
-				"max_hp": aircraft_hp * 1.25,
-				"damage": aircraft_damage * 1.3,
-				"cooldown": aircraft_attack_cooldown * 0.9,
-				"speed": aircraft_speed * 1.1,
-				"attack_range": aircraft_attack_range,
-				"body_radius": aircraft_body_radius,
-				"vision_radius": aircraft_vision_radius,
-				"shot_color": Color(1.0, 0.9, 0.75, 0.85),
-				"shot_width": aircraft_shot_width,
-				"shot_lifetime": aircraft_shot_lifetime,
-				"gun_ammo": aircraft_gun_ammo + 10,
-				"missile_ammo": aircraft_missile_ammo + 1,
-				"missile_damage": aircraft_missile_damage * 1.2,
-				"missile_speed": aircraft_missile_speed * 1.05,
-				"missile_turn_rate": aircraft_missile_turn_rate,
-				"missile_range": aircraft_missile_range,
-				"missile_cooldown": aircraft_missile_cooldown * 0.95,
-				"missile_hit_radius": aircraft_missile_hit_radius,
-				"missile_warhead_size": aircraft_missile_warhead_size,
-				"missile_splash_radius": aircraft_missile_splash_radius,
-				"missile_splash_scale": aircraft_missile_splash_scale,
-				"missile_lifetime": aircraft_missile_lifetime,
-				"reload_time": aircraft_reload_time * 0.85,
-				"missile_color": aircraft_missile_color,
-				"prefers_vehicle": true,
-				"damage_vs_infantry": 0.6,
-				"damage_vs_vehicle": 1.6,
-				"damage_vs_structure": 1.1,
-			}
-		"f35":
-			return {
-				"range_role": "long",
-				"range_multiplier": 1.0,
-				"max_hp": aircraft_hp,
-				"damage": aircraft_damage,
-				"cooldown": aircraft_attack_cooldown,
-				"speed": aircraft_speed,
-				"attack_range": aircraft_attack_range,
-				"body_radius": aircraft_body_radius,
-				"vision_radius": aircraft_vision_radius,
-				"shot_color": Color(1.0, 0.9, 0.75, 0.85),
-				"shot_width": aircraft_shot_width,
-				"shot_lifetime": aircraft_shot_lifetime,
-				"gun_ammo": aircraft_gun_ammo,
-				"missile_ammo": aircraft_missile_ammo,
-				"missile_damage": aircraft_missile_damage,
-				"missile_speed": aircraft_missile_speed,
-				"missile_turn_rate": aircraft_missile_turn_rate,
-				"missile_range": aircraft_missile_range,
-				"missile_cooldown": aircraft_missile_cooldown,
-				"missile_hit_radius": aircraft_missile_hit_radius,
-				"missile_warhead_size": aircraft_missile_warhead_size,
-				"missile_splash_radius": aircraft_missile_splash_radius,
-				"missile_splash_scale": aircraft_missile_splash_scale,
-				"missile_lifetime": aircraft_missile_lifetime,
-				"reload_time": aircraft_reload_time,
-				"missile_color": aircraft_missile_color,
-				"prefers_vehicle": true,
-				"damage_vs_infantry": 0.6,
-				"damage_vs_vehicle": 1.6,
-				"damage_vs_structure": 1.1,
-			}
-		"uav":
-			return {
-				"range_role": "long",
-				"range_multiplier": 1.0,
-				"max_hp": GameBalance.UAV_MAX_HP,
-				"damage": 0.0,  # No weapons
-				"cooldown": 999.0,
-				"speed": GameBalance.UAV_SPEED,
-				"attack_range": 0.0,  # No combat
-				"body_radius": GameBalance.UAV_BODY_RADIUS,
-				"vision_radius": GameBalance.UAV_VISION_RADIUS,
-				"turn_rate": GameBalance.UAV_TURN_RATE,
-				"loiter_radius": GameBalance.UAV_LOITER_RADIUS,
-				"loiter_orbit_speed": GameBalance.UAV_LOITER_ORBIT_SPEED,
-				"shot_color": Color(0.0, 0.0, 0.0, 0.0),
-				"shot_width": 0.0,
-				"shot_lifetime": 0.0,
-				"gun_ammo": 0,  # No weapons
-				"missile_ammo": 0,  # No weapons
-				"missile_damage": 0.0,
-				"missile_speed": 0.0,
-				"missile_turn_rate": 0.0,
-				"missile_range": 0.0,
-				"missile_cooldown": 999.0,
-				"missile_hit_radius": 0.0,
-				"missile_warhead_size": "small",
-				"missile_splash_radius": 0.0,
-				"missile_splash_scale": 0.0,
-				"missile_lifetime": 0.0,
-				"reload_time": 999.0,
-				"missile_color": Color(0.0, 0.0, 0.0, 0.0),
-				"prefers_vehicle": false,
-				"damage_vs_infantry": 0.0,
-				"damage_vs_vehicle": 0.0,
-				"damage_vs_structure": 0.0,
-				"is_uav": true,  # Special flag for UAV behavior
-			}
-		"f16":
-			return {
-				"range_role": "long",
-				"range_multiplier": 1.0,
-				"max_hp": aircraft_hp,
-				"damage": aircraft_damage,
-				"cooldown": aircraft_attack_cooldown,
-				"speed": aircraft_speed,
-				"attack_range": aircraft_attack_range,
-				"body_radius": aircraft_body_radius,
-				"vision_radius": aircraft_vision_radius,
-				"shot_color": Color(1.0, 0.9, 0.75, 0.85),
-				"shot_width": aircraft_shot_width,
-				"shot_lifetime": aircraft_shot_lifetime,
-				"gun_ammo": aircraft_gun_ammo,
-				"missile_ammo": aircraft_missile_ammo,
-				"missile_damage": aircraft_missile_damage,
-				"missile_speed": aircraft_missile_speed,
-				"missile_turn_rate": aircraft_missile_turn_rate,
-				"missile_range": aircraft_missile_range,
-				"missile_cooldown": aircraft_missile_cooldown,
-				"missile_hit_radius": aircraft_missile_hit_radius,
-				"missile_warhead_size": aircraft_missile_warhead_size,
-				"missile_splash_radius": aircraft_missile_splash_radius,
-				"missile_splash_scale": aircraft_missile_splash_scale,
-				"missile_lifetime": aircraft_missile_lifetime,
-				"reload_time": aircraft_reload_time,
-				"missile_color": aircraft_missile_color,
-				"prefers_vehicle": true,
-				"damage_vs_infantry": 0.6,
-				"damage_vs_vehicle": 1.6,
-				"damage_vs_structure": 1.1,
-			}
-	return {
-		"range_role": "long",
-		"range_multiplier": 1.0,
-		"max_hp": aircraft_hp,
-		"damage": aircraft_damage,
-		"cooldown": aircraft_attack_cooldown,
-		"speed": aircraft_speed,
-		"attack_range": aircraft_attack_range,
-		"body_radius": aircraft_body_radius,
-		"vision_radius": aircraft_vision_radius,
-		"shot_color": Color(1.0, 0.9, 0.75, 0.85),
-		"shot_width": aircraft_shot_width,
-		"shot_lifetime": aircraft_shot_lifetime,
-		"gun_ammo": aircraft_gun_ammo,
-		"missile_ammo": aircraft_missile_ammo,
-		"missile_damage": aircraft_missile_damage,
-		"missile_speed": aircraft_missile_speed,
-		"missile_turn_rate": aircraft_missile_turn_rate,
-		"missile_range": aircraft_missile_range,
-		"missile_cooldown": aircraft_missile_cooldown,
-		"missile_hit_radius": aircraft_missile_hit_radius,
-		"missile_warhead_size": aircraft_missile_warhead_size,
-		"missile_splash_radius": aircraft_missile_splash_radius,
-		"missile_splash_scale": aircraft_missile_splash_scale,
-		"missile_lifetime": aircraft_missile_lifetime,
-		"reload_time": aircraft_reload_time,
-		"missile_color": aircraft_missile_color,
-		"prefers_vehicle": true,
-		"damage_vs_infantry": 0.6,
-		"damage_vs_vehicle": 1.6,
-		"damage_vs_structure": 1.1,
-	}
-
-func get_infantry_type_options() -> Array:
-	return [
-		{"id": "mixed", "name": "Mixed"},
-		{"id": "rifle", "name": "Rifle"},
-		{"id": "sniper", "name": "Sniper"},
-		{"id": "rocket", "name": "Rocket"},
-	]
-
-func get_vehicle_type_options() -> Array:
-	return [
-		{"id": "mixed", "name": "Mixed"},
-		{"id": "tank", "name": "Tank"},
-		{"id": "artillery", "name": "Artillery"},
-		{"id": "ifv", "name": "IFV"},
-	]
-
-func _get_unit_visual_path(unit_kind: String, unit_type: String = "") -> String:
-	match unit_kind:
-		"infantry":
-			return "res://scenes/units/infantry_visual.tscn"
-		"vehicle":
-			return "res://scenes/units/vehicle_visual.tscn"
-		"aircraft":
-			return _get_aircraft_visual_path(unit_type)
-		"collector":
-			return "res://scenes/units/collector_visual.tscn"
-	return ""
-
-func _get_aircraft_visual_path(aircraft_type: String) -> String:
-	match aircraft_type:
-		"gripen":
-			return "res://assets/models/gripen.glb"
-		"f16":
-			return "res://assets/models/F16/F16-Plane.glb"
-		"f22":
-			return "res://assets/models/F22/F22-Plane.glb"
-		"f35":
-			# F-35 uses the generic 2D visual for now
-			return "res://scenes/units/aircraft_visual.tscn"
-		"uav":
-			return "res://assets/models/Drones/mq-9_reaper_uav_drone.glb"
-	# Default to generic 2D aircraft visual
-	return "res://scenes/units/aircraft_visual.tscn"
-
-func _get_building_visual_path(build_id: String) -> String:
-	match build_id:
-		"barracks":
-			return "res://scenes/buildings/barracks_visual.tscn"
-		"factory":
-			return "res://scenes/buildings/factory_visual.tscn"
-		"airfield":
-			return "res://scenes/buildings/airfield_visual.tscn"
-		"supply":
-			return "res://scenes/buildings/supply_visual.tscn"
-		"power":
-			return "res://scenes/buildings/power_visual.tscn"
-		"command_center":
-			return "res://scenes/buildings/command_center_visual.tscn"
-	return ""
-
-func _get_missile_visual_path(aircraft_type: String, target_type: String = "ground") -> String:
-	# For now, we only support air-to-ground missiles
-	# target_type can be "ground" or "air" for future expansion
-	match aircraft_type:
-		"gripen":
-			return "res://assets/models/Gripen/Gripen-ATG.glb"
-		"f16":
-			return "res://assets/models/F16/F16-ATG.glb"
-		"f22":
-			return "res://assets/models/F22/F22-ATG.glb"
-		"f35":
-			# F-35 doesn't have assets yet, return empty for now
-			return ""
-	return ""
-
-func _get_turret_visual_path(build_id: String) -> String:
-	if build_id.begins_with("defense"):
-		return "res://scenes/buildings/turret_visual.tscn"
-	return ""
-
-func _get_building_visual_base_size(build_id: String) -> Vector2:
-	match build_id:
-		"barracks":
-			return Vector2(100, 90)
-		"factory":
-			return Vector2(140, 110)
-		"airfield":
-			return Vector2(432, 288)
-		"supply":
-			return Vector2(100, 80)
-		"power":
-			return Vector2(80, 80)
-		"command_center":
-			return Vector2(130, 110)
-	return Vector2.ZERO
-
-func _get_hq_visual_path() -> String:
-	return "res://scenes/buildings/hq_visual.tscn"
-
-func _update_defenses(delta: float) -> void:
-	for turret in get_tree().get_nodes_in_group("defense_turret"):
-		if turret is DefenseTurret:
-			turret.update_targeting(delta)
-
-func _update_visibility() -> void:
-	if not fog_enabled or not fog_hide_enemies:
-		_set_enemy_visibility(true)
-		return
-	var sources := _get_vision_sources()
-	_apply_visibility_to_group("units_p2", sources)
-	_apply_visibility_to_group("collectors_p2", sources)
-	_apply_visibility_to_group("defense_turret_p2", sources)
-	_apply_visibility_to_buildings("p2", sources)
-	_apply_visibility_to_hq("p2", sources)
-
-func _get_vision_sources() -> Array:
-	var sources: Array = []
-	for node in get_tree().get_nodes_in_group("vision_p1"):
-		if node == null or not is_instance_valid(node):
-			continue
-		if not node.has_method("get_vision_radius"):
-			continue
-		var radius := float(node.get_vision_radius())
-		if radius <= 0.0:
-			continue
-		sources.append({
-			"pos": node.global_position,
-			"radius_sq": radius * radius,
-		})
-	return sources
-
-func _apply_visibility_to_group(group_name: String, sources: Array) -> void:
-	for node in get_tree().get_nodes_in_group(group_name):
-		if node == null or not is_instance_valid(node):
-			continue
-		node.visible = _is_in_vision(node.global_position, sources)
-
-func _apply_visibility_to_buildings(team_id: String, sources: Array) -> void:
-	for node in get_tree().get_nodes_in_group("building"):
-		if not (node is Building):
-			continue
-		if node.team_id != team_id:
-			continue
-		node.visible = _is_in_vision(node.global_position, sources)
-
-func _apply_visibility_to_hq(team_id: String, sources: Array) -> void:
-	for node in get_tree().get_nodes_in_group("hq"):
-		if not (node is HQ):
-			continue
-		if node.team_id != team_id:
-			continue
-		node.visible = _is_in_vision(node.global_position, sources)
-
-func _is_in_vision(pos: Vector2, sources: Array) -> bool:
-	if _p1_build_zone != Rect2():
-		var base_rect := _p1_build_zone.grow(base_vision_padding)
-		if base_rect.has_point(pos):
-			return true
-	if sources.is_empty():
-		return false
-	for source in sources:
-		var src_pos := source.get("pos", Vector2.ZERO) as Vector2
-		var radius_sq := float(source.get("radius_sq", 0.0))
-		if pos.distance_squared_to(src_pos) <= radius_sq:
-			return true
-	return false
-
-func _set_enemy_visibility(is_visible: bool) -> void:
-	for node in get_tree().get_nodes_in_group("units_p2"):
-		if node != null and is_instance_valid(node):
-			node.visible = is_visible
-	for node in get_tree().get_nodes_in_group("collectors_p2"):
-		if node != null and is_instance_valid(node):
-			node.visible = is_visible
-	for node in get_tree().get_nodes_in_group("defense_turret_p2"):
-		if node != null and is_instance_valid(node):
-			node.visible = is_visible
-	for node in get_tree().get_nodes_in_group("building"):
-		if node is Building and node.team_id == "p2":
-			node.visible = is_visible
-	for node in get_tree().get_nodes_in_group("hq"):
-		if node is HQ and node.team_id == "p2":
-			node.visible = is_visible
-
-func _on_building_selected(building: Building) -> void:
-	if building != null and is_instance_valid(building) and building.build_id == "factory" and building.team_id == "p1":
-		_selected_factory_p1 = building
-	else:
-		_selected_factory_p1 = null
-	_update_rally_line()
+	_rally_marker = MeshInstance3D.new()
+	_rally_line_3d.add_child(_rally_marker)
+	var marker_mesh := SphereMesh.new()
+	marker_mesh.radius = 4.0
+	marker_mesh.height = 8.0
+	_rally_marker.mesh = marker_mesh
+	_rally_marker.material_override = material
 
 func _update_rally_line() -> void:
 	if _rally_line_3d == null or _rally_line_mesh == null or _rally_marker == null:
 		return
-
-	if _selected_factory_p1 != null and is_instance_valid(_selected_factory_p1):
-		var factory_pos := _selected_factory_p1.global_position
+	if _p1.selected_factory != null and is_instance_valid(_p1.selected_factory):
+		var factory_pos := _p1.selected_factory.global_position
 		var rally_target: Vector2
-
-		# Check if a rally point has been set
-		if _rally_p1 != Vector2.ZERO:
-			# Use the custom rally point
-			rally_target = _rally_p1
+		if _p1.rally_pos != Vector2.ZERO:
+			rally_target = _p1.rally_pos
 		else:
-			# Default: show line 200 units forward (HIMARS behavior)
 			rally_target = factory_pos + Vector2(200.0, 0.0)
-
-		# Convert 2D positions to 3D (y becomes z, add height)
-		var height := 15.0  # Height above ground to be visible
+		var height := 15.0
 		var start3 := Vector3(factory_pos.x, height, factory_pos.y)
 		var end3 := Vector3(rally_target.x, height, rally_target.y)
 		var delta := end3 - start3
 		var line_length := delta.length()
-
-		# Position and orient the 3D line
 		_rally_line_3d.global_position = (start3 + end3) * 0.5
 		_rally_line_3d.look_at(end3, Vector3.UP)
-
-		# Create a thin stretched box as the line
-		var thickness := 1.5  # Thinner line
+		var thickness := 1.5
 		var mesh := BoxMesh.new()
 		mesh.size = Vector3(thickness, thickness, line_length)
 		_rally_line_mesh.mesh = mesh
-
-		# Position marker at the end (in local space relative to parent)
 		_rally_marker.position = Vector3(0, 0, line_length * 0.5)
-
 		_rally_line_3d.visible = true
 	else:
 		_rally_line_3d.visible = false
+
+func _on_building_selected(building: Building) -> void:
+	if building != null and is_instance_valid(building) and building.build_id == "factory" and building.team_id == "p1":
+		_p1.selected_factory = building
+	else:
+		_p1.selected_factory = null
+	_update_rally_line()

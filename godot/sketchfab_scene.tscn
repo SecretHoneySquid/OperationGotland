@@ -1,0 +1,5 @@
+[gd_scene load_steps=2 format=3 uid="uid://ofbqjsvbf0nv"]
+
+[ext_resource type="PackedScene" uid="uid://ca2cx8u3gh3n1" path="res://assets/models/HIMARS/m142_himars__free_model__animation.glb" id="1_r57si"]
+
+[node name="Sketchfab_Scene" instance=ExtResource("1_r57si")]

@@ -23,7 +23,6 @@ extends Node2D
 @export var visual_scene_path := ""
 @export var visual_base_radius := 8.0
 @export var visual_offset := Vector2.ZERO
-@export var render_2d := true
 
 var economy: GameController
 var base_pos := Vector2.ZERO
@@ -84,52 +83,6 @@ func _process(delta: float) -> void:
 			_assign_resource()
 	_sync_visual_rotation()
 
-func _draw() -> void:
-	if not render_2d:
-		return
-	if _visual_node == null:
-		var angle := _facing.angle()
-		var base_color := color
-		var scale := body_radius / 7.0
-		var hull := _get_hull_points()
-		draw_circle(Vector2(2.0, 3.0), body_radius * 0.9, Color(0.0, 0.0, 0.0, 0.2))
-		var base_points := _transform_points(hull, angle, scale)
-		var top_points := _transform_points(hull, angle, scale * 0.72, Vector2(-1.0, -1.0))
-		draw_colored_polygon(base_points, _shade(base_color, -0.1))
-		draw_colored_polygon(top_points, _shade(base_color, 0.12))
-		var outline := base_points.duplicate()
-		if outline.size() > 0:
-			outline.append(base_points[0])
-			draw_polyline(outline, _shade(base_color, -0.3), 1.4)
-		var cargo_offset := Vector2(-body_radius * 0.4, -body_radius * 0.15).rotated(angle)
-		draw_circle(cargo_offset, body_radius * 0.35, _shade(base_color, 0.25))
-		draw_line(Vector2.ZERO, Vector2(body_radius * 0.7, 0.0).rotated(angle), _shade(base_color, 0.35), 2.0)
-
-func _shade(src: Color, amount: float) -> Color:
-	return Color(
-		clampf(src.r + amount, 0.0, 1.0),
-		clampf(src.g + amount, 0.0, 1.0),
-		clampf(src.b + amount, 0.0, 1.0),
-		src.a
-	)
-
-func _transform_points(points: Array, angle: float, scale: float, offset := Vector2.ZERO) -> PackedVector2Array:
-	var transformed := PackedVector2Array()
-	for point in points:
-		if point is Vector2:
-			transformed.append((point * scale).rotated(angle) + offset)
-	return transformed
-
-func _get_hull_points() -> Array:
-	return [
-		Vector2(8, 0),
-		Vector2(4, -4),
-		Vector2(-6, -4),
-		Vector2(-8, 0),
-		Vector2(-6, 4),
-		Vector2(4, 4),
-	]
-
 func _assign_resource() -> void:
 	if economy == null:
 		_state = "idle"
@@ -167,11 +120,6 @@ func _move_toward(target: Vector2, delta: float) -> void:
 func get_vision_radius() -> float:
 	return vision_radius
 
-func set_render_2d(value: bool) -> void:
-	render_2d = value
-	_set_canvas_children_visible(value)
-	queue_redraw()
-
 func _setup_visual() -> void:
 	if visual_scene_path == "":
 		return
@@ -184,7 +132,7 @@ func _setup_visual() -> void:
 		if instance is Node2D:
 			_visual_node = instance
 			add_child(_visual_node)
-			_visual_node.visible = render_2d
+			_visual_node.visible = false  # 2D visuals are hidden - 3D used instead
 			_update_visual_transform()
 			_update_visual_color()
 	else:
@@ -207,11 +155,6 @@ func _sync_visual_rotation() -> void:
 	if _visual_node == null:
 		return
 	_visual_node.rotation = _facing.angle()
-
-func _set_canvas_children_visible(value: bool) -> void:
-	for child in get_children():
-		if child is CanvasItem:
-			child.visible = value
 
 func _should_limit_ground_slope() -> bool:
 	return ground_slope_max_deg > 0.0
