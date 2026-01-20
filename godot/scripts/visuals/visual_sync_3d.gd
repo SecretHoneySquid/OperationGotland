@@ -229,6 +229,7 @@ func _ready() -> void:
 	_aircraft_rng.randomize()
 	add_to_group("ground_height_provider")
 	add_to_group("navigation_provider")
+	add_to_group("visual_sync_3d")  # For interceptor missiles to find us
 
 func _process(delta: float) -> void:
 	_frame_delta = delta
@@ -577,8 +578,12 @@ func _build_collector_proxy(proxy: Node3D, collector) -> void:
 func _build_missile_proxy(proxy: Node3D, missile) -> void:
 	var base_color := _get_color(missile, "color", Color(0.9, 0.55, 0.2, 1.0))
 	var scale := _get_missile_scale(missile)
+	var source_kind := str(_get_value(missile, "source_kind", ""))
+	print("[MISSILE_PROXY] Building missile proxy. source_kind=", source_kind, " color=", base_color, " scale=", scale)
 	if _add_missile_model(proxy, missile, base_color, scale):
+		print("[MISSILE_PROXY] Custom model loaded successfully for ", source_kind)
 		return
+	print("[MISSILE_PROXY] Using procedural model for ", source_kind)
 	var body_radius := missile_body_radius * scale
 	var body_length := missile_body_length * scale
 	var nose_length := missile_nose_length * scale
@@ -607,6 +612,52 @@ func _build_turret_proxy(proxy: Node3D, turret) -> void:
 	var base_radius := maxf(4.0, _get_float(turret, "base_radius", 8.0))
 	var height := turret_height
 	var base_color := _get_color(turret, "base_color", Color(0.7, 0.7, 0.7, 1.0))
+
+	# Check for custom visual path (e.g., Patriot model)
+	var visual_path := str(_get_value(turret, "visual_scene_path", ""))
+	var has_custom_model := visual_path != "" and visual_path != "res://scenes/buildings/turret_visual.tscn"
+
+	print("[TURRET_PROXY] Building turret proxy. base_radius=", base_radius, " visual_path='", visual_path, "' has_custom=", has_custom_model)
+
+	if has_custom_model:
+		# Load custom 3D model for Patriot or other custom turrets
+		# Load the model directly with manual scaling to handle very large source models
+		var packed: Resource = load(visual_path)
+		if packed != null and packed is PackedScene:
+			var instance := (packed as PackedScene).instantiate()
+			if instance != null and instance is Node3D:
+				var model := instance as Node3D
+				proxy.add_child(model)
+
+				# Calculate bounds and apply appropriate scale
+				var bounds := _calc_model_aabb(model)
+				print("[TURRET_PROXY] Model bounds: ", bounds, " size: ", bounds.size)
+
+				# For Patriot (and similar large models), use a fixed scale that looks good
+				# The Patriot model is ~3700 units, we want it ~40-50 units
+				var desired_size := base_radius * 2.5  # About 60 units for Patriot
+				var max_dimension := maxf(bounds.size.x, maxf(bounds.size.y, bounds.size.z))
+				var scale_factor := desired_size / max_dimension if max_dimension > 0.0 else 1.0
+
+				model.scale = Vector3.ONE * scale_factor
+
+				# Center the model and place on ground
+				var center := bounds.position + (bounds.size * 0.5)
+				model.position = Vector3(
+					-center.x * scale_factor,
+					-bounds.position.y * scale_factor,  # Place on ground
+					-center.z * scale_factor
+				)
+
+				print("[TURRET_PROXY] Custom model loaded! Scale=", model.scale, " Position=", model.position, " scale_factor=", scale_factor)
+
+				# Ensure model is visible and apply materials
+				_ensure_model_visible(model)
+				return
+
+		push_warning("Failed to load turret visual at %s, falling back to procedural" % visual_path)
+
+	# Procedural turret model (default)
 	var base := _make_cylinder(base_radius, height * 0.45, base_color.darkened(0.08))
 	base.position = Vector3(0, height * 0.225, 0)
 	proxy.add_child(base)
@@ -2179,6 +2230,17 @@ func _spawn_impact(end_pos: Vector2, color: Color, width: float) -> void:
 
 func _spawn_missile_impact(end_pos: Vector2, color: Color, warhead_size: String, source_kind: String) -> void:
 	var scale: float = _warhead_scale(warhead_size)
+
+	# Special handling for intercepted missiles - big mid-air explosion
+	if source_kind == "intercepted":
+		_spawn_intercept_explosion(end_pos, color, scale)
+		return
+
+	# Self-destruct explosion for interceptor missiles - smaller mid-air burst
+	if source_kind == "self_destruct":
+		_spawn_self_destruct_explosion(end_pos, color, scale)
+		return
+
 	var flash_width: float = missile_impact_flash_size * scale * 6.0
 	var flash_color: Color = color.lightened(0.35)
 	flash_color.a = clampf(color.a, 0.5, 0.95)
@@ -2204,6 +2266,75 @@ func _spawn_missile_impact(end_pos: Vector2, color: Color, warhead_size: String,
 		var spread: float = aircraft_missile_smoke_spread * effect_scale
 		_spawn_smoke_burst(smoke_pos, burst, aircraft_missile_smoke_color, aircraft_missile_smoke_size * effect_scale, aircraft_missile_smoke_duration, spread)
 	_spawn_smoke(smoke_pos, aircraft_missile_smoke_color, aircraft_missile_smoke_size * effect_scale * 1.4, aircraft_missile_smoke_duration * 1.15)
+
+func _spawn_intercept_explosion(end_pos: Vector2, color: Color, scale: float) -> void:
+	# Large mid-air explosion for intercepted missiles
+	# This creates a dramatic visual to show the interception was successful
+
+	# Get height based on terrain (missiles are intercepted mid-air)
+	var explosion_y := impact_height + 25.0  # Higher than ground impacts
+	if impact_follow_terrain:
+		explosion_y += _get_ground_height(end_pos)
+
+	# Primary fireball - bright orange/yellow
+	var fireball_color := Color(1.0, 0.7, 0.2, 0.95)
+	var fireball_size := missile_impact_flash_size * scale * 12.0  # Much bigger than normal
+	_spawn_impact_custom(end_pos, fireball_color, fireball_size, 0.8, missile_impact_flash_size * scale * 2.0)
+
+	# Secondary hot core - white/yellow
+	var core_color := Color(1.0, 0.95, 0.7, 0.98)
+	var core_size := missile_impact_flash_size * scale * 8.0
+	_spawn_impact_custom(end_pos, core_color, core_size, 0.5, missile_impact_flash_size * scale * 1.5)
+
+	# Outer shockwave - red/orange ring
+	var shock_color := Color(1.0, 0.4, 0.1, 0.7)
+	var shock_size := missile_impact_flash_size * scale * 18.0
+	_spawn_impact_custom(end_pos, shock_color, shock_size, 1.0, missile_impact_flash_size * scale * 3.0)
+
+	# Multiple smoke bursts for debris cloud
+	var smoke_pos := Vector3(end_pos.x, explosion_y, end_pos.y)
+	var debris_color := Color(0.3, 0.3, 0.28, 0.85)
+
+	# Central smoke burst
+	_spawn_smoke_burst(smoke_pos, 20, debris_color, 4.0 * scale, 2.0, 8.0 * scale)
+
+	# Additional scattered smoke puffs
+	for i in range(8):
+		var angle := TAU * float(i) / 8.0
+		var offset := Vector3(cos(angle) * 6.0 * scale, randf_range(-2.0, 4.0), sin(angle) * 6.0 * scale)
+		var puff_pos := smoke_pos + offset
+		_spawn_smoke(puff_pos, debris_color, 3.5 * scale, 1.8)
+
+	# Dark smoke plume that rises
+	var dark_smoke := Color(0.15, 0.15, 0.12, 0.75)
+	_spawn_smoke(smoke_pos + Vector3(0, 2, 0), dark_smoke, 5.0 * scale, 2.5)
+	_spawn_smoke(smoke_pos + Vector3(0, 5, 0), dark_smoke, 4.0 * scale, 2.2)
+
+	print("[INTERCEPT_EXPLOSION] Spawned at ", end_pos, " scale=", scale)
+
+func _spawn_self_destruct_explosion(end_pos: Vector2, color: Color, scale: float) -> void:
+	# Smaller mid-air explosion for interceptor missile self-destruct
+	# Less dramatic than intercept explosion but still visible
+
+	# Get height based on terrain
+	var explosion_y := impact_height + 20.0
+	if impact_follow_terrain:
+		explosion_y += _get_ground_height(end_pos)
+
+	# Single fireball flash - orange
+	var fireball_color := Color(1.0, 0.6, 0.2, 0.9)
+	var fireball_size := missile_impact_flash_size * scale * 5.0
+	_spawn_impact_custom(end_pos, fireball_color, fireball_size, 0.4, missile_impact_flash_size * scale)
+
+	# Small hot core
+	var core_color := Color(1.0, 0.9, 0.5, 0.95)
+	var core_size := missile_impact_flash_size * scale * 3.0
+	_spawn_impact_custom(end_pos, core_color, core_size, 0.25, missile_impact_flash_size * scale * 0.8)
+
+	# Smoke puff
+	var smoke_pos := Vector3(end_pos.x, explosion_y, end_pos.y)
+	var smoke_color := Color(0.4, 0.4, 0.38, 0.7)
+	_spawn_smoke_burst(smoke_pos, 6, smoke_color, 2.5 * scale, 1.2, 4.0 * scale)
 
 func _spawn_impact_custom(
 	end_pos: Vector2,

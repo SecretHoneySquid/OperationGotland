@@ -1,5 +1,5 @@
-res://scripts/core/battalion_formation.gd
-res://scripts/constants/GameBalance.gd
-res://scripts/core/battalion.gd
-res://scripts/core/unit.gd
+res://scripts/core/build_controller.gd
+res://scripts/core/interceptor_missile.gd
+res://scripts/core/patriot_turret.gd
+res://scripts/data/building_definitions.gd
 res://scripts/visuals/visual_sync_3d.gd

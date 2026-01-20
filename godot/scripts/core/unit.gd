@@ -1145,6 +1145,8 @@ func _fire_aircraft_missile(target: Node2D) -> void:
 	missile.source_kind = "aircraft"
 	missile.source_altitude = aircraft_altitude_factor
 	missile.target = target
+	missile.interceptable = true  # Can be intercepted by Patriot systems
+	missile.intercept_difficulty = 1.2  # Moderately hard to intercept
 	missile.global_position = global_position + (_facing * (body_radius + 6.0))
 	missile.set_origin(global_position)
 	if missile_visual_path != "":
@@ -1267,6 +1269,14 @@ func _find_enemy_structure_in_range(range: float) -> Node2D:
 func _attack(target: Node) -> void:
 	if _cooldown > 0.0:
 		return
+
+	# Rocket infantry fire mini ATACMS missiles instead of tracers
+	if unit_type == "rocket" and unit_kind == "infantry" and target is Node2D:
+		var target_pos: Vector2 = (target as Node2D).global_position
+		_fire_rocket_missile(target, target_pos)
+		_cooldown = attack_cooldown
+		return
+
 	if target.has_method("take_damage"):
 		var final_damage := attack_damage
 		if target is Unit:
@@ -1292,6 +1302,51 @@ func _spawn_tracer(target_pos: Vector2) -> void:
 	tracer.set_points(global_position, target_pos)
 	if get_parent() != null:
 		get_parent().add_child(tracer)
+
+func _fire_rocket_missile(target: Node, target_pos: Vector2) -> void:
+	# Calculate damage with multipliers
+	var final_damage := attack_damage
+	if target is Unit:
+		var enemy := target as Unit
+		if enemy.unit_kind == "vehicle" or enemy.unit_kind == "aircraft":
+			final_damage *= damage_vs_vehicle
+		else:
+			final_damage *= damage_vs_infantry
+	elif target is Building or target is HQ:
+		final_damage *= damage_vs_structure
+
+	# Spawn position slightly in front of the infantry
+	var direction := (target_pos - global_position).normalized()
+	var spawn_pos := global_position + direction * (body_radius + 4.0)
+
+	# Create mini ATACMS missile - direct flight, no ballistic arc
+	var missile := Missile.new()
+	missile.global_position = spawn_pos
+	missile.damage = final_damage
+	missile.speed = 280.0  # Fast but not instant
+	missile.lifetime = 4.0
+	missile.turn_rate = 0.0  # No tracking, flies straight
+	missile.target = null
+	missile.warhead_size = "small"
+	missile.splash_enabled = true
+	missile.splash_damage_scale = 0.5  # Reduced splash for infantry rockets
+	missile.splash_radius = 15.0
+	missile.team_id = team_id
+	missile.source_kind = "infantry"  # Infantry source for smaller explosion
+	missile.color = Color(1.0, 0.5, 0.2, 1.0)  # Orange
+	missile.trail_color = Color(1.0, 0.6, 0.3, 0.7)
+	missile.source_altitude = 0.0
+	missile.visual_scene_path = "res://scenes/missiles/atacms_visual.tscn"
+	missile.visual_base_radius = 0.5  # Smaller visual than HIMARS
+	missile.render_2d = true
+	missile.trail_length = 20.0
+	missile.ballistic_arc = 0.0  # No arc - flies straight
+	missile._target_pos = target_pos
+	missile.set_origin(spawn_pos)
+	missile._velocity = direction
+
+	if get_parent() != null:
+		get_parent().add_child(missile)
 
 func _move_toward_target(delta: float) -> void:
 	var target := _resolve_target()
@@ -2283,6 +2338,8 @@ func _fire_single_missile(target_pos: Vector2) -> void:
 	missile.color = Color(1.0, 0.4, 0.1, 1.0)
 	missile.trail_color = Color(1.0, 0.7, 0.4, 0.8)
 	missile.source_altitude = 0.0  # Not used for visual height
+	missile.interceptable = true  # Can be intercepted by Patriot systems
+	missile.intercept_difficulty = 0.8  # Large ballistic missile - easier to intercept
 	missile.visual_scene_path = "res://scenes/missiles/atacms_visual.tscn"
 	missile.visual_base_radius = 1.0  # Smaller visual
 	missile.render_2d = true  # Enable 2D rendering for trail visibility

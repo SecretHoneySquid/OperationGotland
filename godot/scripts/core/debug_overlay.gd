@@ -71,6 +71,15 @@ func _process(delta: float) -> void:
 		GameState.p1_hq_hp,
 		GameState.p2_hq_hp,
 	])
+	lines.append("Regions: P1 %d  P2 %d  Contested %d" % [
+		GameState.p1_regions_controlled,
+		GameState.p2_regions_controlled,
+		GameState.regions_contested,
+	])
+	lines.append("Region Income: P1 %.1f/s  P2 %.1f/s" % [
+		GameState.p1_region_income,
+		GameState.p2_region_income,
+	])
 	if GameState.winner != "":
 		lines.append("Winner: %s" % GameState.winner)
 	if show_help:

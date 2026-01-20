@@ -37,7 +37,8 @@ var _build_order := [
 	"command_center",
 	"defense_gun",
 	"defense_missile",
-	"defense_laser"
+	"defense_laser",
+	"defense_patriot"
 ]
 var _build_defs := {
 	"barracks": {
@@ -110,6 +111,13 @@ var _build_defs := {
 		"hp": 240.0,
 		"color": Color(0.6, 0.6, 0.6, 1.0),
 	},
+	"defense_patriot": {
+		"name": "Patriot SAM",
+		"size": Vector2(90, 90),
+		"cost": 450,
+		"hp": 280.0,
+		"color": Color(0.3, 0.45, 0.3, 1.0),
+	},
 }
 
 var _defense_profiles := {
@@ -163,6 +171,18 @@ var _defense_profiles := {
 		"prefers_vehicle": true,
 		"damage_vs_infantry": 0.7,
 		"damage_vs_vehicle": 1.6,
+	},
+	"defense_patriot": {
+		"range": 900.0,
+		"damage": 0.0,
+		"fire_rate": 1.5,
+		"missile_speed": 800.0,
+		"missile_turn_rate": 18.0,
+		"missile_color": Color(0.9, 1.0, 0.9, 1.0),
+		"warhead_size": "small",
+		"is_interceptor": true,
+		"intercept_success_base": 0.85,
+		"max_simultaneous_intercepts": 2,
 	},
 }
 
@@ -368,9 +388,14 @@ func _set_team_credits(value: int) -> void:
 		GameState.p2_credits = value
 
 func _spawn_defense_turret(build_id: String, pos: Vector2) -> DefenseTurret:
+	var profile: Dictionary = _defense_profiles.get(build_id, _defense_profiles.get("defense", {}))
+
+	# Spawn PatriotTurret for missile interception
+	if build_id == "defense_patriot":
+		return _spawn_patriot_turret(pos, profile)
+
 	var turret := DefenseTurret.new()
 	turret.team_id = team_id
-	var profile: Dictionary = _defense_profiles.get(build_id, _defense_profiles.get("defense", {}))
 	var base_range := float(profile.get("range", 140.0)) * defense_range_multiplier
 	turret.attack_range = minf(base_range, _compute_defense_range(pos))
 	turret.damage = float(profile.get("damage", 10.0))
@@ -393,6 +418,28 @@ func _spawn_defense_turret(build_id: String, pos: Vector2) -> DefenseTurret:
 	turret.shot_lifetime = float(profile.get("shot_lifetime", turret.shot_lifetime))
 	turret.visual_scene_path = _get_turret_visual_path(build_id)
 	turret.visual_base_radius = 16.0
+	turret.position = pos
+	add_child(turret)
+	return turret
+
+func _spawn_patriot_turret(pos: Vector2, profile: Dictionary) -> PatriotTurret:
+	var turret := PatriotTurret.new()
+	turret.team_id = team_id
+	# Patriot has longer range - use full range, not clamped to build zone
+	turret.attack_range = float(profile.get("range", 600.0))
+	turret.damage = 0.0  # Patriot doesn't deal direct damage
+	turret.fire_rate = float(profile.get("fire_rate", 1.5))
+	turret.interceptor_speed = float(profile.get("missile_speed", 800.0))
+	turret.interceptor_turn_rate = float(profile.get("missile_turn_rate", 18.0))
+	turret.intercept_success_base = float(profile.get("intercept_success_base", 0.85))
+	turret.max_simultaneous_intercepts = int(profile.get("max_simultaneous_intercepts", 2))
+	var missile_color = profile.get("missile_color")
+	if missile_color is Color:
+		turret.missile_color = missile_color
+	turret.base_radius = 24.0  # Larger base for Patriot
+	turret.base_color = Color(0.3, 0.45, 0.3, 1.0)
+	turret.visual_scene_path = _get_turret_visual_path("defense_patriot")
+	turret.visual_base_radius = 24.0
 	turret.position = pos
 	add_child(turret)
 	return turret
@@ -462,6 +509,9 @@ func _get_building_visual_path(build_id: String) -> String:
 	return ""
 
 func _get_turret_visual_path(build_id: String) -> String:
+	if build_id == "defense_patriot":
+		# Use the GLB directly for 3D visual sync
+		return "res://assets/models/Patriot/mim-104_patriot_air_defense_system.glb"
 	if build_id.begins_with("defense"):
 		return "res://scenes/buildings/turret_visual.tscn"
 	return ""

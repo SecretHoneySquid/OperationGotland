@@ -24,8 +24,11 @@ signal impact(pos: Vector2, color: Color, warhead_size: String, source_kind: Str
 @export var visual_scene_path := ""
 @export var visual_base_radius := 1.0
 @export var ballistic_arc := 0.0  # Height of ballistic arc (0 = straight, >0 = arcing trajectory)
+@export var interceptable := false  # Can be intercepted by air defense systems (e.g., Patriot)
+@export var intercept_difficulty := 1.0  # Higher = harder to intercept (affects success chance)
 
 var target: Node2D
+var _intercepted := false  # Set to true when hit by an interceptor
 var _velocity := Vector2.RIGHT
 var _origin := Vector2.ZERO
 var _target_pos := Vector2.ZERO
@@ -305,3 +308,17 @@ func _update_ballistic_arc(delta: float) -> void:
 
 func set_visual_scene_path(path: String) -> void:
 	visual_scene_path = path
+
+func intercept() -> void:
+	if _intercepted:
+		return
+	_intercepted = true
+	# Emit impact at current position (for explosion visual)
+	emit_signal("impact", global_position, color, warhead_size, "intercepted")
+	queue_free()
+
+func is_interceptable() -> bool:
+	return interceptable and not _intercepted
+
+func get_intercept_difficulty() -> float:
+	return intercept_difficulty

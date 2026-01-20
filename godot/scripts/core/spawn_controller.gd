@@ -76,7 +76,7 @@ func _configure_infantry(unit: Unit, team: TeamState, barracks: Building, type_i
 	var stats := UnitDefinitions.get_infantry_def(resolved_type)
 	var range_role := str(stats.get("range_role", "short"))
 	var range_mult := UnitDefinitions.get_range_multiplier(range_role, GameBalance.INFANTRY_LONG_MULTIPLIER, GameBalance.INFANTRY_MID_MULTIPLIER)
-	var attack_range := GameBalance.INFANTRY_ATTACK_RANGE * range_mult
+	var attack_range := maxf(GameBalance.INFANTRY_ATTACK_RANGE * 2.0, GameBalance.INFANTRY_ATTACK_RANGE * range_mult)
 
 	unit.unit_kind = "infantry"
 	unit.unit_type = resolved_type
@@ -486,7 +486,7 @@ func spawn_battalion_unit(team_id: String, unit_type: String, spawn_pos: Vector2
 	var stats := UnitDefinitions.get_infantry_def(unit_type)
 	var range_role := str(stats.get("range_role", "short"))
 	var range_mult := UnitDefinitions.get_range_multiplier(range_role, GameBalance.INFANTRY_LONG_MULTIPLIER, GameBalance.INFANTRY_MID_MULTIPLIER)
-	var attack_range := GameBalance.INFANTRY_ATTACK_RANGE * range_mult
+	var attack_range := maxf(GameBalance.INFANTRY_ATTACK_RANGE * 2.0, GameBalance.INFANTRY_ATTACK_RANGE * range_mult)
 
 	unit.unit_kind = "infantry"
 	unit.unit_type = unit_type

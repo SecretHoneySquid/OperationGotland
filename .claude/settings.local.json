@@ -18,7 +18,11 @@
       "Bash(\"/c/Program Files/Godot_v4.3-stable_win64.exe/Godot_v4.3-stable_win64.exe\" --headless --script res://test_himars_structure.gd --quit-after 2)",
       "Bash(\"C:/Program Files/Godot_v4.3-stable_win64.exe/Godot_v4.3-stable_win64.exe\" --headless --script res://test_himars_structure.gd --quit-after 2)",
       "Bash(\"/c/Program Files/Godot_v4.3-stable_win64.exe/Godot_v4.3-stable_win64.exe\" --headless --script res://setup_himars_animation.gd --quit-after 2)",
-      "Bash(\"C:/Program Files/Godot_v4.3-stable_win64.exe/Godot_v4.3-stable_win64.exe\" --headless --script res://setup_himars_animation.gd --quit-after 2)"
+      "Bash(\"C:/Program Files/Godot_v4.3-stable_win64.exe/Godot_v4.3-stable_win64.exe\" --headless --script res://setup_himars_animation.gd --quit-after 2)",
+      "Bash(timeout:*)",
+      "Bash(where:*)",
+      "Bash(dir \"C:\\\\Users\\\\Bouncy\\\\Godot\"\" 2>/dev/null || dir \"C:Program FilesGodot\"\")",
+      "Bash(dir \"C:\\\\Users\\\\Bouncy\"\")"
     ]
   }
 }

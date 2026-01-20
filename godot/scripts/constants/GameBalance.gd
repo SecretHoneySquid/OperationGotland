@@ -24,7 +24,7 @@ const INFANTRY_UNIT_COST := 25
 
 ## Long-range infantry spawning
 const INFANTRY_LONG_MULTIPLIER := 10.0
-const INFANTRY_MID_MULTIPLIER := 5.0
+const INFANTRY_MID_MULTIPLIER := 5.75  # 15% increase for rocket soldiers
 const INFANTRY_LONG_RATIO := 0.2
 const INFANTRY_MID_RATIO := 0.3
 const INFANTRY_WAIT_DURATION := 10.0

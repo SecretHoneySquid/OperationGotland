@@ -76,7 +76,7 @@ static func get_infantry_def(type_id: String) -> Dictionary:
 				"shot_lifetime": 0.2,
 				"prefers_infantry": true,
 				"prefers_vehicle": false,
-				"damage_vs_infantry": 2.0,
+				"damage_vs_infantry": 1.1,
 				"damage_vs_vehicle": 0.5,
 				"damage_vs_structure": 0.6,
 			}
@@ -84,7 +84,7 @@ static func get_infantry_def(type_id: String) -> Dictionary:
 			return {
 				"range_role": "mid",
 				"max_hp": GameBalance.INFANTRY_MAX_HP * 1.15,
-				"damage": GameBalance.INFANTRY_DAMAGE * 1.6,
+				"damage": GameBalance.INFANTRY_DAMAGE * 2.4,
 				"cooldown": GameBalance.INFANTRY_ATTACK_COOLDOWN * 1.4,
 				"speed": GameBalance.INFANTRY_SPEED * 0.8,
 				"shot_color": Color(1.0, 0.7, 0.3, 0.85),

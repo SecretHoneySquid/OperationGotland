@@ -48,6 +48,13 @@ var p2_aircraft_pool := 0.0
 var p1_aircraft_eta := 0.0
 var p2_aircraft_eta := 0.0
 
+# Region control
+var p1_regions_controlled := 0
+var p2_regions_controlled := 0
+var regions_contested := 0
+var p1_region_income := 0.0
+var p2_region_income := 0.0
+
 func reset(starting_p1_credits: int = 500, starting_p2_credits: int = 500) -> void:
 	p1_credits = starting_p1_credits
 	p2_credits = starting_p2_credits
@@ -94,3 +101,9 @@ func reset(starting_p1_credits: int = 500, starting_p2_credits: int = 500) -> vo
 	p2_aircraft_pool = 0.0
 	p1_aircraft_eta = 0.0
 	p2_aircraft_eta = 0.0
+	# Region control
+	p1_regions_controlled = 0
+	p2_regions_controlled = 0
+	regions_contested = 0
+	p1_region_income = 0.0
+	p2_region_income = 0.0

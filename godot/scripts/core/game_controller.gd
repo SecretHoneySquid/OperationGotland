@@ -62,6 +62,9 @@ var _p1: TeamState
 var _p2: TeamState
 var _resource_nodes: Array[Dictionary] = []
 var _supply_remaining := 0.0
+var _map_size := Vector2(6144, 6144)  # Default, loaded from map data
+var _region_income_accum_p1 := 0.0  # Accumulator for fractional region income
+var _region_income_accum_p2 := 0.0
 var _rally_mode_team := ""
 var _rng := RandomNumberGenerator.new()
 var _ai_queue_timer := 0.0
@@ -72,6 +75,8 @@ var _spawn_controller: SpawnController
 var _production_controller: ProductionController
 var _visibility_controller: VisibilityController
 var _battalion_controller: BattalionController
+var _region_controller: RegionController
+var _region_grid_visual: RegionGridVisual
 
 # Rally line 3D visualization
 var _rally_line_3d: Node3D = null
@@ -94,6 +99,7 @@ func _ready() -> void:
 	_init_teams()
 	_init_controllers()
 	_load_map_data(map_path)
+	_init_region_system()
 	_visibility_controller.setup_base_vision(self)
 	_spawn_hqs()
 	_spawn_starting_buildings()
@@ -154,6 +160,12 @@ func _init_controllers() -> void:
 		add_child(canvas)
 		canvas.add_child(placement_preview)
 
+	# Region controller - manages territory control and income
+	_region_controller = RegionController.new()
+	_region_controller.name = "RegionController"
+	_region_controller.configure(teams, _visibility_controller)
+	add_child(_region_controller)
+
 func _process(delta: float) -> void:
 	_update_hq_state()
 	_production_controller.update(delta)
@@ -164,6 +176,7 @@ func _process(delta: float) -> void:
 	_update_state_counters()
 	_visibility_controller.update()
 	_update_rally_line()
+	_update_region_control(delta)
 
 func _unhandled_input(event: InputEvent) -> void:
 	# Handle battalion placement mode
@@ -462,7 +475,7 @@ func _spawn_starting_buildings() -> void:
 	var starting_counts := {
 		"barracks": {"p1": 0, "p2": 1},
 		"factory": {"p1": 0, "p2": 1},
-		"airfield": {"p1": 0, "p2": 0},
+		"airfield": {"p1": 0, "p2": 1},
 		"supply": {"p1": 0, "p2": 1},
 	}
 	for build_id in starting_counts:
@@ -643,10 +656,16 @@ func _load_map_data(path: String) -> void:
 		push_error("GameController: Invalid JSON in %s" % path)
 		return
 	var data: Dictionary = parsed
+	_load_map_size(data)
 	_load_start_positions(data)
 	_load_build_zones(data)
 	_load_rally_targets(data)
 	_load_resource_nodes(data)
+
+func _load_map_size(data: Dictionary) -> void:
+	var size_data: Dictionary = data.get("size", {})
+	_map_size.x = float(size_data.get("width", 6144))
+	_map_size.y = float(size_data.get("height", 6144))
 
 func _load_start_positions(data: Dictionary) -> void:
 	var starts: Array = data.get("start_positions", [])
@@ -708,6 +727,118 @@ func _load_resource_nodes(data: Dictionary) -> void:
 		})
 		_supply_remaining += amount
 	GameState.total_supply_remaining = _supply_remaining
+
+# =============================================================================
+# REGION CONTROL SYSTEM
+# =============================================================================
+
+func _init_region_system() -> void:
+	if _region_controller == null:
+		push_error("GameController: Region controller not initialized")
+		return
+
+	# Initialize region grid with map size
+	_region_controller.initialize(_map_size.x, _map_size.y)
+
+	# Create the 3D visual for the region grid
+	_create_region_grid_visual()
+
+	# Debug: print region grid
+	_region_controller.debug_print_grid()
+
+	print("[GameController] Region system initialized")
+
+func _create_region_grid_visual() -> void:
+	# Find the World3D node to add the visual to
+	var world_3d := _find_world_3d()
+	if world_3d == null:
+		push_warning("GameController: Could not find World3D node for region grid visual")
+		return
+
+	# Create the region grid visual
+	_region_grid_visual = RegionGridVisual.new()
+	_region_grid_visual.name = "RegionGridVisual"
+	_region_grid_visual.configure(_region_controller)
+
+	# Add to the 3D world
+	world_3d.add_child(_region_grid_visual)
+
+	# Initialize after adding to tree
+	_region_grid_visual.initialize()
+
+	print("[GameController] Region grid visual created")
+
+func _find_world_3d() -> Node3D:
+	# The scene structure is: Main3D -> Logic2D (main.tscn) -> GameController
+	# World3D is a sibling of Logic2D under Main3D
+	# Path from GameController: ../../World3D
+
+	# Direct path approach
+	var world_3d := get_node_or_null("../../World3D")
+	if world_3d != null and world_3d is Node3D:
+		return world_3d as Node3D
+
+	# Fallback: navigate via parents
+	var parent := get_parent()  # Logic2D (main.tscn root)
+	if parent == null:
+		return null
+
+	var main_3d := parent.get_parent()  # Main3D
+	if main_3d == null:
+		return null
+
+	world_3d = main_3d.get_node_or_null("World3D")
+	if world_3d != null:
+		return world_3d as Node3D
+
+	# Final fallback: search entire tree for a Node3D named World3D
+	var root := get_tree().root
+	return _find_node_recursive(root, "World3D") as Node3D
+
+func _find_node_recursive(node: Node, target_name: String) -> Node:
+	if node.name == target_name:
+		return node
+	for child in node.get_children():
+		var found := _find_node_recursive(child, target_name)
+		if found != null:
+			return found
+	return null
+
+func _update_region_control(delta: float) -> void:
+	if _region_controller == null:
+		return
+
+	# Update region presence and control states
+	_region_controller.update(delta)
+
+	# Apply income from controlled regions
+	var p1_region_income := _region_controller.get_income_for_team("p1")
+	var p2_region_income := _region_controller.get_income_for_team("p2")
+
+	# Accumulate fractional income, only add whole credits
+	_region_income_accum_p1 += p1_region_income * delta
+	_region_income_accum_p2 += p2_region_income * delta
+
+	# Add whole credits when accumulator >= 1
+	if _region_income_accum_p1 >= 1.0:
+		var whole := int(_region_income_accum_p1)
+		_p1.add_credits(whole)
+		_region_income_accum_p1 -= whole
+
+	if _region_income_accum_p2 >= 1.0:
+		var whole := int(_region_income_accum_p2)
+		_p2.add_credits(whole)
+		_region_income_accum_p2 -= whole
+
+	# Update GameState for UI display
+	GameState.p1_regions_controlled = _region_controller.get_controlled_region_count("p1")
+	GameState.p2_regions_controlled = _region_controller.get_controlled_region_count("p2")
+	GameState.regions_contested = _region_controller.get_contested_region_count()
+	GameState.p1_region_income = p1_region_income
+	GameState.p2_region_income = p2_region_income
+
+func get_region_controller() -> RegionController:
+	return _region_controller
 
 # =============================================================================
 # RALLY LINE 3D

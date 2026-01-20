@@ -34,7 +34,19 @@ var _airfield_panel: VBoxContainer
 var _airfield_name_label: Label
 var _airfield_f35_button: Button
 var _airfield_uav_button: TextureButton
+var _airfield_command_button: Button
 var _selected_airfield: Building
+
+# Airforce Command UI
+var _airforce_panel: VBoxContainer
+var _airforce_title_label: Label
+var _airforce_aircraft_count_label: Label
+var _airforce_status_label: Label
+var _airforce_fuel_label: Label
+var _airforce_defend_button: Button
+var _airforce_superiority_button: Button
+var _airforce_back_button: Button
+var _airforce_mode_active := false  # True when showing airforce panel instead of airfield panel
 var _himars_button: TextureButton
 var _factory_himars_button: TextureButton
 var _bombardment_panel: VBoxContainer
@@ -151,6 +163,8 @@ func _process(_delta: float) -> void:
 		_update_factory_panel()
 	if _airfield_panel != null:
 		_update_airfield_panel()
+	if _airforce_panel != null:
+		_update_airforce_panel()
 	if _bombardment_panel != null:
 		_update_bombardment_panel()
 
@@ -513,6 +527,62 @@ func _build_ui() -> void:
 	_airfield_uav_button.mouse_exited.connect(_hide_tooltip)
 	_airfield_panel.add_child(uav_container)
 
+	# Airforce Command Button
+	_airfield_command_button = Button.new()
+	_airfield_command_button.text = "AIRFORCE COMMAND"
+	_airfield_command_button.pressed.connect(_on_airforce_command_pressed)
+	_airfield_panel.add_child(_airfield_command_button)
+
+	# ========== AIRFORCE COMMAND PANEL ==========
+	_airforce_panel = VBoxContainer.new()
+	_airforce_panel.visible = false
+	_airforce_panel.add_theme_constant_override("separation", 6)
+	_airforce_panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	bottom_hbox.add_child(_airforce_panel)
+
+	_airforce_title_label = Label.new()
+	_airforce_title_label.text = "Airforce Command"
+	_airforce_panel.add_child(_airforce_title_label)
+
+	_airforce_aircraft_count_label = Label.new()
+	_airforce_aircraft_count_label.text = "Aircraft: 0"
+	_airforce_panel.add_child(_airforce_aircraft_count_label)
+
+	_airforce_status_label = Label.new()
+	_airforce_status_label.text = "Ready: 0 | Flying: 0 | Refueling: 0"
+	_airforce_panel.add_child(_airforce_status_label)
+
+	_airforce_fuel_label = Label.new()
+	_airforce_fuel_label.text = "Avg Fuel: --"
+	_airforce_panel.add_child(_airforce_fuel_label)
+
+	var patrol_mode_label := Label.new()
+	patrol_mode_label.text = "Patrol Mode:"
+	_airforce_panel.add_child(patrol_mode_label)
+
+	var patrol_buttons_hbox := HBoxContainer.new()
+	patrol_buttons_hbox.add_theme_constant_override("separation", 8)
+	_airforce_panel.add_child(patrol_buttons_hbox)
+
+	_airforce_defend_button = Button.new()
+	_airforce_defend_button.text = "Defend Base"
+	_airforce_defend_button.toggle_mode = true
+	_airforce_defend_button.tooltip_text = "Aircraft patrol close to base, conserving fuel.\nProvides air dominance near friendly territory."
+	_airforce_defend_button.pressed.connect(_on_patrol_defend_pressed)
+	patrol_buttons_hbox.add_child(_airforce_defend_button)
+
+	_airforce_superiority_button = Button.new()
+	_airforce_superiority_button.text = "Air Superiority"
+	_airforce_superiority_button.toggle_mode = true
+	_airforce_superiority_button.tooltip_text = "Aircraft push forward into contested territory.\nConsumes more fuel but extends air dominance further."
+	_airforce_superiority_button.pressed.connect(_on_patrol_superiority_pressed)
+	patrol_buttons_hbox.add_child(_airforce_superiority_button)
+
+	_airforce_back_button = Button.new()
+	_airforce_back_button.text = "< Back"
+	_airforce_back_button.pressed.connect(_on_airforce_back_pressed)
+	_airforce_panel.add_child(_airforce_back_button)
+
 	# Bombardment Panel
 	_bombardment_panel = VBoxContainer.new()
 	_bombardment_panel.visible = false
@@ -721,22 +791,28 @@ func _on_building_selected(building: Building) -> void:
 		_selected_barracks = null
 		_selected_factory = null
 		_selected_airfield = null
+		_airforce_mode_active = false
 		if _barracks_panel != null:
 			_barracks_panel.visible = false
 		if _factory_panel != null:
 			_factory_panel.visible = false
 		if _airfield_panel != null:
 			_airfield_panel.visible = false
+		if _airforce_panel != null:
+			_airforce_panel.visible = false
 		return
 	_selected_barracks = null
 	_selected_factory = null
 	_selected_airfield = null
+	_airforce_mode_active = false
 	if _barracks_panel != null:
 		_barracks_panel.visible = false
 	if _factory_panel != null:
 		_factory_panel.visible = false
 	if _airfield_panel != null:
 		_airfield_panel.visible = false
+	if _airforce_panel != null:
+		_airforce_panel.visible = false
 	if building.build_id == "barracks":
 		_selected_barracks = building
 		if _barracks_panel != null:
@@ -973,3 +1049,125 @@ func _update_battalion_selected_panel() -> void:
 
 	if _battalion_withdraw_button != null:
 		_battalion_withdraw_button.disabled = (_selected_battalion.state == Battalion.State.WITHDRAWING)
+
+
+# =============================================================================
+# AIRFORCE COMMAND UI HANDLERS
+# =============================================================================
+
+func _on_airforce_command_pressed() -> void:
+	if _selected_airfield == null or not is_instance_valid(_selected_airfield):
+		return
+	_airforce_mode_active = true
+	if _airfield_panel != null:
+		_airfield_panel.visible = false
+	if _airforce_panel != null:
+		_airforce_panel.visible = true
+		_update_airforce_panel()
+
+
+func _on_airforce_back_pressed() -> void:
+	_airforce_mode_active = false
+	if _airforce_panel != null:
+		_airforce_panel.visible = false
+	if _airfield_panel != null and _selected_airfield != null and is_instance_valid(_selected_airfield):
+		_airfield_panel.visible = true
+
+
+func _on_patrol_defend_pressed() -> void:
+	if _selected_airfield == null or not is_instance_valid(_selected_airfield):
+		return
+	_set_airfield_patrol_mode(AircraftBehavior.PatrolMode.DEFEND_BASE)
+
+
+func _on_patrol_superiority_pressed() -> void:
+	if _selected_airfield == null or not is_instance_valid(_selected_airfield):
+		return
+	_set_airfield_patrol_mode(AircraftBehavior.PatrolMode.AIR_SUPERIORITY)
+
+
+func _set_airfield_patrol_mode(mode: AircraftBehavior.PatrolMode) -> void:
+	if _selected_airfield == null or not is_instance_valid(_selected_airfield):
+		return
+
+	# Store patrol mode on the airfield
+	_selected_airfield.set_meta("patrol_mode", int(mode))
+
+	# Update all aircraft belonging to this airfield
+	for node in get_tree().get_nodes_in_group("units"):
+		var unit := node as Unit
+		if unit == null or unit.unit_kind != "aircraft":
+			continue
+		if unit.aircraft_home != _selected_airfield:
+			continue
+		if unit._aircraft_behavior != null:
+			unit._aircraft_behavior.set_patrol_mode(mode)
+
+	_update_airforce_panel()
+
+
+func _update_airforce_panel() -> void:
+	if _airforce_panel == null:
+		return
+
+	if not _airforce_mode_active:
+		_airforce_panel.visible = false
+		return
+
+	if _selected_airfield == null or not is_instance_valid(_selected_airfield):
+		_airforce_panel.visible = false
+		_airforce_mode_active = false
+		return
+
+	_airforce_panel.visible = true
+
+	# Gather aircraft stats for this airfield
+	var total_aircraft := 0
+	var ready_count := 0
+	var flying_count := 0
+	var refueling_count := 0
+	var total_fuel := 0.0
+	var fuel_count := 0
+
+	for node in get_tree().get_nodes_in_group("units"):
+		var unit := node as Unit
+		if unit == null or unit.unit_kind != "aircraft":
+			continue
+		if unit.aircraft_home != _selected_airfield:
+			continue
+		if unit.team_id != "p1":
+			continue
+
+		total_aircraft += 1
+		if unit._aircraft_behavior != null:
+			var behavior := unit._aircraft_behavior
+			total_fuel += behavior.get_fuel_percent()
+			fuel_count += 1
+
+			if behavior.reloading or behavior.landing_taxi:
+				refueling_count += 1
+			elif behavior.takeoff_active or behavior.altitude_factor < 0.5:
+				ready_count += 1
+			else:
+				flying_count += 1
+
+	# Update labels
+	if _airforce_aircraft_count_label != null:
+		_airforce_aircraft_count_label.text = "Aircraft: %d" % total_aircraft
+
+	if _airforce_status_label != null:
+		_airforce_status_label.text = "Ready: %d | Flying: %d | Refueling: %d" % [ready_count, flying_count, refueling_count]
+
+	if _airforce_fuel_label != null:
+		if fuel_count > 0:
+			var avg_fuel := (total_fuel / float(fuel_count)) * 100.0
+			_airforce_fuel_label.text = "Avg Fuel: %.0f%%" % avg_fuel
+		else:
+			_airforce_fuel_label.text = "Avg Fuel: --"
+
+	# Update patrol mode buttons
+	var current_mode := int(_selected_airfield.get_meta("patrol_mode", 0))
+	if _airforce_defend_button != null:
+		_airforce_defend_button.button_pressed = (current_mode == int(AircraftBehavior.PatrolMode.DEFEND_BASE))
+	if _airforce_superiority_button != null:
+		_airforce_superiority_button.button_pressed = (current_mode == int(AircraftBehavior.PatrolMode.AIR_SUPERIORITY))

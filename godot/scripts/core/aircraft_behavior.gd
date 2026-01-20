@@ -5,7 +5,16 @@ class_name AircraftBehavior
 ##
 ## Encapsulates all aircraft-specific logic extracted from unit.gd.
 ## This includes: missile firing, gun runs, landing/takeoff, reloading,
-## squad management, loitering, and retreat behavior.
+## squad management, loitering, retreat behavior, fuel management, and patrol modes.
+
+# =============================================================================
+# ENUMS
+# =============================================================================
+
+enum PatrolMode {
+	DEFEND_BASE,      # Safe patrol around home airfield
+	AIR_SUPERIORITY,  # Aggressive patrol pushing into contested territory
+}
 
 # =============================================================================
 # REFERENCES
@@ -43,6 +52,28 @@ var afterburner_active := false
 var squad_index := -1
 var squad_leader_id := 0
 
+# Fuel system
+var fuel_current := 0.0
+var fuel_max := 120.0
+var fuel_consumption_idle := 0.0
+var fuel_consumption_patrol := 1.0
+var fuel_consumption_aggressive := 2.0
+var fuel_consumption_combat := 3.0
+var fuel_rtb_threshold := 0.2       # 20% triggers RTB warning
+var fuel_critical_threshold := 0.1  # 10% forces RTB
+var fuel_refuel_rate := 20.0        # Fuel per second when refueling
+
+# Patrol system
+var patrol_mode: PatrolMode = PatrolMode.DEFEND_BASE
+var patrol_waypoints: Array[Vector2] = []
+var patrol_waypoint_index := 0
+var patrol_radius_defend := 600.0   # Radius for defend base patrol (orbit around home)
+var patrol_radius_aggressive := 2000.0  # How far to push forward in air superiority
+var is_rtb_fuel := false  # Returning to base due to low fuel (not reload)
+
+# Air power rating (for dominance calculation)
+var air_power := 2.0  # Default, can be modified per aircraft type
+
 # =============================================================================
 # INITIALIZATION
 # =============================================================================
@@ -70,6 +101,36 @@ func initialize() -> void:
 		altitude_factor = 1.0
 	_register_squad()
 
+	# Initialize fuel system
+	_init_fuel_for_aircraft_type()
+	fuel_current = fuel_max  # Start with full fuel
+
+	# Initialize patrol system - get patrol mode from airfield
+	_sync_patrol_mode_from_airfield()
+	_generate_patrol_waypoints()
+
+func _init_fuel_for_aircraft_type() -> void:
+	# Set fuel capacity and air power based on aircraft type
+	match unit.unit_type:
+		"f16":
+			fuel_max = 120.0
+			air_power = 2.0
+		"gripen":
+			fuel_max = 100.0  # Shorter range, faster refuel
+			air_power = 2.2
+		"f22":
+			fuel_max = 180.0  # Longer range
+			air_power = 3.0
+		"f35":
+			fuel_max = 160.0
+			air_power = 2.8
+		"uav":
+			fuel_max = 200.0  # Long endurance
+			air_power = 0.5   # Low combat power, mainly recon
+		_:
+			fuel_max = 120.0
+			air_power = 2.0
+
 func cleanup() -> void:
 	_unregister_squad()
 	_release_landing_slot()
@@ -83,6 +144,13 @@ func cleanup() -> void:
 func update(delta: float) -> void:
 	missile_timer = maxf(0.0, missile_timer - delta)
 	_refresh_squad_state()
+
+	# Update fuel consumption
+	_update_fuel(delta)
+
+	# Check for fuel-based RTB
+	if _check_fuel_rtb():
+		return
 
 	# UAVs don't engage in combat
 	if unit.is_uav:
@@ -558,6 +626,8 @@ func _fire_missile(target: Node2D) -> void:
 	missile.source_kind = "aircraft"
 	missile.source_altitude = altitude_factor
 	missile.target = target
+	missile.interceptable = true  # Can be intercepted by Patriot systems
+	missile.intercept_difficulty = 1.2  # Moderately hard to intercept (fast, maneuverable)
 	missile.global_position = unit.global_position + (unit._facing * (unit.body_radius + 6.0))
 	missile.set_origin(unit.global_position)
 	if unit.missile_visual_path != "":
@@ -623,6 +693,22 @@ func _move_toward_loiter(delta: float) -> void:
 	_move_toward_orbit(unit.aircraft_loiter_pos, unit.aircraft_loiter_radius, delta)
 
 func _move_toward_perimeter(delta: float) -> void:
+	# Use patrol-mode based movement instead of vision perimeter
+	var patrol_center := get_patrol_center()
+	var patrol_rad := get_patrol_radius()
+	var home := get_home_pos()
+
+	if patrol_center != Vector2.ZERO and patrol_rad > 0.0:
+		# Debug: show the difference between patrol center and home
+		var offset := patrol_center - home
+		if offset.length() > 100.0:
+			# Only print occasionally to reduce spam
+			if Engine.get_process_frames() % 300 == 0:
+				print("[Aircraft] ", unit.name, " patrol offset from home: ", offset.length(), " mode: ", patrol_mode)
+		_move_toward_orbit(patrol_center, patrol_rad, delta)
+		return
+
+	# Fallback to vision perimeter if no patrol center
 	var perimeter := _get_vision_perimeter()
 	if not perimeter.is_empty():
 		var center_value = perimeter.get("center", Vector2.ZERO)
@@ -1192,3 +1278,184 @@ func _get_vision_perimeter() -> Dictionary:
 		"center": center,
 		"radius": max_radius,
 	}
+
+# =============================================================================
+# FUEL SYSTEM
+# =============================================================================
+
+func _update_fuel(delta: float) -> void:
+	# Don't consume fuel when on the ground
+	if _is_on_ground():
+		_refuel(delta)
+		return
+
+	# Determine fuel consumption rate based on current activity
+	var consumption := fuel_consumption_patrol
+
+	if patrol_mode == PatrolMode.AIR_SUPERIORITY:
+		consumption = fuel_consumption_aggressive
+
+	if retreat_timer > 0.0 or missile_lock_timer > 0.0:
+		consumption = fuel_consumption_combat
+
+	if afterburner_active:
+		consumption *= 1.5
+
+	fuel_current = maxf(0.0, fuel_current - consumption * delta)
+
+func _refuel(delta: float) -> void:
+	if fuel_current >= fuel_max:
+		return
+	fuel_current = minf(fuel_max, fuel_current + fuel_refuel_rate * delta)
+
+	# Clear RTB fuel flag when fully refueled
+	if fuel_current >= fuel_max:
+		is_rtb_fuel = false
+
+func _is_on_ground() -> bool:
+	return altitude_factor < 0.1 or landing_taxi or (reloading and landing_on_path)
+
+func _check_fuel_rtb() -> bool:
+	# Don't trigger fuel RTB if already reloading
+	if reloading:
+		return false
+
+	var fuel_percent := fuel_current / fuel_max
+
+	# Critical fuel - force RTB immediately
+	if fuel_percent <= fuel_critical_threshold:
+		if not is_rtb_fuel:
+			is_rtb_fuel = true
+			force_reload = true
+			print("[Aircraft] Critical fuel! Forcing RTB for ", unit.name)
+		return false  # Let normal reload logic handle it
+
+	# Low fuel warning - trigger RTB
+	if fuel_percent <= fuel_rtb_threshold and not is_rtb_fuel:
+		is_rtb_fuel = true
+		force_reload = true
+		print("[Aircraft] Low fuel, returning to base: ", unit.name)
+
+	return false
+
+func get_fuel_percent() -> float:
+	if fuel_max <= 0.0:
+		return 0.0
+	return fuel_current / fuel_max
+
+func is_fuel_low() -> bool:
+	return get_fuel_percent() <= fuel_rtb_threshold
+
+func is_fuel_critical() -> bool:
+	return get_fuel_percent() <= fuel_critical_threshold
+
+# =============================================================================
+# PATROL SYSTEM
+# =============================================================================
+
+func set_patrol_mode(mode: PatrolMode) -> void:
+	if patrol_mode == mode:
+		return
+	patrol_mode = mode
+	_generate_patrol_waypoints()
+	print("[Aircraft] Patrol mode changed to: ", "DEFEND_BASE" if mode == PatrolMode.DEFEND_BASE else "AIR_SUPERIORITY")
+
+func _sync_patrol_mode_from_airfield() -> void:
+	if unit.aircraft_home == null or not is_instance_valid(unit.aircraft_home):
+		return
+	var mode_value: Variant = unit.aircraft_home.get_meta("patrol_mode", 0)
+	var mode_int := int(mode_value) if mode_value is int or mode_value is float else 0
+	patrol_mode = PatrolMode.DEFEND_BASE if mode_int == 0 else PatrolMode.AIR_SUPERIORITY
+
+func _generate_patrol_waypoints() -> void:
+	patrol_waypoints.clear()
+	patrol_waypoint_index = 0
+
+	var home := get_home_pos()
+	if home == Vector2.ZERO:
+		return
+
+	match patrol_mode:
+		PatrolMode.DEFEND_BASE:
+			_generate_defend_patrol(home)
+		PatrolMode.AIR_SUPERIORITY:
+			_generate_aggressive_patrol(home)
+
+func _generate_defend_patrol(home: Vector2) -> void:
+	# Circular patrol around home airfield
+	var radius := patrol_radius_defend
+	for i in range(4):
+		var angle := float(i) * TAU / 4.0
+		patrol_waypoints.append(home + Vector2(cos(angle), sin(angle)) * radius)
+
+func _generate_aggressive_patrol(home: Vector2) -> void:
+	# Push forward toward enemy territory
+	var forward_dir := _get_enemy_direction()
+	var base_offset := forward_dir * patrol_radius_aggressive
+	var lateral := forward_dir.rotated(PI / 2.0) * (patrol_radius_defend * 0.6)
+
+	patrol_waypoints.append(home + base_offset + lateral)
+	patrol_waypoints.append(home + base_offset * 1.3)
+	patrol_waypoints.append(home + base_offset - lateral)
+	patrol_waypoints.append(home + base_offset * 0.5)
+
+func _get_enemy_direction() -> Vector2:
+	# Get direction toward enemy HQ or center of map
+	if unit.enemy_hq != null and is_instance_valid(unit.enemy_hq):
+		var home := get_home_pos()
+		return (unit.enemy_hq.global_position - home).normalized()
+
+	# Fallback: P1 pushes right, P2 pushes left
+	if unit.team_id == "p1":
+		return Vector2.RIGHT
+	else:
+		return Vector2.LEFT
+
+func get_patrol_center() -> Vector2:
+	if patrol_waypoints.is_empty():
+		return get_home_pos()
+
+	var center := Vector2.ZERO
+	for wp in patrol_waypoints:
+		center += wp
+	return center / float(patrol_waypoints.size())
+
+func get_patrol_radius() -> float:
+	# For both modes, we orbit at the defend radius size
+	# AIR_SUPERIORITY just moves the center forward, not the orbit size
+	match patrol_mode:
+		PatrolMode.DEFEND_BASE:
+			return patrol_radius_defend
+		PatrolMode.AIR_SUPERIORITY:
+			# Orbit size stays similar, but center is pushed forward
+			return patrol_radius_defend * 0.8
+	return patrol_radius_defend
+
+# =============================================================================
+# AIR DOMINANCE
+# =============================================================================
+
+func get_air_power() -> float:
+	# Aircraft on the ground don't project air power
+	if _is_on_ground():
+		return 0.0
+
+	# Reduced power when low on fuel or retreating
+	var power := air_power
+	if is_fuel_low():
+		power *= 0.5
+	if retreat_timer > 0.0:
+		power *= 0.7
+	if reloading:
+		power = 0.0
+
+	return power
+
+func get_influence_radius() -> float:
+	# How far this aircraft projects air dominance
+	match patrol_mode:
+		PatrolMode.DEFEND_BASE:
+			return patrol_radius_defend * 1.2
+		PatrolMode.AIR_SUPERIORITY:
+			return patrol_radius_aggressive * 0.8
+	return 1000.0
