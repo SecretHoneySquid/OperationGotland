@@ -10,7 +10,7 @@ class_name GameBalance
 # UNIT STATS - Infantry
 # =============================================================================
 
-const INFANTRY_SPEED := 90.0
+const INFANTRY_SPEED := 45.0
 const INFANTRY_MAX_HP := 30.0
 const INFANTRY_DAMAGE := 6.0
 const INFANTRY_ATTACK_RANGE := 26.0
@@ -69,7 +69,7 @@ const HIMARS_RELOAD_TIME := 10.0  # 10 seconds reload
 # UNIT STATS - Aircraft
 # =============================================================================
 
-const AIRCRAFT_SPEED := 125.0
+const AIRCRAFT_SPEED := 93.75
 const AIRCRAFT_MAX_HP := 70.0
 const AIRCRAFT_BODY_RADIUS := 12.0
 const AIRCRAFT_VISION_RADIUS := 560.0  # Doubled fog sight
@@ -101,8 +101,8 @@ const AIRCRAFT_MISSILE_LIFETIME := 24.0
 ## Aircraft reload and loitering
 const AIRCRAFT_RELOAD_TIME := 7.0
 const AIRCRAFT_RELOAD_RADIUS := 18.0
-const AIRCRAFT_LOITER_RADIUS := 120.0
-const AIRCRAFT_LOITER_ORBIT_SPEED := 0.4
+const AIRCRAFT_LOITER_RADIUS := 90.0
+const AIRCRAFT_LOITER_ORBIT_SPEED := 0.3
 const AIRCRAFT_ORBIT_RADIUS_SCALE := 10.0
 const AIRCRAFT_ORBIT_WOBBLE_RATIO := 0.08
 const AIRCRAFT_ORBIT_WOBBLE_SPEED := 3.0
@@ -210,3 +210,32 @@ const STARTING_P1_FACTORY := 0
 const STARTING_P2_FACTORY := 1
 const STARTING_P1_AIRFIELD := 0
 const STARTING_P2_AIRFIELD := 0
+
+# =============================================================================
+# BATTALIONS
+# =============================================================================
+
+## Battalion costs (8-man squads)
+const ASSAULT_BATTALION_COST := 150
+const DEFENSE_BATTALION_COST := 120
+const CONTROL_BATTALION_COST := 100
+const AIR_DEFENSE_BATTALION_COST := 180
+
+## Battalion size
+const BATTALION_ACTIVE_SIZE := 8
+const BATTALION_RESERVE_SIZE := 8
+
+## Battalion formation
+const BATTALION_FORMATION_SPACING := 50.0  # Base spacing between units (modern dispersed warfare)
+const BATTALION_ASSAULT_DEPTH := 3  # Rows in assault formation
+const BATTALION_DEFENSE_WIDTH := 1.8  # Width multiplier for defense
+const BATTALION_CONTROL_SPREAD := 400.0  # Radius for control patrol area
+
+## Reinforcement
+const BATTALION_REINFORCE_DELAY := 3.0  # Seconds between reserve spawns
+
+## Withdraw
+const BATTALION_WITHDRAW_SAFE_DISTANCE := 300.0  # Distance from enemies to stop retreating
+
+## AI behavior
+const AI_BATTALION_CHECK_INTERVAL := 5.0  # How often AI considers buying battalions

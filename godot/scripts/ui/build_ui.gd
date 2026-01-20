@@ -4,6 +4,7 @@ extends CanvasLayer
 @export var game_controller_path := NodePath("../GameController")
 @export var selection_controller_path := NodePath("../SelectionController")
 @export var bombardment_controller_path := NodePath("../BombardmentController")
+@export var battalion_controller_path := NodePath("../BattalionController")
 
 var _controller: BuildController
 var _game_controller: GameController
@@ -20,12 +21,7 @@ var _queue_button: Button
 var _rally_button: TextureButton
 var _barracks_panel: VBoxContainer
 var _barracks_name_label: Label
-var _barracks_type: OptionButton
-var _barracks_wait: CheckButton
-var _barracks_type_ids: Array[String] = []
-var _barracks_type_index := {}
 var _selected_barracks: Building
-var _barracks_updating := false
 var _factory_panel: VBoxContainer
 var _factory_name_label: Label
 var _factory_type: OptionButton
@@ -51,11 +47,23 @@ var _tooltip_desc: Label
 var _tooltip_strong: Label
 var _tooltip_weak: Label
 
+# Battalion UI
+var _battalion_controller: BattalionController
+var _battalion_buttons: Array[Button] = []
+var _battalion_selected_panel: VBoxContainer
+var _battalion_name_label: Label
+var _battalion_strength_label: Label
+var _battalion_state_label: Label
+var _battalion_withdraw_button: Button
+var _selected_battalion: Battalion = null
+var _battalion_placement_preview: Node2D = null
+
 func _ready() -> void:
 	_controller = get_node_or_null(build_controller_path) as BuildController
 	_game_controller = get_node_or_null(game_controller_path) as GameController
 	_selection_controller = get_node_or_null(selection_controller_path) as SelectionController
 	_bombardment_controller = get_node_or_null(bombardment_controller_path) as BombardmentController
+	_battalion_controller = get_node_or_null(battalion_controller_path) as BattalionController
 	_build_ui()
 	if _controller != null:
 		_controller.build_mode_changed.connect(_on_build_mode_changed)
@@ -63,6 +71,10 @@ func _ready() -> void:
 	if _selection_controller != null:
 		_selection_controller.building_selected.connect(_on_building_selected)
 		_selection_controller.units_selected.connect(_on_units_selected)
+	if _battalion_controller != null:
+		_battalion_controller.battalion_selected.connect(_on_battalion_selected)
+		_battalion_controller.placement_started.connect(_on_battalion_placement_started)
+		_battalion_controller.placement_cancelled.connect(_on_battalion_placement_cancelled)
 
 func _process(_delta: float) -> void:
 	if _credits_label != null:
@@ -402,7 +414,7 @@ func _build_ui() -> void:
 
 	_setup_factory_options()
 
-	# Barracks Panel
+	# Barracks Panel - now contains battalion buttons
 	_barracks_panel = VBoxContainer.new()
 	_barracks_panel.visible = false
 	_barracks_panel.add_theme_constant_override("separation", 6)
@@ -410,35 +422,36 @@ func _build_ui() -> void:
 	bottom_hbox.add_child(_barracks_panel)
 
 	var barracks_title := Label.new()
-	barracks_title.text = "Barracks Control"
+	barracks_title.text = "Barracks - Battalions"
 	_barracks_panel.add_child(barracks_title)
 
 	_barracks_name_label = Label.new()
 	_barracks_name_label.text = "No barracks selected"
 	_barracks_panel.add_child(_barracks_name_label)
 
-	_barracks_type = OptionButton.new()
-	_barracks_panel.add_child(_barracks_type)
-	_barracks_type.item_selected.connect(func(index: int):
-		if _barracks_updating:
-			return
-		if _selected_barracks == null or not is_instance_valid(_selected_barracks):
-			return
-		if index < 0 or index >= _barracks_type_ids.size():
-			return
-		_selected_barracks.production_type = _barracks_type_ids[index]
-	)
+	# Battalion buttons (1-4) inside barracks panel
+	var battalion_buttons_hbox := HBoxContainer.new()
+	battalion_buttons_hbox.add_theme_constant_override("separation", 8)
+	_barracks_panel.add_child(battalion_buttons_hbox)
 
-	_barracks_wait = CheckButton.new()
-	_barracks_wait.text = "Wait At Base Edge"
-	_barracks_wait.toggled.connect(func(pressed: bool):
-		if _selected_barracks == null or not is_instance_valid(_selected_barracks):
-			return
-		_selected_barracks.wait_mode = pressed
-	)
-	_barracks_panel.add_child(_barracks_wait)
+	var battalion_types := [
+		{"type": Battalion.Type.ASSAULT, "name": "Assault", "desc": "Advances aggressively, takes ground"},
+		{"type": Battalion.Type.DEFENSE, "name": "Defense", "desc": "Holds position, digs in"},
+		{"type": Battalion.Type.CONTROL, "name": "Control", "desc": "Spreads out, patrols area"},
+		{"type": Battalion.Type.AIR_DEFENSE, "name": "Air Defense", "desc": "Provides AA coverage"}
+	]
 
-	_setup_barracks_options()
+	for i in range(battalion_types.size()):
+		var btype: Dictionary = battalion_types[i]
+		var btn := Button.new()
+		btn.text = str(i + 1)
+		btn.custom_minimum_size = Vector2(50, 50)
+		var type_val: Battalion.Type = btype["type"]
+		var cost := Battalion.get_cost_for_type(type_val)
+		btn.tooltip_text = "%s Battalion ($%d)\n%s" % [btype["name"], cost, btype["desc"]]
+		btn.pressed.connect(_on_battalion_button_pressed.bind(type_val))
+		battalion_buttons_hbox.add_child(btn)
+		_battalion_buttons.append(btn)
 
 	# Airfield Panel
 	_airfield_panel = VBoxContainer.new()
@@ -543,6 +556,36 @@ func _build_ui() -> void:
 	)
 	_bombardment_panel.add_child(_cancel_bombardment_button)
 
+	# ========== BATTALION PANELS ==========
+
+	# Battalion Selected Panel (shown when battalion selected)
+	_battalion_selected_panel = VBoxContainer.new()
+	_battalion_selected_panel.visible = false
+	_battalion_selected_panel.add_theme_constant_override("separation", 6)
+	_battalion_selected_panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	bottom_hbox.add_child(_battalion_selected_panel)
+
+	var battalion_selected_title := Label.new()
+	battalion_selected_title.text = "Selected Battalion"
+	_battalion_selected_panel.add_child(battalion_selected_title)
+
+	_battalion_name_label = Label.new()
+	_battalion_name_label.text = "No battalion selected"
+	_battalion_selected_panel.add_child(_battalion_name_label)
+
+	_battalion_strength_label = Label.new()
+	_battalion_strength_label.text = "Strength: --"
+	_battalion_selected_panel.add_child(_battalion_strength_label)
+
+	_battalion_state_label = Label.new()
+	_battalion_state_label.text = "Status: --"
+	_battalion_selected_panel.add_child(_battalion_state_label)
+
+	_battalion_withdraw_button = Button.new()
+	_battalion_withdraw_button.text = "Withdraw"
+	_battalion_withdraw_button.pressed.connect(_on_battalion_withdraw_pressed)
+	_battalion_selected_panel.add_child(_battalion_withdraw_button)
+
 	# Minimap - top right corner
 	var minimap_script := load("res://scripts/ui/minimap.gd")
 	if minimap_script != null:
@@ -646,33 +689,6 @@ func _on_build_mode_changed(active_id: String) -> void:
 	else:
 		_status_label.text = "Placement: %s" % active_id
 
-func _setup_barracks_options() -> void:
-	if _barracks_type == null:
-		return
-	_barracks_type.clear()
-	_barracks_type_ids.clear()
-	_barracks_type_index.clear()
-	var options: Array = []
-	if _game_controller != null:
-		options = _game_controller.get_infantry_type_options()
-	if options.is_empty():
-		options = [
-			{"id": "mixed", "name": "Mixed"},
-			{"id": "rifle", "name": "Rifle"},
-			{"id": "sniper", "name": "Sniper"},
-			{"id": "rocket", "name": "Rocket"},
-		]
-	var index := 0
-	for option in options:
-		if typeof(option) != TYPE_DICTIONARY:
-			continue
-		var type_id := str(option.get("id", "mixed"))
-		var name := str(option.get("name", type_id))
-		_barracks_type.add_item(name)
-		_barracks_type_ids.append(type_id)
-		_barracks_type_index[type_id] = index
-		index += 1
-
 func _setup_factory_options() -> void:
 	if _factory_type == null:
 		return
@@ -749,14 +765,8 @@ func _update_barracks_panel() -> void:
 			_selected_barracks.global_position.x,
 			_selected_barracks.global_position.y
 		]
-	if _barracks_type != null:
-		var type_id := _selected_barracks.production_type
-		var index := int(_barracks_type_index.get(type_id, 0))
-		_barracks_updating = true
-		_barracks_type.select(index)
-		_barracks_updating = false
-	if _barracks_wait != null:
-		_barracks_wait.button_pressed = _selected_barracks.wait_mode
+	# Update battalion button states based on credits
+	_update_battalion_buttons()
 
 func _update_factory_panel() -> void:
 	if _factory_panel == null:
@@ -865,3 +875,101 @@ func update_selected_units(units: Array[Unit]) -> void:
 
 func _on_units_selected(units: Array[Unit]) -> void:
 	update_selected_units(units)
+
+
+# =============================================================================
+# BATTALION UI HANDLERS
+# =============================================================================
+
+func _on_battalion_button_pressed(type: Battalion.Type) -> void:
+	print("Battalion button pressed: ", type)
+	# Lazy lookup for battalion controller (created dynamically by GameController)
+	if _battalion_controller == null:
+		var game_ctrl := get_node_or_null(game_controller_path) as GameController
+		if game_ctrl != null:
+			_battalion_controller = game_ctrl.get_node_or_null("BattalionController") as BattalionController
+			print("  Found battalion controller via GameController: ", _battalion_controller)
+			# Also connect signals we missed at _ready() time
+			if _battalion_controller != null:
+				_battalion_controller.battalion_selected.connect(_on_battalion_selected)
+				_battalion_controller.placement_started.connect(_on_battalion_placement_started)
+				_battalion_controller.placement_cancelled.connect(_on_battalion_placement_cancelled)
+	if _battalion_controller == null:
+		print("  ERROR: _battalion_controller is null (still couldn't find it)")
+		return
+	if _selected_barracks == null or not is_instance_valid(_selected_barracks):
+		print("  ERROR: _selected_barracks is null or invalid")
+		return
+	# Check if player can afford it
+	var cost := Battalion.get_cost_for_type(type)
+	if GameState.p1_credits < cost:
+		print("  ERROR: Not enough credits. Have: ", GameState.p1_credits, " Need: ", cost)
+		return
+	# Start placement mode - player clicks where they want the battalion to go
+	# Pass the selected barracks so we know where to spawn from
+	print("  Starting placement for type ", type, " with barracks at ", _selected_barracks.global_position)
+	var success := _battalion_controller.start_placement("p1", type, _selected_barracks)
+	print("  start_placement returned: ", success)
+
+
+func _update_battalion_buttons() -> void:
+	var costs := [
+		GameBalance.ASSAULT_BATTALION_COST,
+		GameBalance.DEFENSE_BATTALION_COST,
+		GameBalance.CONTROL_BATTALION_COST,
+		GameBalance.AIR_DEFENSE_BATTALION_COST
+	]
+	for i in range(_battalion_buttons.size()):
+		if i < costs.size():
+			_battalion_buttons[i].disabled = GameState.p1_credits < costs[i]
+
+
+func _on_battalion_selected(battalion: Battalion) -> void:
+	_selected_battalion = battalion
+	_update_battalion_selected_panel()
+
+
+func _on_battalion_placement_started(_type: Battalion.Type) -> void:
+	# Could show placement preview or change cursor here
+	if _status_label != null:
+		_status_label.text = "Placing Battalion..."
+
+
+func _on_battalion_placement_cancelled() -> void:
+	if _status_label != null:
+		_status_label.text = "Placement: none"
+
+
+func _on_battalion_withdraw_pressed() -> void:
+	if _selected_battalion == null or not is_instance_valid(_selected_battalion):
+		return
+	_selected_battalion.withdraw()
+	_update_battalion_selected_panel()
+
+
+func _update_battalion_selected_panel() -> void:
+	if _battalion_selected_panel == null:
+		return
+
+	if _selected_battalion == null or not is_instance_valid(_selected_battalion):
+		_battalion_selected_panel.visible = false
+		return
+
+	_battalion_selected_panel.visible = true
+
+	if _battalion_name_label != null:
+		_battalion_name_label.text = _selected_battalion.get_battalion_name()
+
+	if _battalion_strength_label != null:
+		var strength := _selected_battalion.get_strength()
+		_battalion_strength_label.text = "Strength: %d/%d (%d reserves)" % [
+			strength["active"],
+			strength["max"],
+			strength["reserves"]
+		]
+
+	if _battalion_state_label != null:
+		_battalion_state_label.text = "Status: %s" % _selected_battalion.get_state_name()
+
+	if _battalion_withdraw_button != null:
+		_battalion_withdraw_button.disabled = (_selected_battalion.state == Battalion.State.WITHDRAWING)

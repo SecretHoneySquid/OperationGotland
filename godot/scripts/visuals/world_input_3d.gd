@@ -64,3 +64,14 @@ func screen_to_world(screen_pos: Vector2) -> Vector2:
 	var pos := Vector2(hit.x, hit.z)
 	_last_valid = pos
 	return pos
+
+
+func world_to_screen(world_pos: Vector2) -> Vector2:
+	if _camera == null:
+		return Vector2.ZERO
+	# Convert 2D world position (x, z) to 3D position on ground plane
+	var world_3d := Vector3(world_pos.x, ground_height, world_pos.y)
+	# Project to screen
+	if not _camera.is_position_behind(world_3d):
+		return _camera.unproject_position(world_3d)
+	return Vector2(-1000, -1000)  # Off screen

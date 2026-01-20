@@ -1348,8 +1348,19 @@ func _apply_unit_separation(delta: float) -> void:
 	if unit_kind == "aircraft":
 		return  # Aircraft handle their own spacing
 
+	# Battalion units near their formation position should have reduced separation
+	# to prevent oscillation between separation push and formation pull
 	var separation_radius := body_radius * 2.2  # Start separating when units get close
 	var separation_strength := 15.0  # Gentle push force
+
+	if has_meta("battalion"):
+		var formation_target: Vector2 = get_meta("formation_target", global_position)
+		var dist_to_formation := global_position.distance_to(formation_target)
+		if dist_to_formation < 20.0:
+			# When near formation position, only separate if actually overlapping
+			separation_radius = body_radius * 1.2
+			separation_strength = 5.0
+
 	var separation_force := Vector2.ZERO
 	var nearby_count := 0
 
@@ -1871,6 +1882,10 @@ func _resolve_target() -> Vector2:
 	if is_himars and not _reached_rally and rally_target != Vector2.ZERO:
 		return rally_target
 
+	# Battalion mode: use formation target instead of enemy HQ
+	if has_meta("battalion"):
+		return _resolve_battalion_target()
+
 	if _chase_target != null and is_instance_valid(_chase_target):
 		target = _chase_target.global_position
 	elif _structure_target != null and is_instance_valid(_structure_target):
@@ -1887,6 +1902,48 @@ func _resolve_target() -> Vector2:
 	if _is_combat_active() and _combat_offset != Vector2.ZERO:
 		return target + _combat_offset
 	return target
+
+
+func _resolve_battalion_target() -> Vector2:
+	var battalion = get_meta("battalion")
+	var formation_target: Vector2 = get_meta("formation_target", global_position)
+	var battalion_type = get_meta("battalion_type", Battalion.Type.ASSAULT)
+
+	# If battalion is withdrawing, always go to formation target (retreat position)
+	if battalion != null and is_instance_valid(battalion):
+		if battalion.state == Battalion.State.WITHDRAWING:
+			return formation_target
+
+	# Check for enemies to chase (within aggro range)
+	if _chase_target != null and is_instance_valid(_chase_target):
+		var dist_to_chase := global_position.distance_to(_chase_target.global_position)
+		var dist_to_formation := global_position.distance_to(formation_target)
+
+		match battalion_type:
+			Battalion.Type.ASSAULT:
+				# Assault units chase enemies aggressively
+				if dist_to_chase < aggro_range:
+					return _chase_target.global_position
+			Battalion.Type.DEFENSE:
+				# Defense units only chase if enemy is close AND within formation area
+				if dist_to_chase < aggro_range * 0.5 and dist_to_formation < 100:
+					return _chase_target.global_position
+			Battalion.Type.CONTROL:
+				# Control units engage nearby enemies but stay spread out
+				if dist_to_chase < aggro_range * 0.7:
+					return _chase_target.global_position
+			Battalion.Type.AIR_DEFENSE:
+				# Air defense holds position, only engages very close threats
+				if dist_to_chase < aggro_range * 0.3:
+					return _chase_target.global_position
+
+	# If already close to formation position, stop moving (prevents constant micro-adjustments)
+	var dist_to_formation := global_position.distance_to(formation_target)
+	if dist_to_formation < 15.0:
+		return Vector2.ZERO
+
+	# Default: move to formation position
+	return formation_target
 
 func issue_move(target: Vector2) -> void:
 	manual_target = target

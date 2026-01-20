@@ -469,6 +469,71 @@ func _increment_building_count(team_id: String, build_id: String) -> void:
 # COLLECTOR SPAWNING
 # =============================================================================
 
+# =============================================================================
+# BATTALION UNIT SPAWNING
+# =============================================================================
+
+func spawn_battalion_unit(team_id: String, unit_type: String, spawn_pos: Vector2) -> Unit:
+	var team := get_team(team_id)
+	if team == null:
+		return null
+
+	var unit := Unit.new()
+	unit.team_id = team_id
+	unit.home_pos = team.start_pos
+
+	# Configure as infantry with specific type
+	var stats := UnitDefinitions.get_infantry_def(unit_type)
+	var range_role := str(stats.get("range_role", "short"))
+	var range_mult := UnitDefinitions.get_range_multiplier(range_role, GameBalance.INFANTRY_LONG_MULTIPLIER, GameBalance.INFANTRY_MID_MULTIPLIER)
+	var attack_range := GameBalance.INFANTRY_ATTACK_RANGE * range_mult
+
+	unit.unit_kind = "infantry"
+	unit.unit_type = unit_type
+	unit.range_role = range_role
+	unit.range_multiplier = range_mult
+	unit.prefers_vehicle = bool(stats.get("prefers_vehicle", false))
+	unit.prefers_infantry = bool(stats.get("prefers_infantry", false))
+	unit.damage_vs_infantry = float(stats.get("damage_vs_infantry", 1.0))
+	unit.damage_vs_vehicle = float(stats.get("damage_vs_vehicle", 1.0))
+	unit.damage_vs_structure = float(stats.get("damage_vs_structure", 1.0))
+	unit.speed = float(stats.get("speed", GameBalance.INFANTRY_SPEED))
+	unit.max_hp = float(stats.get("max_hp", GameBalance.INFANTRY_MAX_HP))
+	unit.attack_damage = float(stats.get("damage", GameBalance.INFANTRY_DAMAGE))
+	unit.attack_range = attack_range
+	unit.attack_cooldown = float(stats.get("cooldown", GameBalance.INFANTRY_ATTACK_COOLDOWN))
+	unit.body_radius = GameBalance.INFANTRY_BODY_RADIUS
+	unit.color = team.get_unit_color()
+	unit.aggro_range = maxf(220.0, attack_range * 1.05)
+	unit.chase_leash = maxf(320.0, attack_range * 1.1)
+	unit.structure_aggro_range = maxf(260.0, attack_range * 1.1)
+	unit.shot_width = float(stats.get("shot_width", 2.0))
+	unit.shot_lifetime = float(stats.get("shot_lifetime", 0.12))
+	var shot_color = stats.get("shot_color", Color(1.0, 1.0, 1.0, 0.75))
+	if shot_color is Color:
+		unit.shot_color = shot_color
+
+	unit.position = _offset_spawn(spawn_pos)
+	unit.visual_scene_path = VisualPaths.get_unit_visual_path("infantry")
+	unit.visual_base_radius = 8.0
+
+	# Set enemy HQ
+	var enemy_team := get_team(team.get_enemy_team_id())
+	if enemy_team != null:
+		unit.enemy_hq = enemy_team.hq
+
+	# Battalion units don't use rally - they go to formation position
+	unit.rally_target = unit.position  # Stay put until battalion tells them where to go
+
+	_units_container.add_child(unit)
+	unit_spawned.emit(unit, team_id, "infantry")
+	return unit
+
+
+# =============================================================================
+# COLLECTOR SPAWNING
+# =============================================================================
+
 func spawn_collector(team: TeamState, base_pos: Vector2) -> Collector:
 	var collector := Collector.new()
 	collector.team_id = team.team_id

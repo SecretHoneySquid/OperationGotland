@@ -1,4 +1,5 @@
+res://scripts/core/battalion_formation.gd
+res://scripts/constants/GameBalance.gd
+res://scripts/core/battalion.gd
 res://scripts/core/unit.gd
-res://scripts/core/camera_controller_3d.gd
-res://scripts/ui/build_ui.gd
-res://scripts/ui/minimap.gd
+res://scripts/visuals/visual_sync_3d.gd

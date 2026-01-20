@@ -3,11 +3,13 @@ extends Node2D
 
 signal building_selected(building: Building)
 signal units_selected(units: Array[Unit])
+signal battalion_selected(battalion: Battalion)
 
 @export var team_id := "p1"
 @export var build_controller_path := NodePath("../BuildController")
 @export var game_controller_path := NodePath("../GameController")
 @export var bombardment_controller_path := NodePath("../BombardmentController")
+@export var battalion_controller_path := NodePath("../BattalionController")
 @export var ui_block_rect := Rect2(0.0, 100.0, 280.0, 820.0)
 @export var selection_radius := 32.0
 @export var drag_threshold := 6.0
@@ -21,8 +23,10 @@ signal units_selected(units: Array[Unit])
 var _build_controller: BuildController
 var _game_controller: GameController
 var _bombardment_controller: BombardmentController
+var _battalion_controller: BattalionController
 var _selected: Array[Unit] = []
 var _selected_building: Building
+var _selected_battalion: Battalion
 var _dragging := false
 var _drag_start := Vector2.ZERO
 var _drag_end := Vector2.ZERO
@@ -36,6 +40,7 @@ func _ready() -> void:
 	_build_controller = get_node_or_null(build_controller_path) as BuildController
 	_game_controller = get_node_or_null(game_controller_path) as GameController
 	_bombardment_controller = get_node_or_null(bombardment_controller_path) as BombardmentController
+	_battalion_controller = get_node_or_null(battalion_controller_path) as BattalionController
 	_selection_box_overlay = get_node_or_null(selection_box_overlay_path) as Control
 	_rng.randomize()
 	_world_input = _find_world_input()
@@ -46,6 +51,8 @@ func _unhandled_input(event: InputEvent) -> void:
 	if _bombardment_controller != null and _bombardment_controller.is_active():
 		return
 	if _game_controller != null and _game_controller.is_rally_mode(team_id):
+		return
+	if _battalion_controller != null and _battalion_controller.is_placing():
 		return
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
 		if event.pressed:
@@ -109,8 +116,18 @@ func _select_single(pos: Vector2, add: bool) -> void:
 	var building := _pick_building(pos)
 	if building != null:
 		_clear_selection()
+		_clear_selected_battalion()
 		_set_selected_building(building)
 		return
+
+	# Check for battalion selection
+	var battalion := _pick_battalion(pos)
+	if battalion != null:
+		_clear_selection()
+		_clear_selected_building()
+		_set_selected_battalion(battalion)
+		return
+
 	var best: Unit = null
 	var best_dist := selection_radius * selection_radius
 	for unit in _get_units():
@@ -123,8 +140,10 @@ func _select_single(pos: Vector2, add: bool) -> void:
 	if best != null:
 		_toggle_select(best, add)
 		_clear_selected_building()
+		_clear_selected_battalion()
 	else:
 		_clear_selected_building()
+		_clear_selected_battalion()
 
 func _select_box(rect: Rect2, add: bool) -> void:
 	if not add:
@@ -236,3 +255,27 @@ func _find_world_input() -> Node:
 	if nodes.is_empty():
 		return null
 	return nodes[0] as Node
+
+
+func _pick_battalion(pos: Vector2) -> Battalion:
+	if _battalion_controller == null:
+		return null
+	return _battalion_controller.get_battalion_at(pos)
+
+
+func _set_selected_battalion(battalion: Battalion) -> void:
+	if _selected_battalion == battalion:
+		return
+	_selected_battalion = battalion
+	if _battalion_controller != null:
+		_battalion_controller.select_battalion(battalion)
+	emit_signal("battalion_selected", battalion)
+
+
+func _clear_selected_battalion() -> void:
+	if _selected_battalion == null:
+		return
+	_selected_battalion = null
+	if _battalion_controller != null:
+		_battalion_controller.clear_selection()
+	emit_signal("battalion_selected", null)

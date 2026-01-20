@@ -1,6 +1,12 @@
 extends Node3D
 
 @export var unit_height := 6.0
+@export var infantry_model_path := "res://assets/models/Infantry/futuristic_soldier_lowpoly.glb"
+@export var infantry_model_scale := 2.0
+@export var infantry_model_rotation := Vector3(0.0, 180.0, 0.0)
+@export var infantry_anim_idle := "Rifle_stand"
+@export var infantry_anim_run := "Rifle_run"
+@export var infantry_move_threshold := 1.0  # Minimum movement speed to trigger run animation
 @export var vehicle_height := 10.0
 @export var aircraft_height := 160.0
 @export var aircraft_height_smooth := 10.0
@@ -190,6 +196,7 @@ var _missile_connected: Dictionary[int, bool] = {}
 var _missile_trails: Dictionary[int, Dictionary] = {}
 var _missile_visual_state: Dictionary[int, Dictionary] = {}
 var _aircraft_visual_state: Dictionary[int, Dictionary] = {}
+var _infantry_visual_state: Dictionary[int, Dictionary] = {}  # Tracks prev_pos for movement detection
 var _hidden_2d := false
 var _ghost_root: Node3D
 var _ghost_mesh: MeshInstance3D
@@ -278,6 +285,8 @@ func _cleanup() -> void:
 			_missile_trails.erase(id)
 		if _aircraft_visual_state.has(id):
 			_aircraft_visual_state.erase(id)
+		if _infantry_visual_state.has(id):
+			_infantry_visual_state.erase(id)
 
 func _hide_2d_world_nodes() -> void:
 	if not hide_2d_world or _hidden_2d:
@@ -470,35 +479,83 @@ func _build_unit_proxy(proxy: Node3D, unit) -> void:
 			_attach_health_bar(proxy, bar_width, bar_height, unit_health_height, unit_health_offset)
 		_attach_selection_ring(proxy, radius * selection_ring_vehicle_scale * 1.2, base_color)
 	else:
-		var body_radius := radius * 0.35
-		var body_height := maxf(2.0, unit_height * 0.6)
-		var body := _make_capsule(body_radius, body_height, base_color.darkened(0.1))
-		var total_height := body_height + (body_radius * 2.0)
-		body.position = Vector3(0, total_height * 0.5, 0)
-		proxy.add_child(body)
-		var head_radius := body_radius * 0.7
-		var head := _make_sphere(head_radius, base_color.lightened(0.25))
-		head.position = Vector3(0, total_height + head_radius * 0.6, 0)
-		proxy.add_child(head)
-		var pack_size := Vector3(body_radius * 1.2, body_radius * 1.4, body_radius * 0.6)
-		var pack := _make_box(pack_size, base_color.darkened(0.35))
-		pack.position = Vector3(0, total_height * 0.6, body_radius * 0.7)
-		proxy.add_child(pack)
-		var unit_type := str(_get_value(unit, "unit_type", "rifle"))
-		var weapon_len := radius * 1.1
-		var weapon_thick := body_radius * 0.35
-		if unit_type == "sniper":
-			weapon_len = radius * 1.8
-			weapon_thick = body_radius * 0.3
-		elif unit_type == "rocket":
-			weapon_len = radius * 1.4
-			weapon_thick = body_radius * 0.55
-		var weapon := _make_box(Vector3(weapon_thick, weapon_thick, weapon_len), base_color.lightened(0.3))
-		weapon.position = Vector3(0, total_height * 0.6, -weapon_len * 0.5 - body_radius * 0.2)
-		proxy.add_child(weapon)
+		# Infantry - load GLB model with animations
+		var model_height := 0.0
+		var has_model := false
+		if infantry_model_path != "" and ResourceLoader.exists(infantry_model_path):
+			var target_size := Vector2(radius * 2.0 * infantry_model_scale, radius * 2.0 * infantry_model_scale)
+			var target_height := unit_height * infantry_model_scale
+			var model_instance := _add_scene_model_instance(
+				proxy,
+				infantry_model_path,
+				target_size,
+				target_height,
+				1.0,  # Scale is already applied to target_size and target_height
+				Vector3.ZERO,
+				infantry_model_rotation
+			)
+			if model_instance != null:
+				has_model = true
+				# Calculate model height from bounds
+				var bounds := _calc_model_aabb(model_instance)
+				model_height = bounds.size.y * model_instance.scale.y
+				# Store model reference for animation updates
+				proxy.set_meta("infantry_model", model_instance)
+				# Find and store AnimationPlayer reference
+				var anim_player := _find_animation_player(model_instance)
+				if anim_player != null:
+					proxy.set_meta("infantry_anim_player", anim_player)
+					# Set animations to loop
+					_set_animation_looping(anim_player, infantry_anim_idle)
+					_set_animation_looping(anim_player, infantry_anim_run)
+					# Start with idle animation
+					if anim_player.has_animation(infantry_anim_idle):
+						anim_player.play(infantry_anim_idle)
+
+		# Fallback to procedural if no model loaded
+		if not has_model:
+			var body_radius := radius * 0.35
+			var body_height := maxf(2.0, unit_height * 0.6)
+			var body := _make_capsule(body_radius, body_height, base_color.darkened(0.1))
+			var total_height := body_height + (body_radius * 2.0)
+			body.position = Vector3(0, total_height * 0.5, 0)
+			proxy.add_child(body)
+			var head_radius := body_radius * 0.7
+			var head := _make_sphere(head_radius, base_color.lightened(0.25))
+			head.position = Vector3(0, total_height + head_radius * 0.6, 0)
+			proxy.add_child(head)
+			var pack_size := Vector3(body_radius * 1.2, body_radius * 1.4, body_radius * 0.6)
+			var pack := _make_box(pack_size, base_color.darkened(0.35))
+			pack.position = Vector3(0, total_height * 0.6, body_radius * 0.7)
+			proxy.add_child(pack)
+			var unit_type := str(_get_value(unit, "unit_type", "rifle"))
+			var weapon_len := radius * 1.1
+			var weapon_thick := body_radius * 0.35
+			var weapon_color := base_color.lightened(0.3)
+			var marker_color := Color.TRANSPARENT  # No marker for rifle
+			if unit_type == "sniper":
+				weapon_len = radius * 1.8
+				weapon_thick = body_radius * 0.3
+				weapon_color = Color(0.15, 0.15, 0.15)  # Dark black rifle
+				marker_color = Color(0.2, 0.6, 0.2)  # Green marker for sniper
+			elif unit_type == "rocket":
+				weapon_len = radius * 1.4
+				weapon_thick = body_radius * 0.55
+				weapon_color = Color(0.4, 0.35, 0.2)  # Olive/tan launcher
+				marker_color = Color(0.8, 0.5, 0.1)  # Orange marker for rocket
+			var weapon := _make_box(Vector3(weapon_thick, weapon_thick, weapon_len), weapon_color)
+			weapon.position = Vector3(0, total_height * 0.6, -weapon_len * 0.5 - body_radius * 0.2)
+			proxy.add_child(weapon)
+			# Add colored marker band on helmet for non-rifle types
+			if marker_color.a > 0.0:
+				var marker := _make_cylinder(head_radius * 1.1, head_radius * 0.3, marker_color)
+				marker.position = Vector3(0, total_height + head_radius * 0.9, 0)
+				proxy.add_child(marker)
+			model_height = total_height + head_radius * 0.8
+
 		if show_unit_health:
 			var bar_width := maxf(10.0, radius * unit_health_width_scale)
-			var bar_height := total_height + head_radius * 0.8
+			var bar_height := model_height if model_height > 0.0 else unit_height
 			_attach_health_bar(proxy, bar_width, bar_height, unit_health_height, unit_health_offset)
 		_attach_selection_ring(proxy, radius * selection_ring_infantry_scale, base_color)
 
@@ -729,9 +786,10 @@ func _update_proxy(node, proxy: Node3D, group_name: String) -> void:
 				var is_uav: bool = bool(_get_value(node, "is_uav", false))
 				var height_multiplier := 1.6 if is_uav else 1.0  # UAVs fly 60% higher
 				if not aircraft_follow_terrain:
-					# Only use aircraft_base_height when airborne, not when on the ground
+					# Smoothly blend between terrain height and aircraft_base_height during takeoff/landing
+					# This prevents the visual "jump" when transitioning between grounded and airborne
 					if altitude > 0.01:
-						ground_y = aircraft_base_height
+						ground_y = lerpf(ground_y, aircraft_base_height, altitude)
 				y_offset += aircraft_height * altitude * height_multiplier
 				if is_uav:
 					print("[UAV Visual] UAV detected, height_multiplier: ", height_multiplier, " final y_offset: ", y_offset)
@@ -833,6 +891,9 @@ func _update_proxy(node, proxy: Node3D, group_name: String) -> void:
 				if unit_health_selected_only and not is_selected:
 					allow = false
 				_update_health_bar(node, proxy, allow)
+			# Update infantry animations based on movement
+			if unit_kind == "infantry" or unit_kind == "":
+				_update_infantry_animation(proxy, id, pos2)
 
 func _get_airframe_node(proxy: Node3D) -> Node3D:
 	if proxy == null:
@@ -1904,6 +1965,58 @@ func _get_aabb_corners(aabb: AABB) -> Array[Vector3]:
 		pos + Vector3(0.0, size.y, size.z),
 		pos + size,
 	]
+
+func _find_animation_player(node: Node) -> AnimationPlayer:
+	# Check if node itself is an AnimationPlayer
+	if node is AnimationPlayer:
+		return node as AnimationPlayer
+	# Search children recursively
+	for child in node.get_children():
+		var found := _find_animation_player(child)
+		if found != null:
+			return found
+	return null
+
+func _set_animation_looping(anim_player: AnimationPlayer, anim_name: String) -> void:
+	if not anim_player.has_animation(anim_name):
+		return
+	var anim := anim_player.get_animation(anim_name)
+	if anim != null:
+		anim.loop_mode = Animation.LOOP_LINEAR
+
+func _update_infantry_animation(proxy: Node3D, id: int, current_pos: Vector2) -> void:
+	# Check if this infantry has an animation player
+	if not proxy.has_meta("infantry_anim_player"):
+		return
+	var anim_player: AnimationPlayer = proxy.get_meta("infantry_anim_player") as AnimationPlayer
+	if anim_player == null or not is_instance_valid(anim_player):
+		return
+
+	# Get or create state for this infantry
+	var state: Dictionary = _infantry_visual_state.get(id, {})
+	var prev_pos: Vector2 = state.get("prev_pos", current_pos)
+
+	# Calculate movement speed
+	var movement := current_pos - prev_pos
+	var speed := movement.length() / maxf(0.001, _frame_delta)
+
+	# Determine if unit is moving
+	var is_moving := speed > infantry_move_threshold
+	var was_moving: bool = state.get("is_moving", false)
+
+	# Only change animation if state changed
+	if is_moving != was_moving:
+		if is_moving:
+			if anim_player.has_animation(infantry_anim_run):
+				anim_player.play(infantry_anim_run)
+		else:
+			if anim_player.has_animation(infantry_anim_idle):
+				anim_player.play(infantry_anim_idle)
+
+	# Update state
+	state["prev_pos"] = current_pos
+	state["is_moving"] = is_moving
+	_infantry_visual_state[id] = state
 
 func _attach_health_bar(proxy: Node3D, width: float, height: float, bar_height: float, y_offset: float) -> void:
 	if proxy.has_meta("health_bar_root"):

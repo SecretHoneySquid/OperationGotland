@@ -71,6 +71,7 @@ var _world_input: Node
 var _spawn_controller: SpawnController
 var _production_controller: ProductionController
 var _visibility_controller: VisibilityController
+var _battalion_controller: BattalionController
 
 # Rally line 3D visualization
 var _rally_line_3d: Node3D = null
@@ -129,6 +130,30 @@ func _init_controllers() -> void:
 	_visibility_controller.configure(teams)
 	add_child(_visibility_controller)
 
+	# Battalion controller - needs a container for battalions
+	var battalions_container := Node2D.new()
+	battalions_container.name = "Battalions"
+	add_child(battalions_container)
+
+	_battalion_controller = BattalionController.new()
+	_battalion_controller.name = "BattalionController"
+	_battalion_controller.configure(_spawn_controller, battalions_container, teams)
+	add_child(_battalion_controller)
+
+	# Battalion placement preview - add to UI CanvasLayer so it renders over 3D
+	var placement_preview := BattalionPlacementPreview.new()
+	placement_preview.name = "BattalionPlacementPreview"
+	placement_preview.configure(_battalion_controller)
+	var ui_layer := get_node_or_null("UI")
+	if ui_layer != null:
+		ui_layer.add_child(placement_preview)
+	else:
+		# Fallback - create our own CanvasLayer
+		var canvas := CanvasLayer.new()
+		canvas.layer = 50  # Below main UI (100) but above game
+		add_child(canvas)
+		canvas.add_child(placement_preview)
+
 func _process(delta: float) -> void:
 	_update_hq_state()
 	_production_controller.update(delta)
@@ -141,6 +166,21 @@ func _process(delta: float) -> void:
 	_update_rally_line()
 
 func _unhandled_input(event: InputEvent) -> void:
+	# Handle battalion placement mode
+	if _battalion_controller != null and _battalion_controller.is_placing():
+		if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT and event.pressed:
+			print("GameController: Left click during battalion placement at ", _get_world_mouse_pos())
+			var battalion := _battalion_controller.confirm_placement(_get_world_mouse_pos())
+			print("GameController: confirm_placement returned: ", battalion)
+		elif event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_RIGHT and event.pressed:
+			print("GameController: Right click - cancelling placement")
+			_battalion_controller.cancel_placement()
+		elif event is InputEventKey and event.pressed and event.keycode == KEY_ESCAPE:
+			print("GameController: Escape - cancelling placement")
+			_battalion_controller.cancel_placement()
+		return
+
+	# Handle rally mode
 	if _rally_mode_team == "":
 		return
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT and event.pressed:

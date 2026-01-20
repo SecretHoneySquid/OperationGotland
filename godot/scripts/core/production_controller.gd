@@ -76,26 +76,28 @@ func _sync_game_state() -> void:
 # INFANTRY PRODUCTION
 # =============================================================================
 
-func _update_infantry_pool(team: TeamState, delta: float) -> void:
-	var prod_rate := team.get_infantry_prod()
-	team.infantry_pool = minf(team.infantry_pool + prod_rate * delta, max_infantry_pool)
-
-	while team.infantry_pool >= 1.0:
-		if not team.is_hq_alive():
-			team.infantry_pool = 0.0
-			break
-		if not team.has_credits(GameBalance.INFANTRY_UNIT_COST):
-			break
-		# Signal that infantry is ready to spawn
-		infantry_ready.emit(team)
-		team.deduct_credits(GameBalance.INFANTRY_UNIT_COST)
-		team.infantry_pool -= 1.0
-
-	# Update ETA
+func _update_infantry_pool(team: TeamState, _delta: float) -> void:
+	# Infantry auto-spawn disabled - battalions now handle infantry spawning
+	# Keep the pool at 0 and ETA at -1 (disabled)
+	team.infantry_pool = 0.0
 	if team.team_id == "p1":
-		GameState.p1_infantry_eta = _pool_eta(prod_rate, team.infantry_pool)
+		GameState.p1_infantry_eta = -1.0
 	else:
-		GameState.p2_infantry_eta = _pool_eta(prod_rate, team.infantry_pool)
+		GameState.p2_infantry_eta = -1.0
+
+	# Old auto-spawn logic (disabled):
+	# var prod_rate := team.get_infantry_prod()
+	# team.infantry_pool = minf(team.infantry_pool + prod_rate * delta, max_infantry_pool)
+	#
+	# while team.infantry_pool >= 1.0:
+	#     if not team.is_hq_alive():
+	#         team.infantry_pool = 0.0
+	#         break
+	#     if not team.has_credits(GameBalance.INFANTRY_UNIT_COST):
+	#         break
+	#     infantry_ready.emit(team)
+	#     team.deduct_credits(GameBalance.INFANTRY_UNIT_COST)
+	#     team.infantry_pool -= 1.0
 
 # =============================================================================
 # FACTORY QUEUE PRODUCTION
