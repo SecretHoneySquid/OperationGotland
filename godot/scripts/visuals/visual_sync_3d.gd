@@ -111,6 +111,19 @@ extends Node3D
 @export var build_zone_height := 0.4
 @export var build_zone_y_offset := 0.05
 @export var build_zone_color := Color(0.1, 0.6, 0.2, 0.2)
+@export var show_supply_zones := true
+@export var supply_zone_radius := 40.0
+@export var supply_zone_height := 0.25
+@export var supply_zone_y_offset := 0.15
+@export var supply_zone_color := Color(0.95, 0.8, 0.2, 0.3)
+@export var supply_zone_beacon_height := 14.0
+@export var supply_zone_beacon_radius := 1.6
+@export var supply_zone_beacon_color := Color(1.0, 0.9, 0.35, 0.9)
+@export var show_protection_area_preview := true
+@export var protection_preview_color := Color(0.2, 0.6, 0.9, 0.25)
+@export var protection_preview_outline_color := Color(0.3, 0.7, 1.0, 0.8)
+@export var protection_preview_height := 1.0
+@export var protection_preview_y_offset := 0.5
 @export var show_fog_of_war := true
 @export var fog_vision_group := "vision_p1"
 @export var fog_y_offset := 0.25
@@ -120,6 +133,7 @@ extends Node3D
 @export var fog_update_interval := 0.2
 @export var fog_softness := 0.25
 @export var fog_color := Color(0.05, 0.06, 0.08, 0.75)
+@export var radar_ghost_color := Color(0.4, 0.8, 1.0, 0.35)
 @export var tracer_height := 6.0
 @export var tracer_width_scale := 0.4
 @export var tracer_min_width := 0.5
@@ -158,6 +172,15 @@ extends Node3D
 @export var missile_smoke_grow := 5.0  # Smoke expands 5x (makes it look less like balls)
 @export var missile_smoke_height_offset := 0.0
 @export var missile_smoke_use_warhead_scale := true
+@export var interceptor_startup_smoke_enabled := true
+@export var interceptor_startup_smoke_color := Color(0.85, 0.9, 0.95, 0.6)
+@export var interceptor_startup_smoke_count := 18
+@export var interceptor_startup_smoke_size := 2.6
+@export var interceptor_startup_smoke_duration := 0.9
+@export var interceptor_startup_smoke_spread := 1.2
+@export var interceptor_startup_smoke_length := 12.0
+@export var interceptor_startup_smoke_height_offset := 0.0
+@export var interceptor_launch_height_offset := 4.0
 @export var building_pad_enabled := true
 @export var building_pad_margin := 0.08
 @export var building_pad_height := 0.06
@@ -183,6 +206,19 @@ extends Node3D
 @export var turret_range_thickness := 0.8
 @export var turret_range_dash_count := 64
 @export var turret_range_dash_ratio := 0.55
+@export var patriot_radar_boost_color := Color(0.2, 0.85, 1.0, 0.55)
+@export var patriot_radar_boost_height := 0.18
+@export var radar_support_ring_color := Color(0.2, 0.7, 1.0, 0.35)
+@export var radar_support_ring_height := 0.16
+@export var ground_ring_pulse_speed := 0.75
+@export var ground_ring_pulse_alpha := 0.35
+@export var ground_ring_pulse_lighten := 0.12
+@export var patriot_protection_area_enabled := true
+@export var patriot_protection_fill_color := Color(0.3, 0.7, 0.3, 0.15)
+@export var patriot_protection_outline_color := Color(0.4, 0.9, 0.4, 0.5)
+@export var patriot_protection_tracking_color := Color(0.7, 0.3, 0.3, 0.2)
+@export var patriot_protection_height := 0.8
+@export var patriot_protection_y_offset := 0.3
 @export var show_build_zone_outline := false  # Disabled - was showing as diagonal line
 @export var build_zone_outline_color := Color(0.1, 0.8, 0.3, 0.6)
 @export var build_zone_outline_width := 4.0
@@ -202,6 +238,12 @@ var _ghost_root: Node3D
 var _ghost_mesh: MeshInstance3D
 var _ghost_mat_valid: StandardMaterial3D
 var _ghost_mat_invalid: StandardMaterial3D
+var _radar_ghost_material: StandardMaterial3D
+var _protection_preview_root: Node3D
+var _protection_preview_mesh: MeshInstance3D
+var _protection_preview_outline: MeshInstance3D
+var _protection_preview_material: StandardMaterial3D
+var _protection_preview_outline_material: StandardMaterial3D
 var _tracers: Array[Dictionary] = []
 var _impacts: Array[Dictionary] = []
 var _smokes: Array[Dictionary] = []
@@ -213,6 +255,11 @@ var _build_zone_mesh: MeshInstance3D
 var _build_zone_material: StandardMaterial3D
 var _build_zone_outline_root: Node3D
 var _build_zone_outline_edges: Array[MeshInstance3D] = []
+var _resource_nodes: Array[Dictionary] = []
+var _supply_zone_root: Node3D
+var _supply_zone_markers: Array[Node3D] = []
+var _supply_zone_material: StandardMaterial3D
+var _supply_zone_beacon_material: StandardMaterial3D
 var _fog_root: Node3D
 var _fog_mesh: MeshInstance3D
 var _fog_material: StandardMaterial3D
@@ -236,6 +283,8 @@ func _process(delta: float) -> void:
 	_hide_2d_world_nodes()
 	_update_build_ghost()
 	_update_build_zone()
+	_update_supply_zones()
+	_update_protection_area_preview()
 	_update_fog_of_war(delta)
 	_update_tracers(delta)
 	_update_impacts(delta)
@@ -613,6 +662,25 @@ func _build_turret_proxy(proxy: Node3D, turret) -> void:
 	var height := turret_height
 	var base_color := _get_color(turret, "base_color", Color(0.7, 0.7, 0.7, 1.0))
 
+	if turret is RadarStation:
+		var base := _make_cylinder(base_radius, height * 0.4, base_color.darkened(0.08))
+		base.position = Vector3(0.0, height * 0.2, 0.0)
+		proxy.add_child(base)
+		var mast_height := height * 0.65
+		var mast := _make_cylinder(base_radius * 0.12, mast_height, base_color.lightened(0.18))
+		mast.position = Vector3(0.0, height * 0.4 + mast_height * 0.5, 0.0)
+		proxy.add_child(mast)
+		var dish_radius := base_radius * 0.8
+		var dish := _make_sphere(dish_radius, base_color.lightened(0.28))
+		dish.scale = Vector3(1.2, 0.35, 1.2)
+		dish.rotation_degrees = Vector3(-25.0, 0.0, 0.0)
+		dish.position = Vector3(0.0, height * 0.4 + mast_height, -dish_radius * 0.15)
+		proxy.add_child(dish)
+		var hub := _make_cylinder(base_radius * 0.08, height * 0.12, base_color.lightened(0.35))
+		hub.position = Vector3(0.0, height * 0.4 + mast_height, 0.0)
+		proxy.add_child(hub)
+		return
+
 	# Check for custom visual path (e.g., Patriot model)
 	var visual_path := str(_get_value(turret, "visual_scene_path", ""))
 	var has_custom_model := visual_path != "" and visual_path != "res://scenes/buildings/turret_visual.tscn"
@@ -653,6 +721,18 @@ func _build_turret_proxy(proxy: Node3D, turret) -> void:
 
 				# Ensure model is visible and apply materials
 				_ensure_model_visible(model)
+
+				if visual_path == "res://assets/models/Patriot/mim-104_patriot_air_defense_system.glb":
+					proxy.set_meta("turret_yaw_enabled", true)
+					proxy.set_meta("turret_yaw_root", model)
+					var yaw_node := model.get_node_or_null("Object_4")
+					if yaw_node == null:
+						yaw_node = _find_child_by_name(model, "Object_4")
+					if yaw_node is Node3D:
+						var yaw_node_3d := yaw_node as Node3D
+						proxy.set_meta("turret_yaw_node", yaw_node_3d)
+						proxy.set_meta("turret_yaw_rest_local", yaw_node_3d.transform)
+
 				return
 
 		push_warning("Failed to load turret visual at %s, falling back to procedural" % visual_path)
@@ -775,6 +855,9 @@ func _build_building_proxy(proxy: Node3D, building) -> void:
 			"defense_laser":
 				defense_path = defense_laser_model_path
 				defense_scale = defense_laser_model_scale
+			"defense_patriot":
+				# Patriot visual is handled entirely by the turret proxy, skip building visual
+				return
 		var defense_height := 0.0
 		if defense_path != "" and ResourceLoader.exists(defense_path):
 			defense_height = _add_scene_model(proxy, defense_path, size2d, 0.0, defense_scale)
@@ -823,27 +906,50 @@ func _build_hq_proxy(proxy: Node3D, hq) -> void:
 	_attach_health_bar(proxy, size2d.x, max_height, health_bar_height, health_bar_offset)
 
 func _update_proxy(node, proxy: Node3D, group_name: String) -> void:
-	proxy.visible = node.visible
 	var id := int(node.get_instance_id())
+	var unit_kind := ""
+	var radar_ghost := false
+	if group_name == "units":
+		unit_kind = str(_get_value(node, "unit_kind", "infantry"))
+		if unit_kind == "aircraft" and not node.visible:
+			radar_ghost = _get_float(node, "radar_detected_timer", 0.0) > 0.0
+	if radar_ghost:
+		proxy.visible = true
+	else:
+		proxy.visible = node.visible
+	if group_name == "units" and unit_kind == "aircraft":
+		_set_radar_ghost(proxy, radar_ghost)
 	if node is Node2D:
 		var pos2: Vector2 = node.global_position
 		var ground_y: float = _get_ground_height(pos2)
 		var y_offset: float = terrain_height_bias
-		var unit_kind := ""
-		if group_name == "units":
-			unit_kind = str(_get_value(node, "unit_kind", "infantry"))
-			if unit_kind == "aircraft":
-				var altitude: float = clampf(_get_float(node, "aircraft_altitude_factor", 1.0), 0.0, 1.0)
-				var is_uav: bool = bool(_get_value(node, "is_uav", false))
-				var height_multiplier := 1.6 if is_uav else 1.0  # UAVs fly 60% higher
-				if not aircraft_follow_terrain:
-					# Smoothly blend between terrain height and aircraft_base_height during takeoff/landing
-					# This prevents the visual "jump" when transitioning between grounded and airborne
-					if altitude > 0.01:
-						ground_y = lerpf(ground_y, aircraft_base_height, altitude)
-				y_offset += aircraft_height * altitude * height_multiplier
-				if is_uav:
-					print("[UAV Visual] UAV detected, height_multiplier: ", height_multiplier, " final y_offset: ", y_offset)
+		if group_name == "units" and unit_kind == "aircraft":
+			var altitude: float = clampf(_get_float(node, "aircraft_altitude_factor", 1.0), 0.0, 1.0)
+			var is_uav: bool = bool(_get_value(node, "is_uav", false))
+			var height_multiplier := 1.6 if is_uav else 1.0  # UAVs fly 60% higher
+			if not aircraft_follow_terrain:
+				# Smoothly blend between terrain height and aircraft_base_height during takeoff/landing
+				# This prevents the visual "jump" when transitioning between grounded and airborne
+				if altitude > 0.01:
+					ground_y = lerpf(ground_y, aircraft_base_height, altitude)
+			y_offset += aircraft_height * altitude * height_multiplier
+			if is_uav:
+				print("[UAV Visual] UAV detected, height_multiplier: ", height_multiplier, " final y_offset: ", y_offset)
+		var target_pos := Vector2.ZERO
+		var target_air_y := -1.0
+		var target_is_aircraft := false
+		if group_name == "missiles":
+			var target_value: Variant = _get_value(node, "target", null)
+			if target_value is Node2D and is_instance_valid(target_value):
+				var target_node := target_value as Node2D
+				target_pos = target_node.global_position
+				if str(_get_value(target_node, "unit_kind", "")) == "aircraft":
+					target_is_aircraft = true
+					var altitude := clampf(_get_float(target_node, "aircraft_altitude_factor", 1.0), 0.0, 1.0)
+					var is_uav: bool = bool(_get_value(target_node, "is_uav", false))
+					target_air_y = _get_aircraft_world_y(target_pos, altitude, is_uav)
+			if target_pos == Vector2.ZERO:
+				target_pos = _get_vec2(node, "_target_pos", Vector2.ZERO)
 		if group_name == "missiles":
 			var missile_scale := _get_missile_scale(node)
 			y_offset += missile_height * missile_scale
@@ -854,16 +960,31 @@ func _update_proxy(node, proxy: Node3D, group_name: String) -> void:
 				y_offset += ballistic_height
 
 			var source_kind := str(_get_value(node, "source_kind", ""))
-			if source_kind == "aircraft":
+			if source_kind == "interceptor":
+				# Interceptor missiles track their own flight height
+				var flight_height := _get_float(node, "_flight_height", 0.0)
+				y_offset += flight_height + interceptor_launch_height_offset
+			elif source_kind == "aircraft":
 				var altitude := clampf(_get_float(node, "source_altitude", 1.0), 0.0, 1.0)
-				var target_pos := _get_vec2(node, "_target_pos", Vector2.ZERO)
 				var target_ground := ground_y
 				if target_pos != Vector2.ZERO:
 					target_ground = _get_ground_height(target_pos)
+				var target_y := target_ground
+				if target_is_aircraft and target_air_y >= 0.0:
+					target_y = target_air_y
 				var start_base := ground_y if aircraft_follow_terrain else aircraft_base_height
 				var start_y := start_base + aircraft_height
-				var interp_y := lerpf(target_ground, start_y, altitude)
+				var interp_y := lerpf(target_y, start_y, altitude)
 				y_offset = (interp_y - ground_y) + (missile_height * missile_scale) + ballistic_height
+			elif target_is_aircraft and target_air_y >= 0.0:
+				var target_offset := (target_air_y - ground_y) + (missile_height * missile_scale)
+				var initial_distance := _get_float(node, "_initial_distance", 0.0)
+				if target_pos != Vector2.ZERO and initial_distance > 0.01:
+					var remaining := pos2.distance_to(target_pos)
+					var progress := clampf(1.0 - (remaining / initial_distance), 0.0, 1.0)
+					y_offset = lerpf(y_offset, target_offset, progress)
+				else:
+					y_offset = maxf(y_offset, target_offset)
 		var target_y: float = ground_y + y_offset
 		if group_name == "units" and unit_kind == "aircraft" and aircraft_height_smooth > 0.0:
 			var altitude: float = clampf(_get_float(node, "aircraft_altitude_factor", 1.0), 0.0, 1.0)
@@ -910,7 +1031,9 @@ func _update_proxy(node, proxy: Node3D, group_name: String) -> void:
 						proxy.look_at(target, Vector3.UP)
 				_update_missile_trail(node, proxy, id)
 			elif facing is Vector2 and facing.length() > 0.1:
-				if group_name == "units" and unit_kind == "aircraft":
+				if group_name == "defense_turret" and proxy.has_meta("turret_yaw_enabled"):
+					_update_turret_yaw(proxy, facing)
+				elif group_name == "units" and unit_kind == "aircraft":
 					# For aircraft, calculate pitch based on altitude change
 					var altitude := clampf(_get_float(node, "aircraft_altitude_factor", 1.0), 0.0, 1.0)
 					var aircraft_state: Dictionary = _aircraft_visual_state.get(id, {})
@@ -938,13 +1061,83 @@ func _update_proxy(node, proxy: Node3D, group_name: String) -> void:
 			var is_selected := bool(selected_value)
 			_update_selection_ring(proxy, is_selected and node.visible)
 			if show_unit_health:
-				var allow := true
+				var allow: bool = node.visible
 				if unit_health_selected_only and not is_selected:
 					allow = false
 				_update_health_bar(node, proxy, allow)
 			# Update infantry animations based on movement
 			if unit_kind == "infantry" or unit_kind == "":
 				_update_infantry_animation(proxy, id, pos2)
+
+func _update_turret_yaw(proxy: Node3D, facing: Vector2) -> bool:
+	var yaw_node: Node3D = null
+	if proxy.has_meta("turret_yaw_node"):
+		yaw_node = proxy.get_meta("turret_yaw_node") as Node3D
+	if yaw_node == null or not is_instance_valid(yaw_node):
+		var root := proxy.get_meta("turret_yaw_root") as Node
+		if root != null and is_instance_valid(root):
+			var direct := root.get_node_or_null("Object_4")
+			if direct is Node3D:
+				yaw_node = direct as Node3D
+			else:
+				var found := _find_child_by_name(root, "Object_4")
+				if found is Node3D:
+					yaw_node = found as Node3D
+		if yaw_node != null and is_instance_valid(yaw_node):
+			proxy.set_meta("turret_yaw_node", yaw_node)
+			proxy.set_meta("turret_yaw_rest_local", yaw_node.transform)
+		else:
+			return false
+	var rest_local_value: Variant = proxy.get_meta("turret_yaw_rest_local", null)
+	var rest_local: Transform3D
+	if rest_local_value is Transform3D:
+		rest_local = rest_local_value
+	else:
+		rest_local = yaw_node.transform
+		proxy.set_meta("turret_yaw_rest_local", rest_local)
+
+	var parent := yaw_node.get_parent()
+	if parent == null or parent is not Node3D:
+		return false
+	var parent_3d := parent as Node3D
+	var desired_dir := Vector3(facing.x, 0.0, facing.y)
+	if desired_dir.length_squared() <= 0.0001:
+		yaw_node.transform = rest_local
+		return true
+	desired_dir = desired_dir.normalized()
+	var desired_local: Vector3 = parent_3d.global_transform.basis.inverse() * desired_dir
+	var axis_candidates: Array[Vector3] = [rest_local.basis.x, rest_local.basis.y, rest_local.basis.z]
+	var axis: Vector3 = axis_candidates[0]
+	var best_dot := -1.0
+	for candidate in axis_candidates:
+		var candidate_world: Vector3 = parent_3d.global_transform.basis * candidate
+		var score := absf(candidate_world.dot(Vector3.UP))
+		if score > best_dot:
+			best_dot = score
+			axis = candidate
+	var axis_world: Vector3 = parent_3d.global_transform.basis * axis
+	if axis_world.dot(Vector3.UP) < 0.0:
+		axis = -axis
+	axis = axis.normalized()
+
+	var rest_forward: Vector3 = -rest_local.basis.z
+	var rest_proj: Vector3 = rest_forward - axis * rest_forward.dot(axis)
+	if rest_proj.length_squared() <= 0.0001:
+		rest_forward = rest_local.basis.x
+		rest_proj = rest_forward - axis * rest_forward.dot(axis)
+	if rest_proj.length_squared() <= 0.0001:
+		rest_forward = rest_local.basis.y
+		rest_proj = rest_forward - axis * rest_forward.dot(axis)
+	var desired_proj: Vector3 = desired_local - axis * desired_local.dot(axis)
+	if rest_proj.length_squared() <= 0.0001 or desired_proj.length_squared() <= 0.0001:
+		yaw_node.transform = rest_local
+		return true
+	rest_proj = rest_proj.normalized()
+	desired_proj = desired_proj.normalized()
+	var yaw := atan2(axis.dot(rest_proj.cross(desired_proj)), rest_proj.dot(desired_proj))
+	var yaw_basis := Basis(axis, yaw)
+	yaw_node.transform = Transform3D(yaw_basis * rest_local.basis, rest_local.origin)
+	return true
 
 func _get_airframe_node(proxy: Node3D) -> Node3D:
 	if proxy == null:
@@ -954,6 +1147,49 @@ func _get_airframe_node(proxy: Node3D) -> Node3D:
 		if airframe != null and is_instance_valid(airframe):
 			return airframe
 	return proxy
+
+func _ensure_radar_ghost_material() -> void:
+	if _radar_ghost_material != null:
+		return
+	_radar_ghost_material = _make_ghost_material(radar_ghost_color)
+
+func _collect_geometry_instances(node: Node, out: Array) -> void:
+	if node is GeometryInstance3D:
+		out.append(node)
+	for child in node.get_children():
+		_collect_geometry_instances(child, out)
+
+func _get_radar_ghost_meshes(proxy: Node3D) -> Array:
+	if proxy.has_meta("radar_ghost_meshes"):
+		var cached: Variant = proxy.get_meta("radar_ghost_meshes")
+		if cached is Array:
+			return cached
+	var airframe := _get_airframe_node(proxy)
+	if airframe == null:
+		return []
+	var meshes: Array = []
+	_collect_geometry_instances(airframe, meshes)
+	proxy.set_meta("radar_ghost_meshes", meshes)
+	return meshes
+
+func _set_radar_ghost(proxy: Node3D, enabled: bool) -> void:
+	if proxy == null:
+		return
+	var current := bool(proxy.get_meta("radar_ghost_active", false))
+	if current == enabled and proxy.has_meta("radar_ghost_meshes"):
+		return
+	proxy.set_meta("radar_ghost_active", enabled)
+	var meshes := _get_radar_ghost_meshes(proxy)
+	if meshes.is_empty():
+		return
+	var overlay: Material = null
+	if enabled:
+		_ensure_radar_ghost_material()
+		overlay = _radar_ghost_material
+	for mesh in meshes:
+		if mesh is GeometryInstance3D:
+			var geo := mesh as GeometryInstance3D
+			geo.material_overlay = overlay
 
 func _apply_aircraft_bank_and_roll(node, proxy: Node3D, id: int, facing: Vector2) -> void:
 	if not aircraft_bank_enabled and not aircraft_roll_enabled:
@@ -1341,6 +1577,8 @@ func _update_turret_range(proxy: Node3D, turret) -> void:
 			var ring_hidden: MultiMeshInstance3D = proxy.get_meta("turret_range_ring") as MultiMeshInstance3D
 			if ring_hidden != null:
 				ring_hidden.visible = false
+		_set_range_ring_visible(proxy, "patriot_radar_boost_ring", false)
+		_set_range_ring_visible(proxy, "radar_support_ring", false)
 		return
 	var radius := _get_float(turret, "attack_range", 0.0)
 	if radius <= 0.0:
@@ -1356,7 +1594,405 @@ func _update_turret_range(proxy: Node3D, turret) -> void:
 	if absf(last_radius - radius) > 0.1:
 		_set_turret_range_mesh(ring, radius)
 		proxy.set_meta("turret_range_radius", radius)
-	ring.material_override = _make_ring_material(turret_range_color)
+	var ring_color := turret_range_color
+	if turret != null and turret.is_in_group("radar_station"):
+		var pulse := _get_pulse_value(ground_ring_pulse_speed)
+		ring_color = _apply_ring_pulse(turret_range_color, pulse, ground_ring_pulse_alpha, ground_ring_pulse_lighten)
+	ring.material_override = _make_ring_material(ring_color)
+
+	# Update Patriot protection area visualization
+	_update_patriot_protection_area(proxy, turret)
+	_update_patriot_radar_boost(proxy, turret)
+	_update_radar_support_ring(proxy, turret)
+
+func _update_patriot_protection_area(proxy: Node3D, turret) -> void:
+	# Check if this is a PatriotTurret with configured protection area
+	if not patriot_protection_area_enabled:
+		_hide_patriot_protection(proxy)
+		return
+
+	# Check if turret has protection_configured property
+	var configured: Variant = _get_value(turret, "protection_configured", false)
+	if not configured:
+		_hide_patriot_protection(proxy)
+		return
+	if turret.has_method("should_render_unified_protection"):
+		var render_value: Variant = turret.call("should_render_unified_protection")
+		if render_value is bool and not render_value:
+			_hide_patriot_protection(proxy)
+			return
+
+	var radius := _get_float(turret, "attack_range", 0.0)
+	if turret != null and turret.has_method("get_protection_render_range"):
+		var render_value: Variant = turret.call("get_protection_render_range")
+		if render_value is float or render_value is int:
+			radius = float(render_value)
+	if radius <= 0.0:
+		_hide_patriot_protection(proxy)
+		return
+
+	# Get protection area parameters
+	var direction: Variant = _get_value(turret, "protection_direction", null)
+	if direction == null or not (direction is Vector2):
+		_hide_patriot_protection(proxy)
+		return
+	var dir_vec: Vector2 = direction as Vector2
+	var direction_angle := dir_vec.angle()
+	var arc_half_angle := _get_float(turret, "protection_arc_half_angle", deg_to_rad(30.0))
+
+	# Check if tracking missiles (for color change)
+	var tracked_missiles: Variant = _get_value(turret, "_tracked_missiles", [])
+	var is_tracking := false
+	if tracked_missiles is Array:
+		is_tracking = (tracked_missiles as Array).size() > 0
+
+	# Ensure protection mesh exists
+	_ensure_patriot_protection_mesh(proxy)
+
+	var fill_mesh: MeshInstance3D = proxy.get_meta("patriot_protection_fill") as MeshInstance3D
+	var outline_mesh: MeshInstance3D = proxy.get_meta("patriot_protection_outline") as MeshInstance3D
+
+	if fill_mesh == null:
+		return
+
+	fill_mesh.visible = true
+	if outline_mesh != null:
+		outline_mesh.visible = true
+
+	var world_transform := Transform3D(Basis(), proxy.global_position)
+	fill_mesh.global_transform = world_transform
+	if outline_mesh != null:
+		outline_mesh.global_transform = world_transform
+
+	# Check if we need to rebuild the mesh (direction or arc changed)
+	var last_dir := float(proxy.get_meta("patriot_last_direction", -999.0))
+	var last_arc := float(proxy.get_meta("patriot_last_arc", -1.0))
+	var last_radius := float(proxy.get_meta("patriot_last_radius", -1.0))
+	var union_polys: Array[PackedVector2Array] = []
+	if turret != null and turret.has_method("get_union_protection_polygons"):
+		var union_value: Variant = turret.call("get_union_protection_polygons")
+		if union_value is Array:
+			for poly_value in union_value:
+				if poly_value is PackedVector2Array and (poly_value as PackedVector2Array).size() >= 3:
+					union_polys.append(poly_value as PackedVector2Array)
+
+	if union_polys.size() > 0:
+		proxy.set_meta("patriot_union_active", true)
+		_build_patriot_union_mesh(fill_mesh, outline_mesh, union_polys)
+	else:
+		var was_union: bool = bool(proxy.get_meta("patriot_union_active", false))
+		if was_union:
+			proxy.set_meta("patriot_union_active", false)
+			proxy.set_meta("patriot_last_direction", -999.0)
+			proxy.set_meta("patriot_last_arc", -1.0)
+			proxy.set_meta("patriot_last_radius", -1.0)
+		if absf(last_dir - direction_angle) > 0.01 or absf(last_arc - arc_half_angle) > 0.01 or absf(last_radius - radius) > 0.1:
+			_build_patriot_protection_mesh(fill_mesh, outline_mesh, direction_angle, arc_half_angle, radius)
+			proxy.set_meta("patriot_last_direction", direction_angle)
+			proxy.set_meta("patriot_last_arc", arc_half_angle)
+			proxy.set_meta("patriot_last_radius", radius)
+
+	# Update color based on tracking state/teamwork strength
+	var fill_color := patriot_protection_tracking_color if is_tracking else patriot_protection_fill_color
+	var outline_color := patriot_protection_outline_color
+	if turret != null and turret.has_method("get_ground_marking_colors"):
+		var color_values: Variant = turret.call("get_ground_marking_colors", is_tracking)
+		if color_values is Dictionary:
+			var fill_value: Variant = color_values.get("fill", null)
+			if fill_value is Color:
+				fill_color = fill_value
+			var outline_value: Variant = color_values.get("outline", null)
+			if outline_value is Color:
+				outline_color = outline_value
+	var fill_mat: StandardMaterial3D = fill_mesh.material_override as StandardMaterial3D
+	if fill_mat != null:
+		fill_mat.albedo_color = fill_color
+	if outline_mesh != null:
+		var outline_mat: StandardMaterial3D = outline_mesh.material_override as StandardMaterial3D
+		if outline_mat != null:
+			outline_mat.albedo_color = outline_color
+
+func _update_patriot_radar_boost(proxy: Node3D, turret) -> void:
+	if not turret_range_enabled:
+		_set_range_ring_visible(proxy, "patriot_radar_boost_ring", false)
+		return
+	if turret == null or not is_instance_valid(turret):
+		_set_range_ring_visible(proxy, "patriot_radar_boost_ring", false)
+		return
+	if not turret.is_in_group("patriot_turret"):
+		_set_range_ring_visible(proxy, "patriot_radar_boost_ring", false)
+		return
+	var configured_value: Variant = _get_value(turret, "protection_configured", true)
+	if configured_value is bool and not configured_value:
+		_set_range_ring_visible(proxy, "patriot_radar_boost_ring", false)
+		return
+	var detection_range := 0.0
+	if turret.has_method("get_detection_range"):
+		var range_value: Variant = turret.call("get_detection_range")
+		if range_value is float or range_value is int:
+			detection_range = float(range_value)
+	else:
+		detection_range = _get_float(turret, "attack_range", 0.0) * 1.5
+	if detection_range <= 0.0:
+		_set_range_ring_visible(proxy, "patriot_radar_boost_ring", false)
+		return
+	var base_range := _get_float(turret, "attack_range", 0.0) * 1.5
+	if turret.has_method("get_base_detection_range"):
+		var base_value: Variant = turret.call("get_base_detection_range")
+		if base_value is float or base_value is int:
+			base_range = float(base_value)
+	var is_extended := detection_range > base_range + 0.1
+	if turret.has_method("is_radar_extended"):
+		var ext_value: Variant = turret.call("is_radar_extended")
+		if ext_value is bool:
+			is_extended = ext_value
+	if not is_extended:
+		_set_range_ring_visible(proxy, "patriot_radar_boost_ring", false)
+		return
+	var ring := _ensure_range_ring(proxy, "patriot_radar_boost_ring")
+	if ring == null:
+		return
+	ring.visible = true
+	ring.position = Vector3(0.0, patriot_radar_boost_height, 0.0)
+	var last_radius: float = float(proxy.get_meta("patriot_radar_boost_radius", -1.0))
+	if absf(last_radius - detection_range) > 0.1:
+		_set_turret_range_mesh(ring, detection_range)
+		proxy.set_meta("patriot_radar_boost_radius", detection_range)
+	var pulse_speed := ground_ring_pulse_speed
+	var pulse_alpha := ground_ring_pulse_alpha
+	var pulse_lighten := ground_ring_pulse_lighten
+	if turret != null and is_instance_valid(turret):
+		pulse_speed = _get_float(turret, "protection_pulse_speed", pulse_speed)
+		pulse_alpha = _get_float(turret, "protection_pulse_alpha", pulse_alpha)
+		pulse_lighten = _get_float(turret, "protection_pulse_lighten", pulse_lighten)
+	var pulse := _get_pulse_value(pulse_speed)
+	var ring_color := _apply_ring_pulse(patriot_radar_boost_color, pulse, pulse_alpha, pulse_lighten)
+	ring.material_override = _make_ring_material(ring_color)
+
+func _update_radar_support_ring(proxy: Node3D, turret) -> void:
+	if not turret_range_enabled:
+		_set_range_ring_visible(proxy, "radar_support_ring", false)
+		return
+	if turret == null or not is_instance_valid(turret):
+		_set_range_ring_visible(proxy, "radar_support_ring", false)
+		return
+	if not turret.is_in_group("radar_station"):
+		_set_range_ring_visible(proxy, "radar_support_ring", false)
+		return
+	var configured_value: Variant = _get_value(turret, "protection_configured", true)
+	if configured_value is bool and not configured_value:
+		_set_range_ring_visible(proxy, "radar_support_ring", false)
+		return
+	var support_radius := _get_float(turret, "support_radius", 0.0)
+	if support_radius <= 0.0:
+		_set_range_ring_visible(proxy, "radar_support_ring", false)
+		return
+	var ring := _ensure_range_ring(proxy, "radar_support_ring")
+	if ring == null:
+		return
+	ring.visible = true
+	ring.position = Vector3(0.0, radar_support_ring_height, 0.0)
+	var last_radius: float = float(proxy.get_meta("radar_support_ring_radius", -1.0))
+	if absf(last_radius - support_radius) > 0.1:
+		_set_turret_range_mesh(ring, support_radius)
+		proxy.set_meta("radar_support_ring_radius", support_radius)
+	var pulse := _get_pulse_value(ground_ring_pulse_speed)
+	var ring_color := _apply_ring_pulse(radar_support_ring_color, pulse, ground_ring_pulse_alpha, ground_ring_pulse_lighten)
+	ring.material_override = _make_ring_material(ring_color)
+
+func _ensure_range_ring(proxy: Node3D, meta_key: String) -> MultiMeshInstance3D:
+	if proxy.has_meta(meta_key):
+		var existing: MultiMeshInstance3D = proxy.get_meta(meta_key) as MultiMeshInstance3D
+		if existing != null:
+			return existing
+	var ring := _build_turret_range_ring(1.0)
+	proxy.add_child(ring)
+	proxy.set_meta(meta_key, ring)
+	return ring
+
+func _set_range_ring_visible(proxy: Node3D, meta_key: String, value: bool) -> void:
+	if not proxy.has_meta(meta_key):
+		return
+	var ring: MultiMeshInstance3D = proxy.get_meta(meta_key) as MultiMeshInstance3D
+	if ring == null:
+		return
+	ring.visible = value
+
+func _ensure_patriot_protection_mesh(proxy: Node3D) -> void:
+	if proxy.has_meta("patriot_protection_fill"):
+		return
+
+	# Create fill mesh
+	var fill := MeshInstance3D.new()
+	fill.name = "PatriotProtectionFill"
+	fill.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	var fill_mat := StandardMaterial3D.new()
+	fill_mat.albedo_color = patriot_protection_fill_color
+	fill_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	fill_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	fill_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	fill.material_override = fill_mat
+	proxy.add_child(fill)
+	proxy.set_meta("patriot_protection_fill", fill)
+
+	# Create outline mesh
+	var outline := MeshInstance3D.new()
+	outline.name = "PatriotProtectionOutline"
+	outline.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	var outline_mat := StandardMaterial3D.new()
+	outline_mat.albedo_color = patriot_protection_outline_color
+	outline_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	outline_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	outline_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	outline.material_override = outline_mat
+	proxy.add_child(outline)
+	proxy.set_meta("patriot_protection_outline", outline)
+
+func _build_patriot_protection_mesh(fill_mesh: MeshInstance3D, outline_mesh: MeshInstance3D, direction_angle: float, arc_half_angle: float, radius: float) -> void:
+	var start_angle := direction_angle - arc_half_angle
+	var end_angle := direction_angle + arc_half_angle
+	var segments := 32
+	var height := patriot_protection_height
+
+	# Build pie shape vertices (in XZ plane, Y is up)
+	var vertices := PackedVector3Array()
+	var indices := PackedInt32Array()
+
+	# Bottom face vertices
+	vertices.append(Vector3(0, patriot_protection_y_offset, 0))  # center
+	for i in range(segments + 1):
+		var angle := start_angle + (end_angle - start_angle) * float(i) / float(segments)
+		var x := cos(angle) * radius
+		var z := sin(angle) * radius
+		vertices.append(Vector3(x, patriot_protection_y_offset, z))
+
+	# Top face vertices
+	var top_offset := vertices.size()
+	vertices.append(Vector3(0, patriot_protection_y_offset + height, 0))  # center top
+	for i in range(segments + 1):
+		var angle := start_angle + (end_angle - start_angle) * float(i) / float(segments)
+		var x := cos(angle) * radius
+		var z := sin(angle) * radius
+		vertices.append(Vector3(x, patriot_protection_y_offset + height, z))
+
+	# Bottom face triangles
+	for i in range(segments):
+		indices.append(0)
+		indices.append(i + 2)
+		indices.append(i + 1)
+
+	# Top face triangles
+	for i in range(segments):
+		indices.append(top_offset)
+		indices.append(top_offset + i + 1)
+		indices.append(top_offset + i + 2)
+
+	# Side faces (arc wall)
+	for i in range(segments):
+		var b1 := i + 1
+		var b2 := i + 2
+		var t1 := top_offset + i + 1
+		var t2 := top_offset + i + 2
+		indices.append(b1)
+		indices.append(b2)
+		indices.append(t1)
+		indices.append(t1)
+		indices.append(b2)
+		indices.append(t2)
+
+	# Side walls (radial edges)
+	# Left edge
+	indices.append(0)
+	indices.append(1)
+	indices.append(top_offset)
+	indices.append(top_offset)
+	indices.append(1)
+	indices.append(top_offset + 1)
+
+	# Right edge
+	var last_bottom := segments + 1
+	var last_top := top_offset + segments + 1
+	indices.append(0)
+	indices.append(top_offset)
+	indices.append(last_bottom)
+	indices.append(top_offset)
+	indices.append(last_top)
+	indices.append(last_bottom)
+
+	var arrays := []
+	arrays.resize(Mesh.ARRAY_MAX)
+	arrays[Mesh.ARRAY_VERTEX] = vertices
+	arrays[Mesh.ARRAY_INDEX] = indices
+
+	var mesh := ArrayMesh.new()
+	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+	fill_mesh.mesh = mesh
+
+	# Build outline mesh (arc and radial lines at top)
+	if outline_mesh != null:
+		var outline_verts := PackedVector3Array()
+		var outline_y := patriot_protection_y_offset + height + 0.1
+
+		# Arc at top
+		for i in range(segments + 1):
+			var angle := start_angle + (end_angle - start_angle) * float(i) / float(segments)
+			outline_verts.append(Vector3(cos(angle) * radius, outline_y, sin(angle) * radius))
+
+		var outline_arrays := []
+		outline_arrays.resize(Mesh.ARRAY_MAX)
+		outline_arrays[Mesh.ARRAY_VERTEX] = outline_verts
+
+		var outline_mesh_data := ArrayMesh.new()
+		outline_mesh_data.add_surface_from_arrays(Mesh.PRIMITIVE_LINE_STRIP, outline_arrays)
+		outline_mesh.mesh = outline_mesh_data
+
+func _build_patriot_union_mesh(fill_mesh: MeshInstance3D, outline_mesh: MeshInstance3D, polygons: Array[PackedVector2Array]) -> void:
+	var fill_mesh_data := ArrayMesh.new()
+	var fill_y := patriot_protection_y_offset + patriot_protection_height
+	for poly in polygons:
+		if poly.size() < 3:
+			continue
+		var indices := Geometry2D.triangulate_polygon(poly)
+		if indices.is_empty():
+			continue
+		var vertices := PackedVector3Array()
+		vertices.resize(poly.size())
+		for i in range(poly.size()):
+			var point := poly[i]
+			vertices[i] = Vector3(point.x, fill_y, point.y)
+		var arrays := []
+		arrays.resize(Mesh.ARRAY_MAX)
+		arrays[Mesh.ARRAY_VERTEX] = vertices
+		arrays[Mesh.ARRAY_INDEX] = indices
+		fill_mesh_data.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+	fill_mesh.mesh = fill_mesh_data
+
+	if outline_mesh != null:
+		var outline_mesh_data := ArrayMesh.new()
+		var outline_y := fill_y + 0.1
+		for poly in polygons:
+			if poly.size() < 2:
+				continue
+			var outline_verts := PackedVector3Array()
+			for point in poly:
+				outline_verts.append(Vector3(point.x, outline_y, point.y))
+			var first := poly[0]
+			outline_verts.append(Vector3(first.x, outline_y, first.y))
+			var outline_arrays := []
+			outline_arrays.resize(Mesh.ARRAY_MAX)
+			outline_arrays[Mesh.ARRAY_VERTEX] = outline_verts
+			outline_mesh_data.add_surface_from_arrays(Mesh.PRIMITIVE_LINE_STRIP, outline_arrays)
+		outline_mesh.mesh = outline_mesh_data
+
+func _hide_patriot_protection(proxy: Node3D) -> void:
+	if proxy.has_meta("patriot_protection_fill"):
+		var fill: MeshInstance3D = proxy.get_meta("patriot_protection_fill") as MeshInstance3D
+		if fill != null:
+			fill.visible = false
+	if proxy.has_meta("patriot_protection_outline"):
+		var outline: MeshInstance3D = proxy.get_meta("patriot_protection_outline") as MeshInstance3D
+		if outline != null:
+			outline.visible = false
 
 func _build_turret_range_ring(radius: float) -> MultiMeshInstance3D:
 	var ring := MultiMeshInstance3D.new()
@@ -2017,6 +2653,15 @@ func _get_aabb_corners(aabb: AABB) -> Array[Vector3]:
 		pos + size,
 	]
 
+func _find_child_by_name(node: Node, target_name: String) -> Node:
+	if node.name == target_name:
+		return node
+	for child in node.get_children():
+		var found := _find_child_by_name(child, target_name)
+		if found != null:
+			return found
+	return null
+
 func _find_animation_player(node: Node) -> AnimationPlayer:
 	# Check if node itself is an AnimationPlayer
 	if node is AnimationPlayer:
@@ -2155,7 +2800,7 @@ func _ensure_missile_connection(node: Node, id: int) -> void:
 		return
 	if not node.has_signal("impact"):
 		return
-	var callable := Callable(self, "_on_missile_impact")
+	var callable := Callable(self, "_on_missile_impact_with_node").bind(node)
 	if node.is_connected("impact", callable):
 		_missile_connected[id] = true
 		return
@@ -2166,8 +2811,36 @@ func _on_unit_shot(start_pos: Vector2, end_pos: Vector2, color: Color, width: fl
 	_spawn_tracer(start_pos, end_pos, color, width, lifetime)
 	_spawn_impact(end_pos, color, width)
 
-func _on_missile_impact(pos: Vector2, color: Color, warhead_size: String, source_kind: String) -> void:
-	_spawn_missile_impact(pos, color, warhead_size, source_kind)
+func _get_missile_air_target_height(missile_node: Node, impact_pos: Vector2) -> float:
+	if missile_node == null or not is_instance_valid(missile_node):
+		return -1.0
+	var target_value: Variant = _get_value(missile_node, "target", null)
+	if target_value is not Node2D:
+		return -1.0
+	var target := target_value as Node2D
+	if target == null or not is_instance_valid(target):
+		return -1.0
+	if str(_get_value(target, "unit_kind", "")) != "aircraft":
+		return -1.0
+	var altitude := clampf(_get_float(target, "aircraft_altitude_factor", 1.0), 0.0, 1.0)
+	var is_uav: bool = bool(_get_value(target, "is_uav", false))
+	var target_pos := target.global_position
+	var target_y := _get_aircraft_world_y(target_pos, altitude, is_uav)
+	var ground_y := _get_ground_height(impact_pos)
+	return maxf(0.0, target_y - ground_y)
+
+func _on_missile_impact_with_node(
+	pos: Vector2,
+	color: Color,
+	warhead_size: String,
+	source_kind: String,
+	missile_node: Node
+) -> void:
+	var explosion_height := _get_missile_air_target_height(missile_node, pos)
+	_spawn_missile_impact(pos, color, warhead_size, source_kind, explosion_height)
+
+func _on_missile_impact(pos: Vector2, color: Color, warhead_size: String, source_kind: String, explosion_height: float = -1.0) -> void:
+	_spawn_missile_impact(pos, color, warhead_size, source_kind, explosion_height)
 
 func _spawn_tracer(start_pos: Vector2, end_pos: Vector2, color: Color, width: float, lifetime: float) -> void:
 	var start_y := tracer_height
@@ -2228,23 +2901,24 @@ func _update_tracers(delta: float) -> void:
 func _spawn_impact(end_pos: Vector2, color: Color, width: float) -> void:
 	_spawn_impact_custom(end_pos, color, width, impact_flash_duration, impact_flash_size)
 
-func _spawn_missile_impact(end_pos: Vector2, color: Color, warhead_size: String, source_kind: String) -> void:
+func _spawn_missile_impact(end_pos: Vector2, color: Color, warhead_size: String, source_kind: String, explosion_height: float = -1.0) -> void:
 	var scale: float = _warhead_scale(warhead_size)
 
 	# Special handling for intercepted missiles - big mid-air explosion
 	if source_kind == "intercepted":
-		_spawn_intercept_explosion(end_pos, color, scale)
+		_spawn_intercept_explosion(end_pos, color, scale, explosion_height)
 		return
 
 	# Self-destruct explosion for interceptor missiles - smaller mid-air burst
 	if source_kind == "self_destruct":
-		_spawn_self_destruct_explosion(end_pos, color, scale)
+		_spawn_self_destruct_explosion(end_pos, color, scale, explosion_height)
 		return
 
+	var override_height := explosion_height if explosion_height >= 0.0 else -1.0
 	var flash_width: float = missile_impact_flash_size * scale * 6.0
 	var flash_color: Color = color.lightened(0.35)
 	flash_color.a = clampf(color.a, 0.5, 0.95)
-	_spawn_impact_custom(end_pos, flash_color, flash_width, missile_impact_duration, missile_impact_flash_size * scale)
+	_spawn_impact_custom(end_pos, flash_color, flash_width, missile_impact_duration, missile_impact_flash_size * scale, override_height)
 	if source_kind != "aircraft":
 		return
 	var boost_scale: float = maxf(0.1, aircraft_missile_impact_scale)
@@ -2252,12 +2926,14 @@ func _spawn_missile_impact(end_pos: Vector2, color: Color, warhead_size: String,
 	var hot_color: Color = color.lightened(0.55)
 	hot_color.a = clampf(color.a, 0.55, 0.95)
 	var hot_width: float = missile_impact_flash_size * effect_scale * 8.5
-	_spawn_impact_custom(end_pos, hot_color, hot_width, aircraft_missile_impact_duration, missile_impact_flash_size * effect_scale)
+	_spawn_impact_custom(end_pos, hot_color, hot_width, aircraft_missile_impact_duration, missile_impact_flash_size * effect_scale, override_height)
 	var shock_color: Color = color.lightened(0.2)
 	shock_color.a = clampf(color.a * 0.75, 0.35, 0.85)
 	var shock_width: float = aircraft_missile_shockwave_size * effect_scale * 7.5
-	_spawn_impact_custom(end_pos, shock_color, shock_width, aircraft_missile_shockwave_duration, aircraft_missile_shockwave_size * effect_scale)
+	_spawn_impact_custom(end_pos, shock_color, shock_width, aircraft_missile_shockwave_duration, aircraft_missile_shockwave_size * effect_scale, override_height)
 	var impact_y := impact_height
+	if explosion_height >= 0.0:
+		impact_y = explosion_height
 	if impact_follow_terrain:
 		impact_y += _get_ground_height(end_pos)
 	var smoke_pos := Vector3(end_pos.x, impact_y + 0.25, end_pos.y)
@@ -2267,29 +2943,35 @@ func _spawn_missile_impact(end_pos: Vector2, color: Color, warhead_size: String,
 		_spawn_smoke_burst(smoke_pos, burst, aircraft_missile_smoke_color, aircraft_missile_smoke_size * effect_scale, aircraft_missile_smoke_duration, spread)
 	_spawn_smoke(smoke_pos, aircraft_missile_smoke_color, aircraft_missile_smoke_size * effect_scale * 1.4, aircraft_missile_smoke_duration * 1.15)
 
-func _spawn_intercept_explosion(end_pos: Vector2, color: Color, scale: float) -> void:
+func _spawn_intercept_explosion(end_pos: Vector2, color: Color, scale: float, explosion_height: float = -1.0) -> void:
 	# Large mid-air explosion for intercepted missiles
 	# This creates a dramatic visual to show the interception was successful
 
-	# Get height based on terrain (missiles are intercepted mid-air)
-	var explosion_y := impact_height + 25.0  # Higher than ground impacts
+	# Get base height (without terrain) for passing to _spawn_impact_custom
+	var base_height := impact_height + 25.0  # Higher than ground impacts
+	if explosion_height >= 0.0:
+		# Use the provided flight height from the interceptor
+		base_height = explosion_height
+
+	# Calculate full explosion_y (with terrain) for smoke positions
+	var explosion_y := base_height
 	if impact_follow_terrain:
 		explosion_y += _get_ground_height(end_pos)
 
 	# Primary fireball - bright orange/yellow
 	var fireball_color := Color(1.0, 0.7, 0.2, 0.95)
 	var fireball_size := missile_impact_flash_size * scale * 12.0  # Much bigger than normal
-	_spawn_impact_custom(end_pos, fireball_color, fireball_size, 0.8, missile_impact_flash_size * scale * 2.0)
+	_spawn_impact_custom(end_pos, fireball_color, fireball_size, 0.8, missile_impact_flash_size * scale * 2.0, base_height)
 
 	# Secondary hot core - white/yellow
 	var core_color := Color(1.0, 0.95, 0.7, 0.98)
 	var core_size := missile_impact_flash_size * scale * 8.0
-	_spawn_impact_custom(end_pos, core_color, core_size, 0.5, missile_impact_flash_size * scale * 1.5)
+	_spawn_impact_custom(end_pos, core_color, core_size, 0.5, missile_impact_flash_size * scale * 1.5, base_height)
 
 	# Outer shockwave - red/orange ring
 	var shock_color := Color(1.0, 0.4, 0.1, 0.7)
 	var shock_size := missile_impact_flash_size * scale * 18.0
-	_spawn_impact_custom(end_pos, shock_color, shock_size, 1.0, missile_impact_flash_size * scale * 3.0)
+	_spawn_impact_custom(end_pos, shock_color, shock_size, 1.0, missile_impact_flash_size * scale * 3.0, base_height)
 
 	# Multiple smoke bursts for debris cloud
 	var smoke_pos := Vector3(end_pos.x, explosion_y, end_pos.y)
@@ -2310,26 +2992,32 @@ func _spawn_intercept_explosion(end_pos: Vector2, color: Color, scale: float) ->
 	_spawn_smoke(smoke_pos + Vector3(0, 2, 0), dark_smoke, 5.0 * scale, 2.5)
 	_spawn_smoke(smoke_pos + Vector3(0, 5, 0), dark_smoke, 4.0 * scale, 2.2)
 
-	print("[INTERCEPT_EXPLOSION] Spawned at ", end_pos, " scale=", scale)
+	print("[INTERCEPT_EXPLOSION] Spawned at ", end_pos, " height=", explosion_y, " scale=", scale)
 
-func _spawn_self_destruct_explosion(end_pos: Vector2, color: Color, scale: float) -> void:
+func _spawn_self_destruct_explosion(end_pos: Vector2, color: Color, scale: float, explosion_height: float = -1.0) -> void:
 	# Smaller mid-air explosion for interceptor missile self-destruct
 	# Less dramatic than intercept explosion but still visible
 
-	# Get height based on terrain
-	var explosion_y := impact_height + 20.0
+	# Get base height (without terrain) for passing to _spawn_impact_custom
+	var base_height := impact_height + 20.0
+	if explosion_height >= 0.0:
+		# Use the provided flight height from the interceptor
+		base_height = explosion_height
+
+	# Calculate full explosion_y (with terrain) for smoke position
+	var explosion_y := base_height
 	if impact_follow_terrain:
 		explosion_y += _get_ground_height(end_pos)
 
-	# Single fireball flash - orange
+	# Single fireball flash - orange (at the interceptor's flight height)
 	var fireball_color := Color(1.0, 0.6, 0.2, 0.9)
 	var fireball_size := missile_impact_flash_size * scale * 5.0
-	_spawn_impact_custom(end_pos, fireball_color, fireball_size, 0.4, missile_impact_flash_size * scale)
+	_spawn_impact_custom(end_pos, fireball_color, fireball_size, 0.4, missile_impact_flash_size * scale, base_height)
 
 	# Small hot core
 	var core_color := Color(1.0, 0.9, 0.5, 0.95)
 	var core_size := missile_impact_flash_size * scale * 3.0
-	_spawn_impact_custom(end_pos, core_color, core_size, 0.25, missile_impact_flash_size * scale * 0.8)
+	_spawn_impact_custom(end_pos, core_color, core_size, 0.25, missile_impact_flash_size * scale * 0.8, base_height)
 
 	# Smoke puff
 	var smoke_pos := Vector3(end_pos.x, explosion_y, end_pos.y)
@@ -2341,13 +3029,16 @@ func _spawn_impact_custom(
 	color: Color,
 	width: float,
 	duration: float,
-	base_size: float
+	base_size: float,
+	override_height: float = -1.0
 ) -> void:
 	if not impact_enabled:
 		return
 	var root := Node3D.new()
 	add_child(root)
 	var impact_y := impact_height
+	if override_height >= 0.0:
+		impact_y = override_height
 	if impact_follow_terrain:
 		impact_y += _get_ground_height(end_pos)
 	root.global_position = Vector3(end_pos.x, impact_y, end_pos.y)
@@ -2454,6 +3145,26 @@ func _spawn_smoke_burst(pos: Vector3, count: int, color: Color, size: float, dur
 			)
 		_spawn_smoke(pos + offset, color, size, duration)
 
+func _spawn_smoke_burst_directional(pos: Vector3, count: int, color: Color, size: float, duration: float, spread: float, direction: Vector3, length: float) -> void:
+	if count <= 0 or duration <= 0.0:
+		return
+	var dir := direction
+	if dir.length_squared() <= 0.0001:
+		dir = Vector3.BACK
+	else:
+		dir = dir.normalized()
+	var right := Vector3.UP.cross(dir)
+	if right.length_squared() <= 0.0001:
+		right = Vector3.RIGHT
+	right = right.normalized()
+	var use_length := maxf(0.0, length)
+	for i in range(count):
+		var dist := _smoke_rng.randf_range(0.2, 1.0) * use_length
+		var lateral := _smoke_rng.randf_range(-spread, spread)
+		var vertical := _smoke_rng.randf_range(-spread, spread) * 0.2
+		var offset := (dir * dist) + (right * lateral) + (Vector3.UP * vertical)
+		_spawn_smoke(pos + offset, color, size, duration)
+
 func _update_smokes(delta: float) -> void:
 	if _smokes.is_empty():
 		return
@@ -2506,6 +3217,34 @@ func _update_missile_trail(missile, proxy: Node3D, id: int) -> void:
 	if not missile_smoke_enabled:
 		return
 	var info: Dictionary = _missile_trails.get(id, {})
+	var source_kind := str(_get_value(missile, "source_kind", ""))
+	if not info.has("startup_done"):
+		info["startup_done"] = true
+		_missile_trails[id] = info
+		if interceptor_startup_smoke_enabled and source_kind == "interceptor":
+			var scale := _get_missile_scale(missile)
+			if not missile_smoke_use_warhead_scale:
+				scale = 1.0
+			var pos := proxy.global_position
+			pos.y += interceptor_startup_smoke_height_offset
+			var velocity: Variant = missile.get("_velocity")
+			var back := Vector3.BACK
+			if velocity is Vector2 and velocity.length() > 0.1:
+				back = Vector3(-velocity.x, 0.0, -velocity.y).normalized()
+			var smoke_color := interceptor_startup_smoke_color
+			var trail_value: Variant = missile.get("trail_color")
+			if trail_value is Color:
+				smoke_color = trail_value
+			_spawn_smoke_burst_directional(
+				pos,
+				interceptor_startup_smoke_count,
+				smoke_color,
+				interceptor_startup_smoke_size * scale,
+				interceptor_startup_smoke_duration,
+				interceptor_startup_smoke_spread * scale,
+				back,
+				interceptor_startup_smoke_length * scale
+			)
 	var timer := float(info.get("timer", 0.0)) - _frame_delta
 	if timer > 0.0:
 		info["timer"] = timer
@@ -2529,7 +3268,12 @@ func _update_missile_trail(missile, proxy: Node3D, id: int) -> void:
 		)
 		pos += jitter
 	pos.y += missile_smoke_height_offset
-	_spawn_smoke(pos, missile_smoke_color, missile_smoke_size * scale, missile_smoke_duration)
+	var smoke_color := missile_smoke_color
+	if source_kind == "aircraft":
+		var trail_value: Variant = missile.get("trail_color")
+		if trail_value is Color:
+			smoke_color = trail_value
+	_spawn_smoke(pos, smoke_color, missile_smoke_size * scale, missile_smoke_duration)
 
 func _update_build_ghost() -> void:
 	if not show_build_ghost:
@@ -2580,6 +3324,190 @@ func _ensure_ghost() -> void:
 func _set_ghost_visible(value: bool) -> void:
 	if _ghost_root != null and is_instance_valid(_ghost_root):
 		_ghost_root.visible = value
+
+func _update_protection_area_preview() -> void:
+	if not show_protection_area_preview:
+		_set_protection_preview_visible(false)
+		return
+	# Find protection area controller
+	var controllers := get_tree().get_nodes_in_group("protection_area_controller")
+	if controllers.is_empty():
+		_set_protection_preview_visible(false)
+		return
+	var controller = controllers[0]
+	if not controller.has_method("is_active") or not controller.is_active():
+		_set_protection_preview_visible(false)
+		return
+	if not controller.has_method("get_active_turret"):
+		_set_protection_preview_visible(false)
+		return
+	var turret = controller.get_active_turret()
+	if turret == null or not is_instance_valid(turret):
+		_set_protection_preview_visible(false)
+		return
+
+	# Get preview parameters from controller
+	var direction_angle: float = controller._direction_angle
+	var arc_half_angle: float = controller.fixed_arc_half_angle
+	var turret_pos: Vector2 = turret.global_position
+	var range_radius: float = turret.attack_range
+
+	_ensure_protection_preview()
+	_protection_preview_root.visible = true
+
+	# Position at turret location
+	var base_y := _get_ground_height(turret_pos)
+	_protection_preview_root.position = Vector3(turret_pos.x, base_y + protection_preview_y_offset, turret_pos.y)
+
+	# Build pie mesh
+	_update_protection_preview_mesh(direction_angle, arc_half_angle, range_radius)
+
+func _ensure_protection_preview() -> void:
+	if _protection_preview_root != null and is_instance_valid(_protection_preview_root):
+		return
+	_protection_preview_root = Node3D.new()
+	_protection_preview_root.name = "ProtectionPreview3D"
+	add_child(_protection_preview_root)
+
+	# Create fill mesh
+	_protection_preview_mesh = MeshInstance3D.new()
+	_protection_preview_mesh.name = "Fill"
+	_protection_preview_root.add_child(_protection_preview_mesh)
+	_protection_preview_material = StandardMaterial3D.new()
+	_protection_preview_material.albedo_color = protection_preview_color
+	_protection_preview_material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	_protection_preview_material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	_protection_preview_material.cull_mode = BaseMaterial3D.CULL_DISABLED
+	_protection_preview_mesh.material_override = _protection_preview_material
+
+	# Create outline mesh
+	_protection_preview_outline = MeshInstance3D.new()
+	_protection_preview_outline.name = "Outline"
+	_protection_preview_root.add_child(_protection_preview_outline)
+	_protection_preview_outline_material = StandardMaterial3D.new()
+	_protection_preview_outline_material.albedo_color = protection_preview_outline_color
+	_protection_preview_outline_material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	_protection_preview_outline_material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	_protection_preview_outline_material.cull_mode = BaseMaterial3D.CULL_DISABLED
+	_protection_preview_outline.material_override = _protection_preview_outline_material
+
+func _update_protection_preview_mesh(direction_angle: float, arc_half_angle: float, radius: float) -> void:
+	var start_angle := direction_angle - arc_half_angle
+	var end_angle := direction_angle + arc_half_angle
+	var segments := 32
+
+	# Build pie shape vertices (in XZ plane, Y is up)
+	var vertices := PackedVector3Array()
+	var indices := PackedInt32Array()
+
+	# Center point at origin (will be positioned by parent node)
+	var center := Vector3.ZERO
+	var height := protection_preview_height
+
+	# Create top and bottom faces of the pie
+	# Bottom face vertices
+	vertices.append(center)  # 0: center bottom
+	for i in range(segments + 1):
+		var angle := start_angle + (end_angle - start_angle) * float(i) / float(segments)
+		var x := cos(angle) * radius
+		var z := sin(angle) * radius
+		vertices.append(Vector3(x, 0, z))  # 1 to segments+1: arc points bottom
+
+	# Top face vertices
+	var top_offset := vertices.size()
+	vertices.append(Vector3(center.x, height, center.z))  # top center
+	for i in range(segments + 1):
+		var angle := start_angle + (end_angle - start_angle) * float(i) / float(segments)
+		var x := cos(angle) * radius
+		var z := sin(angle) * radius
+		vertices.append(Vector3(x, height, z))
+
+	# Bottom face triangles (fan from center)
+	for i in range(segments):
+		indices.append(0)
+		indices.append(i + 2)
+		indices.append(i + 1)
+
+	# Top face triangles (fan from center)
+	for i in range(segments):
+		indices.append(top_offset)
+		indices.append(top_offset + i + 1)
+		indices.append(top_offset + i + 2)
+
+	# Side faces (arc wall)
+	for i in range(segments):
+		var b1 := i + 1
+		var b2 := i + 2
+		var t1 := top_offset + i + 1
+		var t2 := top_offset + i + 2
+		# Two triangles per quad
+		indices.append(b1)
+		indices.append(b2)
+		indices.append(t1)
+		indices.append(t1)
+		indices.append(b2)
+		indices.append(t2)
+
+	# Side walls (the two radial edges)
+	# Left edge (center to first arc point)
+	indices.append(0)
+	indices.append(1)
+	indices.append(top_offset)
+	indices.append(top_offset)
+	indices.append(1)
+	indices.append(top_offset + 1)
+
+	# Right edge (center to last arc point)
+	var last_bottom := segments + 1
+	var last_top := top_offset + segments + 1
+	indices.append(0)
+	indices.append(top_offset)
+	indices.append(last_bottom)
+	indices.append(top_offset)
+	indices.append(last_top)
+	indices.append(last_bottom)
+
+	# Create the mesh
+	var arrays := []
+	arrays.resize(Mesh.ARRAY_MAX)
+	arrays[Mesh.ARRAY_VERTEX] = vertices
+	arrays[Mesh.ARRAY_INDEX] = indices
+
+	var mesh := ArrayMesh.new()
+	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+	_protection_preview_mesh.mesh = mesh
+
+	# Create outline mesh (lines around the pie edges)
+	var outline_vertices := PackedVector3Array()
+
+	# Arc outline at top
+	for i in range(segments + 1):
+		var angle := start_angle + (end_angle - start_angle) * float(i) / float(segments)
+		var x := cos(angle) * radius
+		var z := sin(angle) * radius
+		outline_vertices.append(Vector3(x, height + 0.1, z))
+
+	# Radial lines
+	outline_vertices.append(Vector3(0, height + 0.1, 0))
+	outline_vertices.append(Vector3(cos(start_angle) * radius, height + 0.1, sin(start_angle) * radius))
+	outline_vertices.append(Vector3(0, height + 0.1, 0))
+	outline_vertices.append(Vector3(cos(end_angle) * radius, height + 0.1, sin(end_angle) * radius))
+
+	# Direction line (center line)
+	outline_vertices.append(Vector3(0, height + 0.2, 0))
+	outline_vertices.append(Vector3(cos(direction_angle) * radius, height + 0.2, sin(direction_angle) * radius))
+
+	var outline_arrays := []
+	outline_arrays.resize(Mesh.ARRAY_MAX)
+	outline_arrays[Mesh.ARRAY_VERTEX] = outline_vertices
+
+	var outline_mesh := ArrayMesh.new()
+	outline_mesh.add_surface_from_arrays(Mesh.PRIMITIVE_LINE_STRIP, outline_arrays)
+	_protection_preview_outline.mesh = outline_mesh
+
+func _set_protection_preview_visible(value: bool) -> void:
+	if _protection_preview_root != null and is_instance_valid(_protection_preview_root):
+		_protection_preview_root.visible = value
 
 func _update_build_zone() -> void:
 	if not show_build_zone:
@@ -2680,6 +3608,110 @@ func _set_outline_edge(index: int, pos: Vector3, size: Vector3) -> void:
 func _set_build_zone_outline_visible(value: bool) -> void:
 	if _build_zone_outline_root != null and is_instance_valid(_build_zone_outline_root):
 		_build_zone_outline_root.visible = value
+
+func _update_supply_zones() -> void:
+	if not show_supply_zones:
+		_set_supply_zones_visible(false)
+		return
+	_ensure_map_data()
+	if _resource_nodes.is_empty():
+		_set_supply_zones_visible(false)
+		return
+	_ensure_supply_zones()
+	_supply_zone_root.visible = true
+	if _supply_zone_material != null:
+		_supply_zone_material.albedo_color = supply_zone_color
+	if _supply_zone_beacon_material != null:
+		_supply_zone_beacon_material.albedo_color = supply_zone_beacon_color
+		_supply_zone_beacon_material.emission = supply_zone_beacon_color
+	if _supply_zone_markers.size() != _resource_nodes.size():
+		_rebuild_supply_zones()
+	_update_supply_zone_positions()
+
+func _ensure_supply_zones() -> void:
+	if _supply_zone_root != null and is_instance_valid(_supply_zone_root):
+		return
+	_supply_zone_root = Node3D.new()
+	_supply_zone_root.name = "SupplyZones3D"
+	add_child(_supply_zone_root)
+	_supply_zone_material = _make_supply_zone_material(supply_zone_color)
+	_supply_zone_beacon_material = _make_supply_beacon_material(supply_zone_beacon_color)
+
+func _rebuild_supply_zones() -> void:
+	_clear_supply_zones()
+	if _resource_nodes.is_empty():
+		return
+	_ensure_supply_zones()
+	for _i in range(_resource_nodes.size()):
+		var marker := _build_supply_zone_marker()
+		_supply_zone_root.add_child(marker)
+		_supply_zone_markers.append(marker)
+
+func _clear_supply_zones() -> void:
+	for marker in _supply_zone_markers:
+		if marker != null and is_instance_valid(marker):
+			marker.queue_free()
+	_supply_zone_markers.clear()
+
+func _build_supply_zone_marker() -> Node3D:
+	var marker := Node3D.new()
+	var base := MeshInstance3D.new()
+	var disk := CylinderMesh.new()
+	disk.top_radius = supply_zone_radius
+	disk.bottom_radius = supply_zone_radius
+	disk.height = supply_zone_height
+	base.mesh = disk
+	base.material_override = _supply_zone_material
+	base.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	base.position = Vector3(0.0, supply_zone_y_offset + (supply_zone_height * 0.5), 0.0)
+	marker.add_child(base)
+
+	var beacon := MeshInstance3D.new()
+	var beacon_mesh := CylinderMesh.new()
+	beacon_mesh.top_radius = supply_zone_beacon_radius
+	beacon_mesh.bottom_radius = supply_zone_beacon_radius
+	beacon_mesh.height = supply_zone_beacon_height
+	beacon.mesh = beacon_mesh
+	beacon.material_override = _supply_zone_beacon_material
+	beacon.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	beacon.position = Vector3(0.0, supply_zone_y_offset + supply_zone_height + (supply_zone_beacon_height * 0.5), 0.0)
+	marker.add_child(beacon)
+
+	return marker
+
+func _update_supply_zone_positions() -> void:
+	if _supply_zone_markers.is_empty():
+		return
+	var count := mini(_resource_nodes.size(), _supply_zone_markers.size())
+	for i in range(count):
+		var node: Dictionary = _resource_nodes[i]
+		var pos: Vector2 = node.get("pos", Vector2.ZERO)
+		var marker := _supply_zone_markers[i]
+		if marker == null or not is_instance_valid(marker):
+			continue
+		var base_y := _get_ground_height(pos)
+		marker.position = Vector3(pos.x, base_y, pos.y)
+
+func _set_supply_zones_visible(value: bool) -> void:
+	if _supply_zone_root != null and is_instance_valid(_supply_zone_root):
+		_supply_zone_root.visible = value
+
+func _make_supply_zone_material(color: Color) -> StandardMaterial3D:
+	var material := StandardMaterial3D.new()
+	material.albedo_color = color
+	material.roughness = 1.0
+	material.metallic = 0.0
+	material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	material.cull_mode = BaseMaterial3D.CULL_DISABLED
+	return material
+
+func _make_supply_beacon_material(color: Color) -> StandardMaterial3D:
+	var material := _make_supply_zone_material(color)
+	material.emission_enabled = true
+	material.emission = color
+	material.emission_energy_multiplier = 1.25
+	return material
 
 func _update_fog_of_war(delta: float) -> void:
 	if not show_fog_of_war:
@@ -2798,6 +3830,18 @@ func _ensure_map_data() -> void:
 			Vector2(float(zone.get("width", 0.0)), float(zone.get("height", 0.0)))
 		)
 		_build_zones[zone_id] = rect
+	_resource_nodes.clear()
+	var nodes: Array = data.get("resource_nodes", [])
+	for entry in nodes:
+		if typeof(entry) != TYPE_DICTIONARY:
+			continue
+		var pos := Vector2(float(entry.get("x", 0.0)), float(entry.get("y", 0.0)))
+		var amount := float(entry.get("amount", 0.0))
+		_resource_nodes.append({
+			"pos": pos,
+			"amount": amount,
+			"initial": amount,
+		})
 
 func _get_color(node, property: String, fallback: Color) -> Color:
 	var value: Variant = node.get(property)
@@ -2814,6 +3858,27 @@ func _get_vec2(node, property: String, fallback: Vector2) -> Vector2:
 func _get_value(node, property: String, fallback):
 	var value: Variant = node.get(property)
 	return value if value != null else fallback
+
+func _get_pulse_value(speed: float) -> float:
+	var use_speed := maxf(0.01, speed)
+	var t := float(Time.get_ticks_msec()) * 0.001
+	return 0.5 + 0.5 * sin(t * TAU * use_speed)
+
+func _apply_ring_pulse(color: Color, pulse: float, alpha_depth: float, lighten: float) -> Color:
+	var result := color
+	var depth := clampf(alpha_depth, 0.0, 0.95)
+	var alpha_mult := lerpf(1.0 - depth, 1.0 + depth, pulse)
+	result.a = clampf(color.a * alpha_mult, 0.0, 1.0)
+	if lighten > 0.0:
+		result = result.lerp(result.lightened(lighten), pulse * 0.6)
+	return result
+
+func _get_aircraft_world_y(pos2: Vector2, altitude: float, is_uav: bool) -> float:
+	var ground_y := _get_ground_height(pos2)
+	var height_multiplier := 1.6 if is_uav else 1.0
+	if not aircraft_follow_terrain and altitude > 0.01:
+		ground_y = lerpf(ground_y, aircraft_base_height, altitude)
+	return ground_y + (aircraft_height * altitude * height_multiplier)
 
 func _get_missile_scale(missile) -> float:
 	var size := str(_get_value(missile, "warhead_size", "medium")).to_lower()

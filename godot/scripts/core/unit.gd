@@ -54,17 +54,31 @@ signal shot_fired(start_pos: Vector2, end_pos: Vector2, color: Color, width: flo
 @export var aircraft_reload_time := 15.0  # Increased from 7.0 for more realistic rearm time
 @export var aircraft_missile_range := 2500.0  # Reduced from 12000
 @export var aircraft_missile_speed := 520.0
-@export var aircraft_missile_turn_rate := 6.0
+@export var aircraft_missile_turn_rate := 7.0
 @export var aircraft_missile_damage := 32.0
 @export var aircraft_missile_cooldown := 2.4
 @export var aircraft_missile_lock_time := 0.25  # Reduced by 50% from 0.5 for faster engagement
 @export var aircraft_missile_focus_limit := 1
 @export var aircraft_missile_color := Color(1.0, 0.55, 0.25, 1.0)
+@export var aircraft_missile_trail_color := Color(0.2, 0.55, 1.0, 0.7)
 @export var aircraft_missile_warhead_size := "large"
 @export var aircraft_missile_hit_radius := 12.0
 @export var aircraft_missile_splash_radius := 80.0
 @export var aircraft_missile_splash_scale := 0.85
 @export var aircraft_missile_lifetime := 24.0
+@export var aircraft_a2a_missile_capacity := 0
+@export var aircraft_a2a_missile_damage := 32.0
+@export var aircraft_a2a_missile_speed := 520.0
+@export var aircraft_a2a_missile_turn_rate := 7.0
+@export var aircraft_a2a_missile_range := 2500.0
+@export var aircraft_a2a_missile_cooldown := 2.4
+@export var aircraft_a2a_missile_color := Color(1.0, 0.2, 0.2, 1.0)
+@export var aircraft_a2a_missile_trail_color := Color(1.0, 0.2, 0.2, 0.7)
+@export var aircraft_a2a_missile_warhead_size := "large"
+@export var aircraft_a2a_missile_hit_radius := 12.0
+@export var aircraft_a2a_missile_splash_radius := 0.0
+@export var aircraft_a2a_missile_splash_scale := 0.0
+@export var aircraft_a2a_missile_lifetime := 24.0
 @export var aircraft_reload_radius := 18.0
 @export var aircraft_loiter_radius := 120.0
 @export var aircraft_loiter_orbit_speed := 0.4
@@ -138,10 +152,12 @@ var _hold_timer := 0.0
 var _hold_pos := Vector2.ZERO
 var _hold_reached := false
 var _visual_node: Node2D
+var radar_detected_timer := 0.0
 var aircraft_home: Node2D
 var aircraft_home_pos := Vector2.ZERO
 var aircraft_loiter_pos := Vector2.ZERO
 var aircraft_missile_ammo := 0
+var aircraft_a2a_missile_ammo := 0
 var aircraft_gun_ammo := 0
 var _aircraft_missile_timer := 0.0
 var _aircraft_reloading := false
@@ -215,7 +231,8 @@ func _ready() -> void:
 		_aircraft_behavior.landing_slot = _aircraft_landing_slot
 		_aircraft_behavior.initialize()
 		# Sync state back to unit for compatibility with existing visual sync code
-		aircraft_missile_ammo = _aircraft_behavior.missile_ammo
+		aircraft_missile_ammo = _aircraft_behavior.a2g_missile_ammo
+		aircraft_a2a_missile_ammo = _aircraft_behavior.a2a_missile_ammo
 		aircraft_gun_ammo = _aircraft_behavior.gun_ammo
 		aircraft_altitude_factor = _aircraft_behavior.altitude_factor
 		aircraft_circulating = _aircraft_behavior.circulating
@@ -356,6 +373,9 @@ func _process(delta: float) -> void:
 	if hp <= 0.0:
 		return
 
+	if radar_detected_timer > 0.0:
+		radar_detected_timer = maxf(0.0, radar_detected_timer - delta)
+
 	# HIMARS launcher setup (delayed to ensure 3D visual is ready)
 	if is_himars and not _himars_setup_done and _himars_setup_timer > 0.0:
 		_himars_setup_timer -= delta
@@ -467,7 +487,8 @@ func _update_aircraft_state(delta: float) -> void:
 	_aircraft_behavior.update(delta)
 
 	# Sync state back to unit for compatibility with existing visual sync code
-	aircraft_missile_ammo = _aircraft_behavior.missile_ammo
+	aircraft_missile_ammo = _aircraft_behavior.a2g_missile_ammo
+	aircraft_a2a_missile_ammo = _aircraft_behavior.a2a_missile_ammo
 	aircraft_gun_ammo = _aircraft_behavior.gun_ammo
 	aircraft_altitude_factor = _aircraft_behavior.altitude_factor
 	aircraft_circulating = _aircraft_behavior.circulating

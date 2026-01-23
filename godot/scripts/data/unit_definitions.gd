@@ -244,7 +244,7 @@ static func get_aircraft_def(type_id: String) -> Dictionary:
 			base["cooldown"] = base["cooldown"] * 0.9
 			base["speed"] = base["speed"] * 1.1
 			base["gun_ammo"] = base["gun_ammo"] + 10
-			base["missile_ammo"] = base["missile_ammo"] + 1
+			base["missile_a2a_ammo"] = 2
 			base["missile_damage"] = base["missile_damage"] * 1.2
 			base["missile_speed"] = base["missile_speed"] * 1.05
 			base["missile_cooldown"] = base["missile_cooldown"] * 0.95
@@ -274,6 +274,8 @@ static func get_aircraft_def(type_id: String) -> Dictionary:
 				"shot_lifetime": 0.0,
 				"gun_ammo": 0,
 				"missile_ammo": 0,
+				"missile_a2g_ammo": 0,
+				"missile_a2a_ammo": 0,
 				"missile_damage": 0.0,
 				"missile_speed": 0.0,
 				"missile_turn_rate": 0.0,
@@ -286,6 +288,12 @@ static func get_aircraft_def(type_id: String) -> Dictionary:
 				"missile_lifetime": 0.0,
 				"reload_time": 999.0,
 				"missile_color": Color(0.0, 0.0, 0.0, 0.0),
+				"missile_a2g_color": Color(0.0, 0.0, 0.0, 0.0),
+				"missile_a2g_trail_color": Color(0.0, 0.0, 0.0, 0.0),
+				"missile_a2a_color": Color(0.0, 0.0, 0.0, 0.0),
+				"missile_a2a_trail_color": Color(0.0, 0.0, 0.0, 0.0),
+				"missile_a2a_splash_radius": 0.0,
+				"missile_a2a_splash_scale": 0.0,
 				"prefers_vehicle": false,
 				"prefers_infantry": false,
 				"damage_vs_infantry": 0.0,
@@ -312,6 +320,8 @@ static func _base_fighter_def() -> Dictionary:
 		"shot_lifetime": GameBalance.AIRCRAFT_SHOT_LIFETIME,
 		"gun_ammo": GameBalance.AIRCRAFT_GUN_CAPACITY,
 		"missile_ammo": GameBalance.AIRCRAFT_MISSILE_CAPACITY,
+		"missile_a2g_ammo": GameBalance.AIRCRAFT_MISSILE_CAPACITY,
+		"missile_a2a_ammo": 0,
 		"missile_damage": GameBalance.AIRCRAFT_MISSILE_DAMAGE,
 		"missile_speed": GameBalance.AIRCRAFT_MISSILE_SPEED,
 		"missile_turn_rate": GameBalance.AIRCRAFT_MISSILE_TURN_RATE,
@@ -324,6 +334,12 @@ static func _base_fighter_def() -> Dictionary:
 		"missile_lifetime": GameBalance.AIRCRAFT_MISSILE_LIFETIME,
 		"reload_time": GameBalance.AIRCRAFT_RELOAD_TIME,
 		"missile_color": Color(1.0, 0.55, 0.25, 1.0),
+		"missile_a2g_color": Color(1.0, 0.55, 0.25, 1.0),
+		"missile_a2g_trail_color": Color(0.2, 0.55, 1.0, 0.7),
+		"missile_a2a_color": Color(1.0, 0.2, 0.2, 1.0),
+		"missile_a2a_trail_color": Color(1.0, 0.2, 0.2, 0.7),
+		"missile_a2a_splash_radius": 0.0,
+		"missile_a2a_splash_scale": 0.0,
 		"prefers_vehicle": true,
 		"prefers_infantry": false,
 		"damage_vs_infantry": 0.6,

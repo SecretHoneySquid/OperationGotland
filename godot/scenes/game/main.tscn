@@ -1,6 +1,7 @@
-[gd_scene load_steps=30 format=3 uid="uid://fo5h4srnvbrq"]
+[gd_scene load_steps=31 format=3 uid="uid://fo5h4srnvbrq"]
 
 [ext_resource type="Script" uid="uid://cw7e3v4l114bn" path="res://scripts/core/debug_overlay.gd" id="1"]
+[ext_resource type="Script" path="res://scripts/core/protection_area_controller.gd" id="14_protarea"]
 [ext_resource type="Script" uid="uid://deqd3q3icoi8c" path="res://scripts/core/map_loader.gd" id="2"]
 [ext_resource type="Script" uid="uid://wvuepufvm1f1" path="res://scripts/core/build_controller.gd" id="3"]
 [ext_resource type="Script" uid="uid://dtk74mj7u4cr" path="res://scripts/ui/build_ui.gd" id="4"]
@@ -160,6 +161,10 @@ render_2d = false
 
 [node name="BombardmentController" type="Node2D" parent="."]
 script = ExtResource("8")
+render_2d = false
+
+[node name="ProtectionAreaController" type="Node2D" parent="."]
+script = ExtResource("14_protarea")
 render_2d = false
 
 [node name="Fog" type="CanvasModulate" parent="."]

@@ -3,3 +3,15 @@ res://scripts/core/interceptor_missile.gd
 res://scripts/core/patriot_turret.gd
 res://scripts/data/building_definitions.gd
 res://scripts/visuals/visual_sync_3d.gd
+res://scripts/core/missile.gd
+res://scripts/core/selection_controller.gd
+res://scripts/ui/build_ui.gd
+res://scripts/core/protection_area_controller.gd
+res://scripts/core/aircraft_behavior.gd
+res://scripts/core/spawn_controller.gd
+res://scripts/core/unit.gd
+res://scripts/data/unit_definitions.gd
+res://scripts/rendering/sync/VisualEffectsManager.gd
+res://scripts/core/radar_station.gd
+res://scripts/core/game_controller.gd
+res://scripts/constants/GameBalance.gd

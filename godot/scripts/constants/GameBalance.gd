@@ -88,7 +88,7 @@ const AIRCRAFT_SHOT_LIFETIME := 0.16
 const AIRCRAFT_MISSILE_CAPACITY := 2
 const AIRCRAFT_MISSILE_DAMAGE := 32.0
 const AIRCRAFT_MISSILE_SPEED := 1170.0  # Increased by 50% from 780.0 (original 520.0 * 2.25)
-const AIRCRAFT_MISSILE_TURN_RATE := 6.0
+const AIRCRAFT_MISSILE_TURN_RATE := 7.0
 const AIRCRAFT_MISSILE_RANGE := 12000.0
 const AIRCRAFT_MISSILE_COOLDOWN := 2.4
 const AIRCRAFT_MISSILE_LOCK_TIME := 2.0
@@ -139,6 +139,12 @@ const UAV_LOITER_ORBIT_SPEED := 0.3  # Slower orbit
 ## Aircraft squad formation
 const AIRCRAFT_SQUAD_SPACING := 80.0
 const AIRCRAFT_SQUAD_LATERAL_RATIO := 0.6
+
+# =============================================================================
+# PROJECTILES
+# =============================================================================
+
+const MISSILE_FUEL_TIME := 5.0
 
 # =============================================================================
 # PRODUCTION RATES

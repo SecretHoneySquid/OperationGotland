@@ -38,7 +38,8 @@ var _build_order := [
 	"defense_gun",
 	"defense_missile",
 	"defense_laser",
-	"defense_patriot"
+	"defense_patriot",
+	"radar"
 ]
 var _build_defs := {
 	"barracks": {
@@ -118,6 +119,16 @@ var _build_defs := {
 		"hp": 280.0,
 		"color": Color(0.3, 0.45, 0.3, 1.0),
 	},
+	"radar": {
+		"name": "Radar Station",
+		"size": Vector2(90, 90),
+		"cost": 350,
+		"hp": 240.0,
+		"color": Color(0.2, 0.55, 0.7, 1.0),
+		"vision_radius": 0.0,
+		"range": 2400.0,
+		"support_radius": 600.0,
+	},
 }
 
 var _defense_profiles := {
@@ -142,7 +153,7 @@ var _defense_profiles := {
 		"damage": 12.0,
 		"fire_rate": 0.8,
 		"missile_speed": 260.0,
-		"missile_turn_rate": 9.0,
+		"missile_turn_rate": 10.0,
 		"missile_color": Color(1.0, 0.6, 0.2, 1.0),
 		"warhead_size": "medium",
 		"prefers_vehicle": true,
@@ -165,7 +176,7 @@ var _defense_profiles := {
 		"damage": 12.0,
 		"fire_rate": 0.8,
 		"missile_speed": 260.0,
-		"missile_turn_rate": 9.0,
+		"missile_turn_rate": 10.0,
 		"missile_color": Color(1.0, 0.6, 0.2, 1.0),
 		"warhead_size": "medium",
 		"prefers_vehicle": true,
@@ -177,12 +188,13 @@ var _defense_profiles := {
 		"damage": 0.0,
 		"fire_rate": 1.5,
 		"missile_speed": 800.0,
-		"missile_turn_rate": 18.0,
+		"missile_turn_rate": 20.0,
 		"missile_color": Color(0.9, 1.0, 0.9, 1.0),
 		"warhead_size": "small",
 		"is_interceptor": true,
-		"intercept_success_base": 0.85,
+		"intercept_success_base": 0.3,
 		"max_simultaneous_intercepts": 2,
+		"max_interceptors_per_missile": 4,
 	},
 }
 
@@ -288,6 +300,8 @@ func _try_place() -> void:
 	building.size = data["size"]
 	building.fill_color = data["color"]
 	building.max_hp = float(data.get("hp", 200.0))
+	if data.has("vision_radius"):
+		building.vision_radius = float(data.get("vision_radius", building.vision_radius))
 	building.team_id = team_id
 	building.visual_scene_path = _get_building_visual_path(_active_build_id)
 	building.visual_base_size = _get_building_visual_base_size(_active_build_id)
@@ -308,6 +322,9 @@ func _try_place() -> void:
 	if _active_build_id.begins_with("defense"):
 		var turret := _spawn_defense_turret(_active_build_id, _ghost_pos)
 		building.set_meta("linked_turret", turret)
+	elif _active_build_id == "radar":
+		var radar := _spawn_radar_station(_ghost_pos, data)
+		building.set_meta("linked_turret", radar)
 	cancel_placement()
 
 func _can_place(pos: Vector2, size: Vector2) -> bool:
@@ -317,7 +334,9 @@ func _can_place(pos: Vector2, size: Vector2) -> bool:
 	if _get_team_credits() < int(_build_defs[_active_build_id]["cost"]):
 		return false
 	for building in _buildings:
-		if building is Building and is_instance_valid(building):
+		if building == null or not is_instance_valid(building):
+			continue
+		if building is Building:
 			var other_rect := Rect2(building.position - (building.size / 2.0), building.size)
 			if rect.intersects(other_rect):
 				return false
@@ -422,6 +441,23 @@ func _spawn_defense_turret(build_id: String, pos: Vector2) -> DefenseTurret:
 	add_child(turret)
 	return turret
 
+func _spawn_radar_station(pos: Vector2, data: Dictionary) -> RadarStation:
+	var radar := RadarStation.new()
+	radar.team_id = team_id
+	radar.attack_range = float(data.get("range", 1200.0))
+	radar.support_radius = float(data.get("support_radius", radar.support_radius))
+	radar.damage = 0.0
+	radar.fire_rate = 999.0
+	radar.hitscan_enabled = false
+	radar.base_radius = 22.0
+	var radar_color = data.get("color", Color(0.2, 0.55, 0.7, 1.0))
+	if radar_color is Color:
+		radar.base_color = radar_color
+	radar.visual_base_radius = 22.0
+	radar.position = pos
+	add_child(radar)
+	return radar
+
 func _spawn_patriot_turret(pos: Vector2, profile: Dictionary) -> PatriotTurret:
 	var turret := PatriotTurret.new()
 	turret.team_id = team_id
@@ -430,9 +466,10 @@ func _spawn_patriot_turret(pos: Vector2, profile: Dictionary) -> PatriotTurret:
 	turret.damage = 0.0  # Patriot doesn't deal direct damage
 	turret.fire_rate = float(profile.get("fire_rate", 1.5))
 	turret.interceptor_speed = float(profile.get("missile_speed", 800.0))
-	turret.interceptor_turn_rate = float(profile.get("missile_turn_rate", 18.0))
-	turret.intercept_success_base = float(profile.get("intercept_success_base", 0.85))
+	turret.interceptor_turn_rate = float(profile.get("missile_turn_rate", 20.0))
+	turret.intercept_success_base = float(profile.get("intercept_success_base", 0.3))
 	turret.max_simultaneous_intercepts = int(profile.get("max_simultaneous_intercepts", 2))
+	turret.max_interceptors_per_missile = int(profile.get("max_interceptors_per_missile", turret.max_interceptors_per_missile))
 	var missile_color = profile.get("missile_color")
 	if missile_color is Color:
 		turret.missile_color = missile_color

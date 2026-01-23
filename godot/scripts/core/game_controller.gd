@@ -22,6 +22,7 @@ extends Node2D
 @export var ai_queue_interval := 2.5
 @export var collectors_per_supply := 1
 @export var supply_bonus := 25
+@export var supply_amount_multiplier := 2.0
 
 
 # Airfield settings
@@ -116,7 +117,7 @@ func _ready() -> void:
 func _init_teams() -> void:
 	_p1 = TeamState.new("p1")
 	_p2 = TeamState.new("p2")
-	GameState.reset(700, 700)  # starting credits
+	GameState.reset(700 * 3, 700)  # starting credits (debug: triple P1)
 
 func _init_controllers() -> void:
 	var teams := {"p1": _p1, "p2": _p2}
@@ -715,11 +716,12 @@ func _load_resource_nodes(data: Dictionary) -> void:
 	_resource_nodes.clear()
 	_supply_remaining = 0.0
 	var nodes: Array = data.get("resource_nodes", [])
+	var multiplier := supply_amount_multiplier if supply_amount_multiplier > 0.0 else 1.0
 	for node in nodes:
 		if typeof(node) != TYPE_DICTIONARY:
 			continue
 		var pos := Vector2(float(node.get("x", 0.0)), float(node.get("y", 0.0)))
-		var amount := float(node.get("amount", 0.0))
+		var amount := float(node.get("amount", 0.0)) * multiplier
 		_resource_nodes.append({
 			"pos": pos,
 			"amount": amount,

@@ -16,6 +16,10 @@ enum PatrolMode {
 	AIR_SUPERIORITY,  # Aggressive patrol pushing into contested territory
 }
 
+# A2A hit chance depends on visibility (fog of war vs direct vision).
+const A2A_HIT_CHANCE_VISIBLE := 0.5
+const A2A_HIT_CHANCE_FOG := 0.3
+
 # =============================================================================
 # REFERENCES
 # =============================================================================
@@ -26,7 +30,8 @@ var unit: Unit  # Reference to the parent unit
 # STATE VARIABLES
 # =============================================================================
 
-var missile_ammo := 0
+var a2g_missile_ammo := 0
+var a2a_missile_ammo := 0
 var gun_ammo := 0
 var missile_timer := 0.0
 var reloading := false
@@ -83,8 +88,10 @@ func _init(parent_unit: Unit) -> void:
 
 func initialize() -> void:
 	orbit_phase = unit._combat_rng.randf_range(0.0, TAU)
-	if missile_ammo <= 0:
-		missile_ammo = maxi(0, unit.aircraft_missile_capacity)
+	if a2g_missile_ammo <= 0:
+		a2g_missile_ammo = maxi(0, unit.aircraft_missile_capacity)
+	if a2a_missile_ammo <= 0:
+		a2a_missile_ammo = maxi(0, unit.aircraft_a2a_missile_capacity)
 	if gun_ammo <= 0:
 		gun_ammo = maxi(0, unit.aircraft_gun_capacity)
 	if unit.aircraft_loiter_pos == Vector2.ZERO:
@@ -156,19 +163,24 @@ func update(delta: float) -> void:
 	if unit.is_uav:
 		if _update_takeoff(delta):
 			return
-		_update_loiter_reload(delta, null, null)
+		_update_loiter_reload(delta, null, "", null)
 		_move_toward_loiter(delta)
 		return
 
 	# Don't look for targets while retreating
 	var missile_target: Node2D = null
+	var missile_role := ""
 	var gun_target: Node2D = null
 	if retreat_timer <= 0.0:
-		missile_target = _find_missile_target()
+		var selection := _select_missile_target()
+		missile_target = selection.get("target")
+		missile_role = str(selection.get("role", ""))
 		gun_target = unit._find_attack_target()
 		if unit.aircraft_squad_enabled:
 			if _is_squad_leader() and missile_target == null and _squad_has_missiles():
-				missile_target = _find_missile_target(true)
+				selection = _select_missile_target(true)
+				missile_target = selection.get("target")
+				missile_role = str(selection.get("role", ""))
 			if _is_squad_leader():
 				var shared := missile_target if missile_target != null else gun_target
 				_set_squad_target(shared)
@@ -176,16 +188,19 @@ func update(delta: float) -> void:
 				var shared := _get_squad_target()
 				if shared != null:
 					missile_target = shared
+					missile_role = _missile_role_for_target(shared)
+					if missile_role == "a2a" and not _has_a2a_missiles() and _has_a2g_missiles():
+						missile_role = "a2g"
 					gun_target = shared
 
 	_set_speed(1.0, false)
-	_update_loiter_reload(delta, missile_target, gun_target)
+	_update_loiter_reload(delta, missile_target, missile_role, gun_target)
 
 	# Update retreat timer
 	if retreat_timer > 0.0:
 		retreat_timer -= delta
 
-	if _update_reload(delta):
+	if _update_reload(delta, missile_target, missile_role):
 		missile_lock_timer = 0.0
 		missile_lock_id = 0
 		return
@@ -212,8 +227,8 @@ func update(delta: float) -> void:
 	# Fire weapons if in position (but not while retreating)
 	if missile_target != null and retreat_timer <= 0.0:
 		_face_toward(missile_target.global_position, delta)
-		if missile_lock_timer >= unit.aircraft_missile_lock_time and _can_fire_missile():
-			_fire_missile(missile_target)
+		if missile_lock_timer >= unit.aircraft_missile_lock_time and _can_fire_missile(missile_role):
+			_fire_missile(missile_target, missile_role)
 			missile_lock_timer = 0.0
 			fired = true
 
@@ -259,8 +274,9 @@ func update(delta: float) -> void:
 # RELOAD & LANDING
 # =============================================================================
 
-func _update_reload(delta: float) -> bool:
-	var needs_reload := force_reload or missile_ammo <= 0
+func _update_reload(delta: float, missile_target: Node2D, missile_role: String) -> bool:
+	var hold_reload := _should_hold_reload(missile_target, missile_role)
+	var needs_reload := force_reload or (_missiles_need_reload() and not hold_reload)
 	if not reloading and not needs_reload:
 		return false
 
@@ -454,7 +470,8 @@ func _update_takeoff(delta: float) -> bool:
 	return true
 
 func _reload_ammo() -> void:
-	missile_ammo = maxi(0, unit.aircraft_missile_capacity)
+	a2g_missile_ammo = maxi(0, unit.aircraft_missile_capacity)
+	a2a_missile_ammo = maxi(0, unit.aircraft_a2a_missile_capacity)
 	gun_ammo = maxi(0, unit.aircraft_gun_capacity)
 	force_reload = false
 	no_missile_timer = 0.0
@@ -463,28 +480,21 @@ func _reload_ammo() -> void:
 # TARGETING
 # =============================================================================
 
-func _update_loiter_reload(delta: float, missile_target: Node2D, gun_target: Node2D) -> void:
+func _update_loiter_reload(delta: float, missile_target: Node2D, missile_role: String, gun_target: Node2D) -> void:
 	if reloading:
 		no_missile_timer = 0.0
 		force_reload = false
 		return
-	if missile_ammo > 0:
-		no_missile_timer = 0.0
-		force_reload = false
-		return
-	if unit.manual_active or unit._hold_active:
-		no_missile_timer = 0.0
-		force_reload = false
-		return
-	if missile_target != null or gun_target != null:
-		no_missile_timer = 0.0
-		return
-	if unit.aircraft_loiter_reload_delay <= 0.0:
+	if _missiles_need_reload():
+		if _should_hold_reload(missile_target, missile_role):
+			no_missile_timer = 0.0
+			force_reload = false
+			return
 		force_reload = true
+		no_missile_timer = 0.0
 		return
-	no_missile_timer += delta
-	if no_missile_timer >= unit.aircraft_loiter_reload_delay:
-		force_reload = true
+	no_missile_timer = 0.0
+	force_reload = false
 
 func _update_missile_lock(delta: float, missile_target: Node2D) -> void:
 	if unit.manual_active or unit._hold_active or takeoff_active:
@@ -502,10 +512,124 @@ func _update_missile_lock(delta: float, missile_target: Node2D) -> void:
 		return
 	missile_lock_timer = minf(unit.aircraft_missile_lock_time, missile_lock_timer + delta)
 
-func _find_missile_target(ignore_ammo: bool = false) -> Node2D:
-	if missile_ammo <= 0 and not ignore_ammo:
+func _missiles_need_reload() -> bool:
+	if unit.aircraft_missile_capacity > 0 and a2g_missile_ammo <= 0:
+		return true
+	if unit.aircraft_a2a_missile_capacity > 0 and a2a_missile_ammo <= 0:
+		return true
+	return false
+
+func _should_hold_reload(missile_target: Node2D, missile_role: String) -> bool:
+	if missile_target == null:
+		return false
+	if unit.aircraft_a2a_missile_capacity <= 0:
+		return false
+	if a2a_missile_ammo > 0:
+		return false
+	if missile_role != "a2g":
+		return false
+	return a2g_missile_ammo > 0
+
+func _has_a2g_missiles(ignore_ammo: bool = false) -> bool:
+	if unit.aircraft_missile_capacity <= 0:
+		return false
+	return ignore_ammo or a2g_missile_ammo > 0
+
+func _has_a2a_missiles(ignore_ammo: bool = false) -> bool:
+	if unit.aircraft_a2a_missile_capacity <= 0:
+		return false
+	return ignore_ammo or a2a_missile_ammo > 0
+
+func _has_any_missiles(ignore_ammo: bool = false) -> bool:
+	return _has_a2g_missiles(ignore_ammo) or _has_a2a_missiles(ignore_ammo)
+
+func _missile_role_for_target(target: Node2D) -> String:
+	if target is Unit and (target as Unit).unit_kind == "aircraft":
+		return "a2a"
+	return "a2g"
+
+func _is_target_visible(target: Node2D) -> bool:
+	if target is CanvasItem:
+		return (target as CanvasItem).visible
+	return true
+
+func _is_target_detected_by_radar(target: Node2D) -> bool:
+	if target == null or not is_instance_valid(target):
+		return false
+	var timer_value: Variant = target.get("radar_detected_timer")
+	if timer_value is float or timer_value is int:
+		if float(timer_value) > 0.0:
+			return true
+	var tree := unit.get_tree()
+	if tree == null:
+		return false
+	for node in tree.get_nodes_in_group("radar_station"):
+		if node == null or not is_instance_valid(node):
+			continue
+		var team_value: Variant = node.get("team_id")
+		if team_value is String and team_value != unit.team_id:
+			continue
+		if node.has_method("is_in_protection_area"):
+			if node.call("is_in_protection_area", target.global_position):
+				return true
+	return false
+
+func _select_missile_target(ignore_ammo: bool = false) -> Dictionary:
+	var target := _find_a2a_missile_target(ignore_ammo)
+	if target != null:
+		return {"target": target, "role": "a2a"}
+	target = _find_a2g_missile_target(ignore_ammo)
+	if target != null:
+		return {"target": target, "role": "a2g"}
+	return {}
+
+func _find_a2a_missile_target(ignore_ammo: bool = false) -> Node2D:
+	if not _has_a2a_missiles(ignore_ammo):
 		return null
 
+	var range := unit.aircraft_a2a_missile_range
+	var range_sq := range * range if range > 0.0 else INF
+	var incoming := _get_incoming_missiles()
+	var focus_limit := maxi(1, unit.aircraft_missile_focus_limit)
+	var best: Node2D = null
+	var best_dist := range_sq
+	var fallback: Node2D = null
+	var fallback_dist := range_sq
+
+	for node in unit.get_tree().get_nodes_in_group("units"):
+		if node == null or not is_instance_valid(node):
+			continue
+		if node is not Unit:
+			continue
+		var enemy := node as Unit
+		if enemy.team_id == unit.team_id:
+			continue
+		if enemy.unit_kind != "aircraft":
+			continue
+		if not _is_target_visible(enemy) and not _is_target_detected_by_radar(enemy):
+			continue
+		var dist := unit.global_position.distance_squared_to(enemy.global_position)
+		if range > 0.0 and dist > range_sq:
+			continue
+		if dist < fallback_dist:
+			fallback_dist = dist
+			fallback = enemy
+		var incoming_count := int(incoming.get(int(enemy.get_instance_id()), 0))
+		if incoming_count >= focus_limit:
+			continue
+		if dist < best_dist:
+			best_dist = dist
+			best = enemy
+
+	if best != null:
+		return best
+	return fallback
+
+func _find_a2g_missile_target(ignore_ammo: bool = false) -> Node2D:
+	if not _has_a2g_missiles(ignore_ammo):
+		return null
+
+	var allow_air_targets := unit.aircraft_a2a_missile_capacity > 0 and a2a_missile_ammo <= 0
 	var range := unit.aircraft_missile_range
 	var range_sq := range * range if range > 0.0 else INF
 	var incoming := _get_incoming_missiles()
@@ -524,8 +648,12 @@ func _find_missile_target(ignore_ammo: bool = false) -> Node2D:
 				continue
 			if node is not Node2D:
 				continue
-			if node is Unit and (node as Unit).team_id == unit.team_id:
-				continue
+			if node is Unit:
+				var enemy_unit := node as Unit
+				if enemy_unit.team_id == unit.team_id:
+					continue
+				if enemy_unit.unit_kind == "aircraft" and not allow_air_targets:
+					continue
 			if node is Building and (node as Building).team_id == unit.team_id:
 				continue
 			if node is HQ and (node as HQ).team_id == unit.team_id:
@@ -600,29 +728,58 @@ func _gun_target_in_range(target: Node2D) -> bool:
 # WEAPONS
 # =============================================================================
 
-func _can_fire_missile() -> bool:
-	return missile_ammo > 0 and missile_timer <= 0.0 and _can_fire_squad_missile()
+func _get_missile_ammo(role: String) -> int:
+	return a2a_missile_ammo if role == "a2a" else a2g_missile_ammo
 
-func _fire_missile(target: Node2D) -> void:
+func _can_fire_missile(role: String) -> bool:
+	if role == "":
+		return false
+	return _get_missile_ammo(role) > 0 and missile_timer <= 0.0 and _can_fire_squad_missile()
+
+func _fire_missile(target: Node2D, role: String) -> void:
 	if target == null or not is_instance_valid(target):
 		return
 
+	var is_a2a := role == "a2a"
 	var missile := Missile.new()
-	missile.speed = unit.aircraft_missile_speed
-	missile.damage = unit.aircraft_missile_damage
-	missile.turn_rate = unit.aircraft_missile_turn_rate
-	missile.lifetime = unit.aircraft_missile_lifetime
-	missile.warhead_size = unit.aircraft_missile_warhead_size
-	if unit.aircraft_missile_hit_radius > 0.0:
-		missile.hit_radius = unit.aircraft_missile_hit_radius
-	if unit.aircraft_missile_splash_radius > 0.0:
-		missile.splash_radius = unit.aircraft_missile_splash_radius
-	missile.splash_damage_scale = unit.aircraft_missile_splash_scale
-	if unit.aircraft_missile_range > 0.0:
-		missile.range = unit.aircraft_missile_range
-		missile.max_distance = unit.aircraft_missile_range
+	if is_a2a:
+		missile.speed = unit.aircraft_a2a_missile_speed
+		missile.damage = unit.aircraft_a2a_missile_damage
+		missile.turn_rate = unit.aircraft_a2a_missile_turn_rate
+		missile.lifetime = unit.aircraft_a2a_missile_lifetime
+		missile.warhead_size = unit.aircraft_a2a_missile_warhead_size
+		if unit.aircraft_a2a_missile_hit_radius > 0.0:
+			missile.hit_radius = unit.aircraft_a2a_missile_hit_radius
+		missile.splash_enabled = unit.aircraft_a2a_missile_splash_radius > 0.0 and unit.aircraft_a2a_missile_splash_scale > 0.0
+		if unit.aircraft_a2a_missile_splash_radius > 0.0:
+			missile.splash_radius = unit.aircraft_a2a_missile_splash_radius
+		missile.splash_damage_scale = unit.aircraft_a2a_missile_splash_scale
+		if unit.aircraft_a2a_missile_range > 0.0:
+			missile.range = unit.aircraft_a2a_missile_range
+			missile.max_distance = unit.aircraft_a2a_missile_range
+		missile.color = unit.aircraft_a2a_missile_color
+		missile.trail_color = unit.aircraft_a2a_missile_trail_color
+		missile.hit_chance = A2A_HIT_CHANCE_VISIBLE if _is_target_visible(target) else A2A_HIT_CHANCE_FOG
+		var hp_value: Variant = target.get("hp")
+		if hp_value is float or hp_value is int:
+			missile.damage = maxf(missile.damage, float(hp_value) + 1.0)
+	else:
+		missile.speed = unit.aircraft_missile_speed
+		missile.damage = unit.aircraft_missile_damage
+		missile.turn_rate = unit.aircraft_missile_turn_rate
+		missile.lifetime = unit.aircraft_missile_lifetime
+		missile.warhead_size = unit.aircraft_missile_warhead_size
+		if unit.aircraft_missile_hit_radius > 0.0:
+			missile.hit_radius = unit.aircraft_missile_hit_radius
+		if unit.aircraft_missile_splash_radius > 0.0:
+			missile.splash_radius = unit.aircraft_missile_splash_radius
+		missile.splash_damage_scale = unit.aircraft_missile_splash_scale
+		if unit.aircraft_missile_range > 0.0:
+			missile.range = unit.aircraft_missile_range
+			missile.max_distance = unit.aircraft_missile_range
+		missile.color = unit.aircraft_missile_color
+		missile.trail_color = unit.aircraft_missile_trail_color
 	missile.team_id = unit.team_id
-	missile.color = unit.aircraft_missile_color
 	missile.source_kind = "aircraft"
 	missile.source_altitude = altitude_factor
 	missile.target = target
@@ -639,10 +796,16 @@ func _fire_missile(target: Node2D) -> void:
 
 	retreat_timer = unit.aircraft_retreat_duration
 	retreat_phase = 0
-	missile_ammo = maxi(0, missile_ammo - 1)
-	missile_timer = unit.aircraft_missile_cooldown
-	if missile_ammo <= 0:
-		_advance_squad_fire_index()
+	if is_a2a:
+		a2a_missile_ammo = maxi(0, a2a_missile_ammo - 1)
+		missile_timer = unit.aircraft_a2a_missile_cooldown
+		if a2a_missile_ammo <= 0 and unit.aircraft_a2a_missile_capacity > 0:
+			_advance_squad_fire_index()
+	else:
+		a2g_missile_ammo = maxi(0, a2g_missile_ammo - 1)
+		missile_timer = unit.aircraft_missile_cooldown
+		if a2g_missile_ammo <= 0 and unit.aircraft_missile_capacity > 0:
+			_advance_squad_fire_index()
 
 func _fire_gun(target: Node) -> void:
 	if gun_ammo <= 0 or unit._cooldown > 0.0:
@@ -988,14 +1151,14 @@ func _get_squad_missile_owner_id() -> int:
 		index = 0
 	var current_id := int(members[index])
 	var current := instance_from_id(current_id) as Unit
-	if current != null and is_instance_valid(current) and current._aircraft_behavior != null and current._aircraft_behavior.missile_ammo > 0:
+	if current != null and is_instance_valid(current) and current._aircraft_behavior != null and current._aircraft_behavior._has_any_missiles():
 		home.set_meta("air_squad_fire_index", index)
 		return current_id
 	for offset in range(1, members.size() + 1):
 		var next_index := (index + offset) % members.size()
 		var next_id := int(members[next_index])
 		var next := instance_from_id(next_id) as Unit
-		if next != null and is_instance_valid(next) and next._aircraft_behavior != null and next._aircraft_behavior.missile_ammo > 0:
+		if next != null and is_instance_valid(next) and next._aircraft_behavior != null and next._aircraft_behavior._has_any_missiles():
 			home.set_meta("air_squad_fire_index", next_index)
 			return next_id
 	home.set_meta("air_squad_fire_index", index)
@@ -1020,18 +1183,18 @@ func _advance_squad_fire_index() -> void:
 		var next_index := (index + offset) % members.size()
 		var next_id := int(members[next_index])
 		var next := instance_from_id(next_id) as Unit
-		if next != null and is_instance_valid(next) and next._aircraft_behavior != null and next._aircraft_behavior.missile_ammo > 0:
+		if next != null and is_instance_valid(next) and next._aircraft_behavior != null and next._aircraft_behavior._has_any_missiles():
 			home.set_meta("air_squad_fire_index", next_index)
 			return
 	home.set_meta("air_squad_fire_index", index)
 
 func _squad_has_missiles() -> bool:
 	if not unit.aircraft_squad_enabled:
-		return missile_ammo > 0
+		return _has_any_missiles()
 	var members := _get_squad_member_ids()
 	for member_id in members:
 		var u := instance_from_id(int(member_id)) as Unit
-		if u != null and is_instance_valid(u) and u._aircraft_behavior != null and u._aircraft_behavior.missile_ammo > 0:
+		if u != null and is_instance_valid(u) and u._aircraft_behavior != null and u._aircraft_behavior._has_any_missiles():
 			return true
 	return false
 

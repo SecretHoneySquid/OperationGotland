@@ -70,6 +70,19 @@ var _battalion_withdraw_button: Button
 var _selected_battalion: Battalion = null
 var _battalion_placement_preview: Node2D = null
 
+# Patriot UI
+var _patriot_panel: VBoxContainer
+var _patriot_name_label: Label
+var _patriot_status_label: Label
+var _patriot_protection_button: Button
+var _selected_patriot: PatriotTurret = null
+var _radar_panel: VBoxContainer
+var _radar_name_label: Label
+var _radar_status_label: Label
+var _radar_area_button: Button
+var _selected_radar: RadarStation = null
+var _protection_area_controller: Node = null
+
 func _ready() -> void:
 	_controller = get_node_or_null(build_controller_path) as BuildController
 	_game_controller = get_node_or_null(game_controller_path) as GameController
@@ -83,6 +96,7 @@ func _ready() -> void:
 	if _selection_controller != null:
 		_selection_controller.building_selected.connect(_on_building_selected)
 		_selection_controller.units_selected.connect(_on_units_selected)
+		_selection_controller.turret_selected.connect(_on_turret_selected)
 	if _battalion_controller != null:
 		_battalion_controller.battalion_selected.connect(_on_battalion_selected)
 		_battalion_controller.placement_started.connect(_on_battalion_placement_started)
@@ -167,6 +181,10 @@ func _process(_delta: float) -> void:
 		_update_airforce_panel()
 	if _bombardment_panel != null:
 		_update_bombardment_panel()
+	if _patriot_panel != null:
+		_update_patriot_panel()
+	if _radar_panel != null:
+		_update_radar_panel()
 
 func _build_ui() -> void:
 	# LEFT PANEL - Buildings only
@@ -625,6 +643,54 @@ func _build_ui() -> void:
 				unit.clear_bombardment_area()
 	)
 	_bombardment_panel.add_child(_cancel_bombardment_button)
+
+	# ========== PATRIOT SAM PANEL ==========
+	_patriot_panel = VBoxContainer.new()
+	_patriot_panel.visible = false
+	_patriot_panel.add_theme_constant_override("separation", 6)
+	_patriot_panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	bottom_hbox.add_child(_patriot_panel)
+
+	var patriot_title := Label.new()
+	patriot_title.text = "Patriot SAM Control"
+	_patriot_panel.add_child(patriot_title)
+
+	_patriot_name_label = Label.new()
+	_patriot_name_label.text = "No patriot selected"
+	_patriot_panel.add_child(_patriot_name_label)
+
+	_patriot_status_label = Label.new()
+	_patriot_status_label.text = "Status: Inactive"
+	_patriot_panel.add_child(_patriot_status_label)
+
+	_patriot_protection_button = Button.new()
+	_patriot_protection_button.text = "Set Protection Area"
+	_patriot_protection_button.pressed.connect(_on_patriot_protection_pressed)
+	_patriot_panel.add_child(_patriot_protection_button)
+
+	# ========== RADAR PANEL ==========
+	_radar_panel = VBoxContainer.new()
+	_radar_panel.visible = false
+	_radar_panel.add_theme_constant_override("separation", 6)
+	_radar_panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	bottom_hbox.add_child(_radar_panel)
+
+	var radar_title := Label.new()
+	radar_title.text = "Radar Control"
+	_radar_panel.add_child(radar_title)
+
+	_radar_name_label = Label.new()
+	_radar_name_label.text = "No radar selected"
+	_radar_panel.add_child(_radar_name_label)
+
+	_radar_status_label = Label.new()
+	_radar_status_label.text = "Status: Inactive"
+	_radar_panel.add_child(_radar_status_label)
+
+	_radar_area_button = Button.new()
+	_radar_area_button.text = "Set Detection Area"
+	_radar_area_button.pressed.connect(_on_radar_area_pressed)
+	_radar_panel.add_child(_radar_area_button)
 
 	# ========== BATTALION PANELS ==========
 
@@ -1171,3 +1237,99 @@ func _update_airforce_panel() -> void:
 		_airforce_defend_button.button_pressed = (current_mode == int(AircraftBehavior.PatrolMode.DEFEND_BASE))
 	if _airforce_superiority_button != null:
 		_airforce_superiority_button.button_pressed = (current_mode == int(AircraftBehavior.PatrolMode.AIR_SUPERIORITY))
+
+
+# =============================================================================
+# PATRIOT SAM UI HANDLERS
+# =============================================================================
+
+func _on_turret_selected(turret: DefenseTurret) -> void:
+	print("[BUILD_UI] _on_turret_selected called with: ", turret)
+	_selected_patriot = null
+	if _patriot_panel != null:
+		_patriot_panel.visible = false
+	_selected_radar = null
+	if _radar_panel != null:
+		_radar_panel.visible = false
+
+	if turret == null or not is_instance_valid(turret):
+		print("[BUILD_UI] turret is null or invalid")
+		return
+
+	# Check if it's a Patriot turret
+	if turret is PatriotTurret:
+		print("[BUILD_UI] turret is PatriotTurret, showing panel")
+		_selected_patriot = turret as PatriotTurret
+		_update_patriot_panel()
+	elif turret is RadarStation:
+		print("[BUILD_UI] turret is RadarStation, showing panel")
+		_selected_radar = turret as RadarStation
+		_update_radar_panel()
+	else:
+		print("[BUILD_UI] turret is NOT PatriotTurret, type: ", turret.get_class())
+
+
+func _on_patriot_protection_pressed() -> void:
+	if _selected_patriot == null or not is_instance_valid(_selected_patriot):
+		return
+	if _protection_area_controller == null:
+		_protection_area_controller = get_tree().get_first_node_in_group("protection_area_controller")
+	if _protection_area_controller != null and _protection_area_controller.has_method("start_protection_selection"):
+		_protection_area_controller.start_protection_selection(_selected_patriot)
+
+func _on_radar_area_pressed() -> void:
+	if _selected_radar == null or not is_instance_valid(_selected_radar):
+		return
+	if _protection_area_controller == null:
+		_protection_area_controller = get_tree().get_first_node_in_group("protection_area_controller")
+	if _protection_area_controller != null and _protection_area_controller.has_method("start_protection_selection"):
+		_protection_area_controller.start_protection_selection(_selected_radar)
+
+
+func _update_patriot_panel() -> void:
+	if _patriot_panel == null:
+		return
+	if _selected_patriot == null or not is_instance_valid(_selected_patriot):
+		_patriot_panel.visible = false
+		return
+	_patriot_panel.visible = true
+	if _patriot_name_label != null:
+		_patriot_name_label.text = "Patriot @ (%.0f, %.0f)" % [
+			_selected_patriot.global_position.x,
+			_selected_patriot.global_position.y
+		]
+	if _patriot_status_label != null:
+		if _selected_patriot.protection_configured:
+			var arc_deg := rad_to_deg(_selected_patriot.protection_arc_half_angle * 2)
+			_patriot_status_label.text = "Status: Active (%.0f° arc)" % arc_deg
+		else:
+			_patriot_status_label.text = "Status: Inactive (Needs Configuration)"
+	if _patriot_protection_button != null:
+		if _selected_patriot.protection_configured:
+			_patriot_protection_button.text = "Change Protection Area"
+		else:
+			_patriot_protection_button.text = "Set Protection Area"
+
+func _update_radar_panel() -> void:
+	if _radar_panel == null:
+		return
+	if _selected_radar == null or not is_instance_valid(_selected_radar):
+		_radar_panel.visible = false
+		return
+	_radar_panel.visible = true
+	if _radar_name_label != null:
+		_radar_name_label.text = "Radar @ (%.0f, %.0f)" % [
+			_selected_radar.global_position.x,
+			_selected_radar.global_position.y
+		]
+	if _radar_status_label != null:
+		if _selected_radar.protection_configured:
+			var arc_deg := rad_to_deg(_selected_radar.protection_arc_half_angle * 2)
+			_radar_status_label.text = "Status: Active (%.0f deg arc)" % arc_deg
+		else:
+			_radar_status_label.text = "Status: Inactive (Needs Configuration)"
+	if _radar_area_button != null:
+		if _selected_radar.protection_configured:
+			_radar_area_button.text = "Change Detection Area"
+		else:
+			_radar_area_button.text = "Set Detection Area"

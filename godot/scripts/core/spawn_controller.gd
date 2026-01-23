@@ -215,8 +215,12 @@ func _configure_aircraft(unit: Unit, team: TeamState, airfield: Building, type_i
 	# Aircraft ammo and missiles
 	unit.aircraft_gun_capacity = int(stats.get("gun_ammo", GameBalance.AIRCRAFT_GUN_CAPACITY))
 	unit.aircraft_gun_ammo = unit.aircraft_gun_capacity
-	unit.aircraft_missile_capacity = int(stats.get("missile_ammo", GameBalance.AIRCRAFT_MISSILE_CAPACITY))
-	unit.aircraft_missile_ammo = unit.aircraft_missile_capacity
+	var a2g_capacity := int(stats.get("missile_a2g_ammo", stats.get("missile_ammo", GameBalance.AIRCRAFT_MISSILE_CAPACITY)))
+	unit.aircraft_missile_capacity = a2g_capacity
+	unit.aircraft_missile_ammo = a2g_capacity
+	var a2a_capacity := int(stats.get("missile_a2a_ammo", 0))
+	unit.aircraft_a2a_missile_capacity = a2a_capacity
+	unit.aircraft_a2a_missile_ammo = a2a_capacity
 	unit.aircraft_reload_time = float(stats.get("reload_time", GameBalance.AIRCRAFT_RELOAD_TIME))
 	unit.aircraft_missile_damage = float(stats.get("missile_damage", GameBalance.AIRCRAFT_MISSILE_DAMAGE))
 	unit.aircraft_missile_speed = float(stats.get("missile_speed", GameBalance.AIRCRAFT_MISSILE_SPEED))
@@ -228,10 +232,29 @@ func _configure_aircraft(unit: Unit, team: TeamState, airfield: Building, type_i
 	unit.aircraft_missile_splash_radius = float(stats.get("missile_splash_radius", GameBalance.AIRCRAFT_MISSILE_SPLASH_RADIUS))
 	unit.aircraft_missile_splash_scale = float(stats.get("missile_splash_scale", GameBalance.AIRCRAFT_MISSILE_SPLASH_SCALE))
 	unit.aircraft_missile_lifetime = float(stats.get("missile_lifetime", GameBalance.AIRCRAFT_MISSILE_LIFETIME))
+	unit.aircraft_a2a_missile_damage = float(stats.get("missile_a2a_damage", unit.aircraft_missile_damage))
+	unit.aircraft_a2a_missile_speed = float(stats.get("missile_a2a_speed", unit.aircraft_missile_speed))
+	unit.aircraft_a2a_missile_turn_rate = float(stats.get("missile_a2a_turn_rate", unit.aircraft_missile_turn_rate))
+	unit.aircraft_a2a_missile_range = float(stats.get("missile_a2a_range", unit.aircraft_missile_range))
+	unit.aircraft_a2a_missile_cooldown = float(stats.get("missile_a2a_cooldown", unit.aircraft_missile_cooldown))
+	unit.aircraft_a2a_missile_hit_radius = float(stats.get("missile_a2a_hit_radius", unit.aircraft_missile_hit_radius))
+	unit.aircraft_a2a_missile_warhead_size = str(stats.get("missile_a2a_warhead_size", unit.aircraft_missile_warhead_size))
+	unit.aircraft_a2a_missile_splash_radius = float(stats.get("missile_a2a_splash_radius", 0.0))
+	unit.aircraft_a2a_missile_splash_scale = float(stats.get("missile_a2a_splash_scale", 0.0))
+	unit.aircraft_a2a_missile_lifetime = float(stats.get("missile_a2a_lifetime", unit.aircraft_missile_lifetime))
 	unit.aircraft_landing_cap = GameBalance.AIRCRAFT_LANDING_CAP
-	var missile_color = stats.get("missile_color", Color(1.0, 0.55, 0.25, 1.0))
+	var missile_color = stats.get("missile_a2g_color", stats.get("missile_color", Color(1.0, 0.55, 0.25, 1.0)))
 	if missile_color is Color:
 		unit.aircraft_missile_color = missile_color
+	var missile_trail = stats.get("missile_a2g_trail_color", Color(0.2, 0.55, 1.0, 0.7))
+	if missile_trail is Color:
+		unit.aircraft_missile_trail_color = missile_trail
+	var a2a_color = stats.get("missile_a2a_color", Color(1.0, 0.2, 0.2, 1.0))
+	if a2a_color is Color:
+		unit.aircraft_a2a_missile_color = a2a_color
+	var a2a_trail = stats.get("missile_a2a_trail_color", Color(1.0, 0.2, 0.2, 0.7))
+	if a2a_trail is Color:
+		unit.aircraft_a2a_missile_trail_color = a2a_trail
 
 	# Set airfield home
 	if airfield != null and is_instance_valid(airfield):
@@ -360,11 +383,16 @@ func spawn_building(team_id: String, build_id: String, pos: Vector2) -> Building
 			building.set_meta("aircraft_active", 0)
 			building.set_meta("aircraft_landing", 0)
 			building.aircraft_production_type = "fighter"
+		"radar":
+			building.vision_radius = 0.0
 
 	building.position = pos
 	_structures_container.add_child(building)
 	_increment_building_count(team_id, build_id)
 	building_spawned.emit(building, team_id, build_id)
+	if build_id == "radar":
+		var radar := _spawn_radar_station(team_id, pos)
+		building.set_meta("linked_turret", radar)
 	return building
 
 func spawn_hq(team: TeamState) -> HQ:
@@ -414,6 +442,21 @@ func spawn_defense_turret(team_id: String, pos: Vector2, build_id: String = "def
 	turret.position = pos
 	_structures_container.add_child(turret)
 	return turret
+
+func _spawn_radar_station(team_id: String, pos: Vector2) -> RadarStation:
+	var radar := RadarStation.new()
+	radar.team_id = team_id
+	radar.attack_range = 2400.0
+	radar.support_radius = 600.0
+	radar.damage = 0.0
+	radar.fire_rate = 999.0
+	radar.hitscan_enabled = false
+	radar.base_radius = 22.0
+	radar.base_color = Color(0.2, 0.55, 0.7, 1.0)
+	radar.visual_base_radius = 22.0
+	radar.position = pos
+	_structures_container.add_child(radar)
+	return radar
 
 func _compute_defense_range(team: TeamState, pos: Vector2, base_range: float) -> float:
 	var zone := team.build_zone

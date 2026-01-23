@@ -22,6 +22,7 @@ const BUILDING_HP := {
 	"defense_laser": 230.0,
 	"defense": 240.0,
 	"defense_patriot": 280.0,
+	"radar": 240.0,
 }
 
 static func get_building_hp(build_id: String) -> float:
@@ -43,6 +44,7 @@ const BUILDING_SIZE := {
 	"defense_missile": Vector2(70, 70),
 	"defense_laser": Vector2(70, 70),
 	"defense_patriot": Vector2(90, 90),
+	"radar": Vector2(90, 90),
 }
 
 static func get_building_size(build_id: String) -> Vector2:
@@ -78,6 +80,7 @@ const BUILDING_COLOR := {
 	"defense": Color(0.7, 0.7, 0.7, 1.0),
 	"defense_missile": Color(0.7, 0.7, 0.7, 1.0),
 	"defense_patriot": Color(0.3, 0.45, 0.3, 1.0),
+	"radar": Color(0.2, 0.55, 0.7, 1.0),
 }
 
 static func get_building_color(build_id: String, team_hq_color: Color) -> Color:
@@ -142,7 +145,7 @@ static func get_defense_profile(build_id: String) -> Dictionary:
 				"damage": 10.0,
 				"fire_rate": 0.8,
 				"missile_speed": 260.0,
-				"missile_turn_rate": 9.0,
+				"missile_turn_rate": 10.0,
 				"missile_color": Color(1.0, 0.6, 0.2, 1.0),
 				"warhead_size": "medium",
 				"hitscan": false,
@@ -157,7 +160,7 @@ static func get_defense_profile(build_id: String) -> Dictionary:
 				"damage": 0.0,  # Doesn't attack units directly
 				"fire_rate": 1.5,  # Time between interceptions
 				"missile_speed": 800.0,  # Fast interceptor missiles
-				"missile_turn_rate": 18.0,  # High maneuverability
+				"missile_turn_rate": 20.0,  # High maneuverability
 				"missile_color": Color(0.9, 1.0, 0.9, 1.0),  # Light green/white
 				"warhead_size": "small",
 				"hitscan": false,
@@ -166,8 +169,9 @@ static func get_defense_profile(build_id: String) -> Dictionary:
 				"damage_vs_infantry": 0.0,
 				"damage_vs_vehicle": 0.0,
 				"is_interceptor": true,  # Special flag for missile interception
-				"intercept_success_base": 0.85,  # 85% base success rate
+				"intercept_success_base": 0.3,  # Base success rate when solo without radar
 				"max_simultaneous_intercepts": 2,  # Can track 2 missiles at once
+				"max_interceptors_per_missile": 4,
 			}
 	# Default fallback
 	return {
@@ -175,7 +179,7 @@ static func get_defense_profile(build_id: String) -> Dictionary:
 		"damage": 10.0,
 		"fire_rate": 0.8,
 		"missile_speed": 260.0,
-		"missile_turn_rate": 9.0,
+		"missile_turn_rate": 10.0,
 		"missile_color": Color(1.0, 0.6, 0.2, 1.0),
 		"warhead_size": "medium",
 		"hitscan": false,

@@ -429,7 +429,16 @@ func update_missile_trail(missile, proxy: Node3D, id: int) -> void:
 		pos += jitter
 
 	pos.y += missile_smoke_height_offset
-	spawn_smoke(pos, missile_smoke_color, missile_smoke_size * scale, missile_smoke_duration)
+	var smoke_color := missile_smoke_color
+	var source_kind := ""
+	var source_value: Variant = missile.get("source_kind")
+	if source_value is String:
+		source_kind = source_value
+	if source_kind == "aircraft":
+		var trail_value: Variant = missile.get("trail_color")
+		if trail_value is Color:
+			smoke_color = trail_value
+	spawn_smoke(pos, smoke_color, missile_smoke_size * scale, missile_smoke_duration)
 
 # =============================================================================
 # UPDATE ALL EFFECTS

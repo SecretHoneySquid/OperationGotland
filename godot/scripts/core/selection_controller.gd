@@ -4,6 +4,7 @@ extends Node2D
 signal building_selected(building: Building)
 signal units_selected(units: Array[Unit])
 signal battalion_selected(battalion: Battalion)
+signal turret_selected(turret: DefenseTurret)
 
 @export var team_id := "p1"
 @export var build_controller_path := NodePath("../BuildController")
@@ -19,14 +20,17 @@ signal battalion_selected(battalion: Battalion)
 @export var render_2d := true
 @export var command_drag_threshold := 8.0
 @export var selection_box_overlay_path := NodePath("../UI/SelectionBoxOverlay")
+@export var protection_area_controller_path := NodePath("../ProtectionAreaController")
 
 var _build_controller: BuildController
 var _game_controller: GameController
 var _bombardment_controller: BombardmentController
 var _battalion_controller: BattalionController
+var _protection_area_controller: Node
 var _selected: Array[Unit] = []
 var _selected_building: Building
 var _selected_battalion: Battalion
+var _selected_turret: DefenseTurret
 var _dragging := false
 var _drag_start := Vector2.ZERO
 var _drag_end := Vector2.ZERO
@@ -42,6 +46,7 @@ func _ready() -> void:
 	_bombardment_controller = get_node_or_null(bombardment_controller_path) as BombardmentController
 	_battalion_controller = get_node_or_null(battalion_controller_path) as BattalionController
 	_selection_box_overlay = get_node_or_null(selection_box_overlay_path) as Control
+	_protection_area_controller = get_node_or_null(protection_area_controller_path)
 	_rng.randomize()
 	_world_input = _find_world_input()
 
@@ -53,6 +58,8 @@ func _unhandled_input(event: InputEvent) -> void:
 	if _game_controller != null and _game_controller.is_rally_mode(team_id):
 		return
 	if _battalion_controller != null and _battalion_controller.is_placing():
+		return
+	if _protection_area_controller != null and _protection_area_controller.has_method("is_active") and _protection_area_controller.is_active():
 		return
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
 		if event.pressed:
@@ -115,9 +122,31 @@ func set_render_2d(value: bool) -> void:
 func _select_single(pos: Vector2, add: bool) -> void:
 	var building := _pick_building(pos)
 	if building != null:
+		# Check if this building has a linked turret (defense buildings)
+		var linked_turret = building.get_meta("linked_turret", null)
+		print("[SELECTION] Building clicked: ", building.build_id, " linked_turret: ", linked_turret)
+		if linked_turret != null and is_instance_valid(linked_turret) and (linked_turret is PatriotTurret or linked_turret is RadarStation):
+			# Select the linked defense/radar turret instead of the building
+			print("[SELECTION] Selecting linked turret")
+			_clear_selection()
+			_clear_selected_building()
+			_clear_selected_battalion()
+			_set_selected_turret(linked_turret as DefenseTurret)
+			return
+		# Normal building selection
 		_clear_selection()
 		_clear_selected_battalion()
+		_clear_selected_turret()
 		_set_selected_building(building)
+		return
+
+	# Check for turret selection (Patriot, etc.) - direct click on turret without building
+	var turret := _pick_turret(pos)
+	if turret != null:
+		_clear_selection()
+		_clear_selected_building()
+		_clear_selected_battalion()
+		_set_selected_turret(turret)
 		return
 
 	# Check for battalion selection
@@ -125,6 +154,7 @@ func _select_single(pos: Vector2, add: bool) -> void:
 	if battalion != null:
 		_clear_selection()
 		_clear_selected_building()
+		_clear_selected_turret()
 		_set_selected_battalion(battalion)
 		return
 
@@ -141,9 +171,11 @@ func _select_single(pos: Vector2, add: bool) -> void:
 		_toggle_select(best, add)
 		_clear_selected_building()
 		_clear_selected_battalion()
+		_clear_selected_turret()
 	else:
 		_clear_selected_building()
 		_clear_selected_battalion()
+		_clear_selected_turret()
 
 func _select_box(rect: Rect2, add: bool) -> void:
 	if not add:
@@ -279,3 +311,37 @@ func _clear_selected_battalion() -> void:
 	if _battalion_controller != null:
 		_battalion_controller.clear_selection()
 	emit_signal("battalion_selected", null)
+
+
+func _pick_turret(pos: Vector2) -> DefenseTurret:
+	var best: DefenseTurret = null
+	var best_dist := INF
+	for node in get_tree().get_nodes_in_group("defense_turret"):
+		var turret := node as DefenseTurret
+		if turret == null:
+			continue
+		if turret.team_id != team_id:
+			continue
+		var dist := turret.global_position.distance_squared_to(pos)
+		var pick_radius := turret.base_radius * turret.base_radius * 4.0
+		if dist > pick_radius:
+			continue
+		if dist < best_dist:
+			best_dist = dist
+			best = turret
+	return best
+
+
+func _set_selected_turret(turret: DefenseTurret) -> void:
+	if _selected_turret == turret:
+		return
+	_selected_turret = turret
+	print("[SELECTION] Emitting turret_selected signal for: ", turret)
+	emit_signal("turret_selected", turret)
+
+
+func _clear_selected_turret() -> void:
+	if _selected_turret == null:
+		return
+	_selected_turret = null
+	emit_signal("turret_selected", null)

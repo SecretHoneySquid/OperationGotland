@@ -15,6 +15,7 @@ signal impact(pos: Vector2, color: Color, warhead_size: String, source_kind: Str
 @export var trail_length := 12.0
 @export var warhead_size := "medium"
 @export var render_2d := true
+@export var hit_chance := 1.0  # 1.0 = always hit, <1.0 = probabilistic hit
 @export var team_id := ""
 @export var source_kind := ""
 @export var source_altitude := 0.0
@@ -39,6 +40,9 @@ var _visual_node: Node  # Can be either Node2D or Node3D
 var _ballistic_height := 0.0  # Current height in ballistic arc
 var _ballistic_velocity_z := 0.0  # Vertical velocity for ballistic arc
 var _base_speed := 0.0  # Store original speed for acceleration
+static var _hit_rng := RandomNumberGenerator.new()
+static var _hit_rng_ready := false
+var radar_detected_timer := 0.0
 
 const _WARHEAD_RADII = {
 	"small": 4.0,
@@ -53,6 +57,13 @@ const _WARHEAD_SPLASH = {
 
 func _ready() -> void:
 	add_to_group("missiles")
+	var fuel_time := GameBalance.MISSILE_FUEL_TIME
+	if fuel_time > 0.0:
+		if lifetime <= 0.0 or lifetime > fuel_time:
+			lifetime = fuel_time
+	if not _hit_rng_ready:
+		_hit_rng.randomize()
+		_hit_rng_ready = true
 	if _origin == Vector2.ZERO:
 		_origin = global_position
 	_source_altitude_start = clampf(source_altitude, 0.0, 1.0)
@@ -71,6 +82,8 @@ func _ready() -> void:
 	_init_ballistic_arc()
 
 func _process(delta: float) -> void:
+	if radar_detected_timer > 0.0:
+		radar_detected_timer = maxf(0.0, radar_detected_timer - delta)
 	lifetime -= delta
 	if lifetime <= 0.0:
 		queue_free()
@@ -122,6 +135,11 @@ func _update_altitude_factor() -> void:
 
 func _check_hit(target_node: Node2D) -> void:
 	if global_position.distance_squared_to(target_node.global_position) <= hit_radius * hit_radius:
+		var chance := clampf(hit_chance, 0.0, 1.0)
+		if chance < 1.0 and _hit_rng.randf() > chance:
+			emit_signal("impact", global_position, color, warhead_size, source_kind)
+			queue_free()
+			return
 		if target_node.has_method("take_damage"):
 			target_node.take_damage(damage, "missile")
 		_apply_splash_damage(target_node)
@@ -315,6 +333,14 @@ func intercept() -> void:
 	_intercepted = true
 	# Emit impact at current position (for explosion visual)
 	emit_signal("impact", global_position, color, warhead_size, "intercepted")
+	queue_free()
+
+func intercept_silent() -> void:
+	# Called when the interceptor handles the explosion itself (with correct height)
+	# Just remove the missile without triggering another explosion
+	if _intercepted:
+		return
+	_intercepted = true
 	queue_free()
 
 func is_interceptable() -> bool:
