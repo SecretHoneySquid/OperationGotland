@@ -1,24 +1,24 @@
 {
   "name": "test_map_01",
   "size": {
-	"width": 6144,
-	"height": 6144
+	"width": 7680,
+	"height": 7680
   },
   "start_positions": [
-	{ "id": "p1", "x": 500, "y": 500 },
-	{ "id": "p2", "x": 5600, "y": 5600 }
+	{ "id": "p1", "x": 625, "y": 625 },
+	{ "id": "p2", "x": 7000, "y": 7000 }
   ],
   "build_zones": [
-	{ "id": "p1", "x": 200, "y": 200, "width": 1800, "height": 1800 },
-	{ "id": "p2", "x": 4200, "y": 4200, "width": 1800, "height": 1800 }
+	{ "id": "p1", "x": 250, "y": 250, "width": 2250, "height": 2250 },
+	{ "id": "p2", "x": 5250, "y": 5250, "width": 2250, "height": 2250 }
   ],
   "resource_nodes": [
-	{ "id": "supply_a", "x": 1500, "y": 1500, "amount": 5000 },
-	{ "id": "supply_b", "x": 4500, "y": 4500, "amount": 5000 },
-	{ "id": "supply_mid", "x": 3072, "y": 3072, "amount": 8000 }
+	{ "id": "supply_a", "x": 1875, "y": 1875, "amount": 5000 },
+	{ "id": "supply_b", "x": 5625, "y": 5625, "amount": 5000 },
+	{ "id": "supply_mid", "x": 3840, "y": 3840, "amount": 8000 }
   ],
   "rally_targets": [
-	{ "id": "p1_push", "x": 3072, "y": 3072 },
-	{ "id": "p2_push", "x": 3072, "y": 3072 }
+	{ "id": "p1_push", "x": 3840, "y": 3840 },
+	{ "id": "p2_push", "x": 3840, "y": 3840 }
   ]
 }

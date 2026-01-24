@@ -15,6 +15,7 @@ class_name Minimap
 # =============================================================================
 
 @export var minimap_size := Vector2(200, 200)
+@export var ui_scale := 1.0
 @export var world_size := Vector2(6144, 6144)
 @export var border_width := 2.0
 @export var border_color := Color(0.3, 0.3, 0.3, 1.0)
@@ -26,6 +27,7 @@ class_name Minimap
 @export var hq_color := Color(1.0, 1.0, 0.3, 1.0)
 @export var resource_color := Color(0.3, 0.9, 0.3, 0.7)
 @export var camera_rect_color := Color(1.0, 1.0, 1.0, 0.6)
+@export var camera_rect_width := 1.5
 @export var build_zone_color := Color(0.2, 0.4, 0.8, 0.15)
 @export var unit_dot_size := 3.0
 @export var building_dot_size := 5.0
@@ -56,6 +58,7 @@ var _fog_enabled := true
 # =============================================================================
 
 func _ready() -> void:
+	_apply_ui_scale()
 	custom_minimum_size = minimap_size
 	size = minimap_size
 	mouse_filter = Control.MOUSE_FILTER_PASS
@@ -147,7 +150,7 @@ func _draw() -> void:
 	# Camera viewport rectangle
 	if _camera_rect.size != Vector2.ZERO:
 		var mini_rect := _world_rect_to_minimap(_camera_rect)
-		draw_rect(mini_rect, camera_rect_color, false, 1.5)
+		draw_rect(mini_rect, camera_rect_color, false, camera_rect_width)
 
 	# Border
 	draw_rect(Rect2(Vector2.ZERO, minimap_size), border_color, false, border_width)
@@ -161,6 +164,23 @@ func _draw_aircraft_icon(pos: Vector2, facing: Vector2, color: Color, size: floa
 		pos - forward * 0.5 - left
 	])
 	draw_colored_polygon(points, color)
+
+# =============================================================================
+# SCALING
+# =============================================================================
+
+func _apply_ui_scale() -> void:
+	var scale := maxf(0.01, ui_scale)
+	if is_equal_approx(scale, 1.0):
+		return
+	minimap_size *= scale
+	border_width *= scale
+	unit_dot_size *= scale
+	building_dot_size *= scale
+	hq_dot_size *= scale
+	resource_dot_size *= scale
+	aircraft_dot_size *= scale
+	camera_rect_width *= scale
 
 # =============================================================================
 # INPUT

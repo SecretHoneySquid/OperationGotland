@@ -14,8 +14,8 @@ extends Node
 # CONSTANTS
 # =============================================================================
 
-const GRID_COLS := 7
-const GRID_ROWS := 7
+const GRID_COLS := 10
+const GRID_ROWS := 10
 
 ## Time to capture a neutral region (seconds)
 const CAPTURE_TIME := 5.0
@@ -71,23 +71,23 @@ var _visibility_controller: VisibilityController = null
 ## Format: [grid_col, grid_row, type]
 const RESOURCE_REGIONS := [
 	# Oil fields - center column
-	[3, 0, Region.Type.RESOURCE_OIL],   # A4 - North oil
-	[3, 3, Region.Type.RESOURCE_OIL],   # D4 - Center oil
-	[3, 6, Region.Type.RESOURCE_OIL],   # G4 - South oil
+	[5, 0, Region.Type.RESOURCE_OIL],   # A6 - North oil
+	[5, 5, Region.Type.RESOURCE_OIL],   # F6 - Center oil
+	[5, 9, Region.Type.RESOURCE_OIL],   # J6 - South oil
 	# Mines - symmetric on both sides
-	[1, 1, Region.Type.RESOURCE_MINE],  # B2 - P1 side mine
-	[5, 1, Region.Type.RESOURCE_MINE],  # B6 - P2 side mine
-	[1, 5, Region.Type.RESOURCE_MINE],  # F2 - P1 side mine
-	[5, 5, Region.Type.RESOURCE_MINE],  # F6 - P2 side mine
+	[2, 2, Region.Type.RESOURCE_MINE],  # C3 - P1 side mine
+	[8, 2, Region.Type.RESOURCE_MINE],  # C9 - P2 side mine
+	[2, 8, Region.Type.RESOURCE_MINE],  # I3 - P1 side mine
+	[8, 8, Region.Type.RESOURCE_MINE],  # I9 - P2 side mine
 ]
 
 ## Base region definitions - corners
 ## Format: [grid_col, grid_row, owner]
 const BASE_REGIONS := [
 	[0, 0, "p1"],  # A1 - P1 base
-	[0, 6, "p1"],  # G1 - P1 rear
-	[6, 0, "p2"],  # A7 - P2 base
-	[6, 6, "p2"],  # G7 - P2 rear
+	[0, 9, "p1"],  # J1 - P1 rear
+	[9, 0, "p2"],  # A10 - P2 base
+	[9, 9, "p2"],  # J10 - P2 rear
 ]
 
 # =============================================================================
@@ -113,13 +113,12 @@ func _create_region_grid() -> void:
 	regions.clear()
 	region_grid.clear()
 
-	# Row labels: A, B, C, D, E, F, G
-	var row_labels := ["A", "B", "C", "D", "E", "F", "G"]
+	var row_labels := _get_row_labels()
 
 	for row in range(GRID_ROWS):
 		var grid_row: Array = []
 		for col in range(GRID_COLS):
-			# Create region ID (e.g., "A1", "B3", "G7")
+			# Create region ID (e.g., "A1", "B3", "J10")
 			var region_id := "%s%d" % [row_labels[row], col + 1]
 
 			# Calculate world rect
@@ -480,9 +479,12 @@ func get_regions_by_state(state: Region.State) -> Array:
 
 func debug_print_grid() -> void:
 	print("\n=== REGION GRID ===")
-	var row_labels := ["A", "B", "C", "D", "E", "F", "G"]
+	var row_labels := _get_row_labels()
 
-	print("    1   2   3   4   5   6   7")
+	var header := "   "
+	for col in range(GRID_COLS):
+		header += "%2d " % (col + 1)
+	print(header)
 	for row in range(GRID_ROWS):
 		var line := "%s " % row_labels[row]
 		for col in range(GRID_COLS):
@@ -509,3 +511,10 @@ func debug_print_grid() -> void:
 			line += symbol + " "
 		print(line)
 	print("===================\n")
+
+func _get_row_labels() -> Array:
+	var labels: Array = []
+	var alphabet := "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+	for i in range(GRID_ROWS):
+		labels.append(alphabet.substr(i, 1))
+	return labels

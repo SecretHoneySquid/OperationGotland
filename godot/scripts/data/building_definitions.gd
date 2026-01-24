@@ -35,7 +35,7 @@ static func get_building_hp(build_id: String) -> float:
 const BUILDING_SIZE := {
 	"barracks": Vector2(90, 90),
 	"factory": Vector2(140, 110),
-	"airfield": Vector2(432, 288),
+	"airfield": Vector2(648, 432),
 	"supply": Vector2(100, 80),
 	"power": Vector2(80, 80),
 	"command_center": Vector2(130, 110),

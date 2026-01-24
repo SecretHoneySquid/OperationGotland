@@ -58,7 +58,7 @@ var _build_defs := {
 	},
 	"airfield": {
 		"name": "Airfield",
-		"size": Vector2(432, 288),
+		"size": Vector2(648, 432),
 		"cost": 250,
 		"hp": 260.0,
 		"color": Color(0.28, 0.38, 0.55, 1.0),

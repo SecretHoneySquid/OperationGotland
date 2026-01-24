@@ -5,6 +5,27 @@ extends CanvasLayer
 @export var selection_controller_path := NodePath("../SelectionController")
 @export var bombardment_controller_path := NodePath("../BombardmentController")
 @export var battalion_controller_path := NodePath("../BattalionController")
+@export_range(0.75, 2.0, 0.05) var ui_scale := 1.25
+
+func _s(value: float) -> float:
+	return value * ui_scale
+
+func _sv(value: Vector2) -> Vector2:
+	return value * ui_scale
+
+func _si(value: float) -> int:
+	return int(round(value * ui_scale))
+
+func _apply_font_scale(node: Node) -> void:
+	if is_equal_approx(ui_scale, 1.0):
+		return
+	if node is Control:
+		var control := node as Control
+		var base_size := control.get_theme_font_size("font_size")
+		if base_size > 0:
+			control.add_theme_font_size_override("font_size", int(round(base_size * ui_scale)))
+	for child in node.get_children():
+		_apply_font_scale(child)
 
 var _controller: BuildController
 var _game_controller: GameController
@@ -194,17 +215,17 @@ func _build_ui() -> void:
 	left_panel.anchor_top = 0.0
 	left_panel.anchor_right = 0.0
 	left_panel.anchor_bottom = 1.0
-	left_panel.offset_left = 12.0
-	left_panel.offset_top = 110.0
-	left_panel.offset_right = 220.0
-	left_panel.offset_bottom = -12.0
+	left_panel.offset_left = _s(12.0)
+	left_panel.offset_top = _s(110.0)
+	left_panel.offset_right = _s(220.0)
+	left_panel.offset_bottom = _s(-12.0)
 	add_child(left_panel)
 
 	var left_margin := MarginContainer.new()
-	left_margin.add_theme_constant_override("margin_left", 10)
-	left_margin.add_theme_constant_override("margin_right", 10)
-	left_margin.add_theme_constant_override("margin_top", 10)
-	left_margin.add_theme_constant_override("margin_bottom", 10)
+	left_margin.add_theme_constant_override("margin_left", _si(10.0))
+	left_margin.add_theme_constant_override("margin_right", _si(10.0))
+	left_margin.add_theme_constant_override("margin_top", _si(10.0))
+	left_margin.add_theme_constant_override("margin_bottom", _si(10.0))
 	left_panel.add_child(left_margin)
 
 	var left_scroll := ScrollContainer.new()
@@ -215,7 +236,7 @@ func _build_ui() -> void:
 	var vbox := VBoxContainer.new()
 	vbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	vbox.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	vbox.add_theme_constant_override("separation", 6)
+	vbox.add_theme_constant_override("separation", _si(6.0))
 	left_scroll.add_child(vbox)
 
 	# BOTTOM PANEL - Units, HIMARS, Aircraft
@@ -225,17 +246,17 @@ func _build_ui() -> void:
 	bottom_panel.anchor_top = 1.0
 	bottom_panel.anchor_right = 1.0
 	bottom_panel.anchor_bottom = 1.0
-	bottom_panel.offset_left = 232.0
-	bottom_panel.offset_top = -280.0
-	bottom_panel.offset_right = -12.0
-	bottom_panel.offset_bottom = -12.0
+	bottom_panel.offset_left = _s(232.0)
+	bottom_panel.offset_top = _s(-280.0)
+	bottom_panel.offset_right = _s(-12.0)
+	bottom_panel.offset_bottom = _s(-12.0)
 	add_child(bottom_panel)
 
 	var bottom_margin := MarginContainer.new()
-	bottom_margin.add_theme_constant_override("margin_left", 10)
-	bottom_margin.add_theme_constant_override("margin_right", 10)
-	bottom_margin.add_theme_constant_override("margin_top", 10)
-	bottom_margin.add_theme_constant_override("margin_bottom", 10)
+	bottom_margin.add_theme_constant_override("margin_left", _si(10.0))
+	bottom_margin.add_theme_constant_override("margin_right", _si(10.0))
+	bottom_margin.add_theme_constant_override("margin_top", _si(10.0))
+	bottom_margin.add_theme_constant_override("margin_bottom", _si(10.0))
 	bottom_panel.add_child(bottom_margin)
 
 	var bottom_scroll := ScrollContainer.new()
@@ -248,7 +269,7 @@ func _build_ui() -> void:
 	var bottom_hbox := HBoxContainer.new()
 	bottom_hbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	bottom_hbox.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	bottom_hbox.add_theme_constant_override("separation", 15)
+	bottom_hbox.add_theme_constant_override("separation", _si(15.0))
 	bottom_scroll.add_child(bottom_hbox)
 
 	# ========== LEFT PANEL CONTENT (Buildings) ==========
@@ -318,7 +339,7 @@ func _build_ui() -> void:
 	# Factory Panel
 	_factory_panel = VBoxContainer.new()
 	_factory_panel.visible = false
-	_factory_panel.add_theme_constant_override("separation", 6)
+	_factory_panel.add_theme_constant_override("separation", _si(6.0))
 	_factory_panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	bottom_hbox.add_child(_factory_panel)
 
@@ -368,14 +389,14 @@ func _build_ui() -> void:
 
 	# HBox for HIMARS and Rally buttons side-by-side
 	var buttons_hbox := HBoxContainer.new()
-	buttons_hbox.add_theme_constant_override("separation", 10)
+	buttons_hbox.add_theme_constant_override("separation", _si(10.0))
 	buttons_hbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_factory_panel.add_child(buttons_hbox)
 
 	# HIMARS Icon Button (64x64 square)
 	var himars_container = AspectRatioContainer.new()
 	himars_container.ratio = 1.0
-	himars_container.custom_minimum_size = Vector2(64, 64)
+	himars_container.custom_minimum_size = _sv(Vector2(64, 64))
 	himars_container.stretch_mode = AspectRatioContainer.STRETCH_FIT
 	_factory_himars_button = TextureButton.new()
 	_factory_himars_button.stretch_mode = TextureButton.STRETCH_SCALE
@@ -408,7 +429,7 @@ func _build_ui() -> void:
 	# Rally Point Icon Button (64x64 square)
 	var rally_container = AspectRatioContainer.new()
 	rally_container.ratio = 1.0
-	rally_container.custom_minimum_size = Vector2(64, 64)
+	rally_container.custom_minimum_size = _sv(Vector2(64, 64))
 	rally_container.stretch_mode = AspectRatioContainer.STRETCH_FIT
 	_rally_button = TextureButton.new()
 	_rally_button.stretch_mode = TextureButton.STRETCH_SCALE
@@ -449,7 +470,7 @@ func _build_ui() -> void:
 	# Barracks Panel - now contains battalion buttons
 	_barracks_panel = VBoxContainer.new()
 	_barracks_panel.visible = false
-	_barracks_panel.add_theme_constant_override("separation", 6)
+	_barracks_panel.add_theme_constant_override("separation", _si(6.0))
 	_barracks_panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	bottom_hbox.add_child(_barracks_panel)
 
@@ -463,7 +484,7 @@ func _build_ui() -> void:
 
 	# Battalion buttons (1-4) inside barracks panel
 	var battalion_buttons_hbox := HBoxContainer.new()
-	battalion_buttons_hbox.add_theme_constant_override("separation", 8)
+	battalion_buttons_hbox.add_theme_constant_override("separation", _si(8.0))
 	_barracks_panel.add_child(battalion_buttons_hbox)
 
 	var battalion_types := [
@@ -477,7 +498,7 @@ func _build_ui() -> void:
 		var btype: Dictionary = battalion_types[i]
 		var btn := Button.new()
 		btn.text = str(i + 1)
-		btn.custom_minimum_size = Vector2(50, 50)
+		btn.custom_minimum_size = _sv(Vector2(50, 50))
 		var type_val: Battalion.Type = btype["type"]
 		var cost := Battalion.get_cost_for_type(type_val)
 		btn.tooltip_text = "%s Battalion ($%d)\n%s" % [btype["name"], cost, btype["desc"]]
@@ -488,7 +509,7 @@ func _build_ui() -> void:
 	# Airfield Panel
 	_airfield_panel = VBoxContainer.new()
 	_airfield_panel.visible = false
-	_airfield_panel.add_theme_constant_override("separation", 6)
+	_airfield_panel.add_theme_constant_override("separation", _si(6.0))
 	_airfield_panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	bottom_hbox.add_child(_airfield_panel)
 
@@ -514,7 +535,7 @@ func _build_ui() -> void:
 	# UAV Icon Button (64x64 square)
 	var uav_container = AspectRatioContainer.new()
 	uav_container.ratio = 1.0
-	uav_container.custom_minimum_size = Vector2(64, 64)
+	uav_container.custom_minimum_size = _sv(Vector2(64, 64))
 	uav_container.stretch_mode = AspectRatioContainer.STRETCH_FIT
 	_airfield_uav_button = TextureButton.new()
 	_airfield_uav_button.stretch_mode = TextureButton.STRETCH_SCALE
@@ -554,7 +575,7 @@ func _build_ui() -> void:
 	# ========== AIRFORCE COMMAND PANEL ==========
 	_airforce_panel = VBoxContainer.new()
 	_airforce_panel.visible = false
-	_airforce_panel.add_theme_constant_override("separation", 6)
+	_airforce_panel.add_theme_constant_override("separation", _si(6.0))
 	_airforce_panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	bottom_hbox.add_child(_airforce_panel)
 
@@ -579,7 +600,7 @@ func _build_ui() -> void:
 	_airforce_panel.add_child(patrol_mode_label)
 
 	var patrol_buttons_hbox := HBoxContainer.new()
-	patrol_buttons_hbox.add_theme_constant_override("separation", 8)
+	patrol_buttons_hbox.add_theme_constant_override("separation", _si(8.0))
 	_airforce_panel.add_child(patrol_buttons_hbox)
 
 	_airforce_defend_button = Button.new()
@@ -604,7 +625,7 @@ func _build_ui() -> void:
 	# Bombardment Panel
 	_bombardment_panel = VBoxContainer.new()
 	_bombardment_panel.visible = false
-	_bombardment_panel.add_theme_constant_override("separation", 6)
+	_bombardment_panel.add_theme_constant_override("separation", _si(6.0))
 	_bombardment_panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	bottom_hbox.add_child(_bombardment_panel)
 
@@ -647,7 +668,7 @@ func _build_ui() -> void:
 	# ========== PATRIOT SAM PANEL ==========
 	_patriot_panel = VBoxContainer.new()
 	_patriot_panel.visible = false
-	_patriot_panel.add_theme_constant_override("separation", 6)
+	_patriot_panel.add_theme_constant_override("separation", _si(6.0))
 	_patriot_panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	bottom_hbox.add_child(_patriot_panel)
 
@@ -671,7 +692,7 @@ func _build_ui() -> void:
 	# ========== RADAR PANEL ==========
 	_radar_panel = VBoxContainer.new()
 	_radar_panel.visible = false
-	_radar_panel.add_theme_constant_override("separation", 6)
+	_radar_panel.add_theme_constant_override("separation", _si(6.0))
 	_radar_panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	bottom_hbox.add_child(_radar_panel)
 
@@ -697,7 +718,7 @@ func _build_ui() -> void:
 	# Battalion Selected Panel (shown when battalion selected)
 	_battalion_selected_panel = VBoxContainer.new()
 	_battalion_selected_panel.visible = false
-	_battalion_selected_panel.add_theme_constant_override("separation", 6)
+	_battalion_selected_panel.add_theme_constant_override("separation", _si(6.0))
 	_battalion_selected_panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	bottom_hbox.add_child(_battalion_selected_panel)
 
@@ -731,15 +752,16 @@ func _build_ui() -> void:
 		minimap_container.anchor_top = 0.0
 		minimap_container.anchor_right = 1.0
 		minimap_container.anchor_bottom = 0.0
-		minimap_container.offset_left = -220.0
-		minimap_container.offset_top = 12.0
-		minimap_container.offset_right = -12.0
-		minimap_container.offset_bottom = 220.0
+		minimap_container.offset_left = _s(-220.0)
+		minimap_container.offset_top = _s(12.0)
+		minimap_container.offset_right = _s(-12.0)
+		minimap_container.offset_bottom = _s(220.0)
 		add_child(minimap_container)
 
 		var minimap := Control.new()
 		minimap.set_script(minimap_script)
 		minimap.name = "Minimap"
+		minimap.ui_scale = ui_scale
 		minimap_container.add_child(minimap)
 
 	# Tooltip Panel - initially hidden, shown on hover
@@ -749,14 +771,14 @@ func _build_ui() -> void:
 	add_child(_tooltip_panel)
 
 	var tooltip_margin := MarginContainer.new()
-	tooltip_margin.add_theme_constant_override("margin_left", 8)
-	tooltip_margin.add_theme_constant_override("margin_right", 8)
-	tooltip_margin.add_theme_constant_override("margin_top", 6)
-	tooltip_margin.add_theme_constant_override("margin_bottom", 6)
+	tooltip_margin.add_theme_constant_override("margin_left", _si(8.0))
+	tooltip_margin.add_theme_constant_override("margin_right", _si(8.0))
+	tooltip_margin.add_theme_constant_override("margin_top", _si(6.0))
+	tooltip_margin.add_theme_constant_override("margin_bottom", _si(6.0))
 	_tooltip_panel.add_child(tooltip_margin)
 
 	var tooltip_vbox := VBoxContainer.new()
-	tooltip_vbox.add_theme_constant_override("separation", 4)
+	tooltip_vbox.add_theme_constant_override("separation", _si(4.0))
 	tooltip_margin.add_child(tooltip_vbox)
 
 	_tooltip_name = Label.new()
@@ -766,7 +788,7 @@ func _build_ui() -> void:
 	_tooltip_desc = Label.new()
 	_tooltip_desc.add_theme_font_size_override("font_size", 12)
 	_tooltip_desc.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	_tooltip_desc.custom_minimum_size = Vector2(200, 0)
+	_tooltip_desc.custom_minimum_size = _sv(Vector2(200, 0))
 	tooltip_vbox.add_child(_tooltip_desc)
 
 	_tooltip_strong = Label.new()
@@ -778,6 +800,8 @@ func _build_ui() -> void:
 	_tooltip_weak.add_theme_font_size_override("font_size", 11)
 	_tooltip_weak.add_theme_color_override("font_color", Color(1.0, 0.4, 0.4))
 	tooltip_vbox.add_child(_tooltip_weak)
+
+	_apply_font_scale(self)
 
 func _show_tooltip(button: Control, name_text: String, desc_text: String, strong_text: String = "", weak_text: String = "") -> void:
 	if _tooltip_panel == null:
@@ -795,18 +819,19 @@ func _show_tooltip(button: Control, name_text: String, desc_text: String, strong
 	var button_rect := button.get_global_rect()
 	var viewport_size := get_viewport().get_visible_rect().size
 	var tooltip_size := _tooltip_panel.size
+	var tooltip_padding := _s(10.0)
 
 	# Try to position to the right of button
-	var pos_x := button_rect.position.x + button_rect.size.x + 10
+	var pos_x := button_rect.position.x + button_rect.size.x + tooltip_padding
 	var pos_y := button_rect.position.y
 
 	# If it goes off right edge, position to the left instead
 	if pos_x + tooltip_size.x > viewport_size.x:
-		pos_x = button_rect.position.x - tooltip_size.x - 10
+		pos_x = button_rect.position.x - tooltip_size.x - tooltip_padding
 
 	# If still off left edge, clamp to right side of screen
 	if pos_x < 0:
-		pos_x = viewport_size.x - tooltip_size.x - 10
+		pos_x = viewport_size.x - tooltip_size.x - tooltip_padding
 
 	# Clamp vertical position to keep it on screen
 	pos_y = clampf(pos_y, 0, viewport_size.y - tooltip_size.y)
