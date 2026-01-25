@@ -123,7 +123,13 @@ texture_list = Array[Terrain3DTextureAsset]([SubResource("Terrain3DTextureAsset_
 
 [sub_resource type="Environment" id="Environment_main"]
 background_mode = 2
-background_color = Color(0.05, 0.06, 0.07, 1)
+background_color = Color(0.45, 0.55, 0.7, 1)
+ambient_light_color = Color(0.6, 0.66, 0.72, 1)
+ambient_light_energy = 0.35
+ambient_light_sky_contribution = 0.0
+tonemap_mode = 3
+tonemap_exposure = 1.0
+tonemap_white = 6.0
 
 [sub_resource type="NavigationMesh" id="NavigationMesh_main"]
 sample_partition_type = 1
@@ -214,8 +220,15 @@ current = true
 
 [node name="DirectionalLight3D" type="DirectionalLight3D" parent="World3D"]
 transform = Transform3D(0.8660254, -0.40957603, 0.28678823, 0, 0.57357645, 0.81915206, -0.5, -0.7094065, 0.49673176, 0, 0, 0)
-light_energy = 1.1
+light_color = Color(1, 0.96, 0.9, 1)
+light_energy = 1.0
 shadow_enabled = true
+
+[node name="FillLight3D" type="DirectionalLight3D" parent="World3D"]
+rotation_degrees = Vector3(-25, 130, 0)
+light_color = Color(0.65, 0.73, 0.85, 1)
+light_energy = 0.25
+shadow_enabled = false
 
 [node name="Environment" type="WorldEnvironment" parent="World3D"]
 environment = SubResource("Environment_main")
@@ -230,5 +243,6 @@ enter_cost = 0.025
 script = ExtResource("11_vsync")
 ground_path = NodePath("../../Terrain3D")
 build_controller_path = NodePath("../../BuildController")
+building_pad_enabled = false
 
 [node name="UI2" type="CanvasLayer" parent="."]

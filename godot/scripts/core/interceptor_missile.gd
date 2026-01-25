@@ -47,8 +47,11 @@ signal intercept_result(success: bool, missile_pos: Vector2, interceptor_pos: Ve
 @export var smoke_color := Color(0.75, 0.75, 0.7, 0.95)  # Denser smoke
 
 var target_missile: Missile
+var target_aircraft: Unit  # Alternative target for anti-aircraft mode
 var _velocity := Vector2.RIGHT
 var _origin := Vector2.ZERO
+var _last_known_target_pos := Vector2.ZERO  # Used when target is destroyed by another interceptor
+var _flying_to_last_pos := false  # True when target lost, flying to last known position
 var _rng := RandomNumberGenerator.new()
 static var _spawn_rng := RandomNumberGenerator.new()
 static var _spawn_rng_ready := false
@@ -79,9 +82,11 @@ func _ready() -> void:
 	# Initialize flight height at turret height
 	_flight_height = _start_height
 
-	if target_missile != null and is_instance_valid(target_missile):
+	# Get target position from either missile or aircraft
+	var target_pos := _get_target_position()
+	if target_pos != Vector2.ZERO:
 		# Store the direction toward target
-		_to_target_direction = (target_missile.global_position - global_position).normalized()
+		_to_target_direction = (target_pos - global_position).normalized()
 		# Launch straight toward the target direction (climb handled separately)
 		_velocity = _to_target_direction.rotated(launch_sideways_angle)
 		if launch_heading_spread > 0.0:
@@ -89,7 +94,6 @@ func _ready() -> void:
 			_velocity = _velocity.rotated(jitter)
 
 	_setup_visual()
-	print("[INTERCEPTOR] Created at ", global_position, " launching FORWARD")
 
 func _process(delta: float) -> void:
 	lifetime -= delta
@@ -106,20 +110,34 @@ func _process(delta: float) -> void:
 		queue_free()
 		return
 
-	# Check if target is still valid
-	if target_missile == null or not is_instance_valid(target_missile):
-		# Target destroyed or lost - self destruct
-		_self_destruct()
-		return
+	# Check if target is still valid (either missile or aircraft)
+	if not _has_valid_target():
+		# Target destroyed or lost - fly to last known position then explode
+		if not _flying_to_last_pos and _last_known_target_pos != Vector2.ZERO:
+			_flying_to_last_pos = true
+		if _flying_to_last_pos:
+			# Check if we reached the last known position
+			var dist_to_last := global_position.distance_to(_last_known_target_pos)
+			if dist_to_last <= hit_radius:
+				_self_destruct()
+				return
+			# Continue flying toward last known position
+			_update_guidance_to_position(delta, _last_known_target_pos)
+		else:
+			# No last known position, just self destruct
+			_self_destruct()
+			return
+	else:
+		# Target still valid - update last known position
+		_last_known_target_pos = _get_target_position()
 
-	# Check if target is still interceptable
-	if not target_missile.is_interceptable():
-		# Target no longer interceptable - self destruct
-		_self_destruct()
-		return
-
-	# Guide toward target - straight climb then seeker
-	_update_guidance_climb_seek(delta)
+		# Check if missile target is still interceptable
+		if target_missile != null and not target_missile.is_interceptable():
+			# Target no longer interceptable - fly to last known position then explode
+			_flying_to_last_pos = true
+		else:
+			# Guide toward target - straight climb then seeker
+			_update_guidance_climb_seek(delta)
 
 	# Move
 	global_position += _velocity.normalized() * _get_current_speed() * delta
@@ -156,7 +174,7 @@ func _process(delta: float) -> void:
 
 func _update_guidance_climb_seek(delta: float) -> void:
 	# Straight climb until cruise height, then seek target with limited turn capability.
-	if target_missile == null or not is_instance_valid(target_missile):
+	if not _has_valid_target():
 		return
 	var target_height := maxf(_start_height, cruise_height)
 	if _flight_height < target_height:
@@ -164,7 +182,7 @@ func _update_guidance_climb_seek(delta: float) -> void:
 	if launch_phase_duration > 0.0 and _flight_time < launch_phase_duration:
 		return
 
-	var target_pos := target_missile.global_position
+	var target_pos := _get_target_position()
 	var target_vel := _get_target_velocity()
 	var intercept_dir := _compute_intercept_direction(target_pos, target_vel, _get_current_speed())
 	var chase_dir := (target_pos - global_position).normalized()
@@ -181,12 +199,46 @@ func _update_guidance_climb_seek(delta: float) -> void:
 	var max_turn := turn_rate * delta
 	_velocity = _velocity.rotated(clampf(angle, -max_turn, max_turn))
 
+func _update_guidance_to_position(delta: float, target_pos: Vector2) -> void:
+	# Guide toward a fixed position (used when target is lost)
+	var target_height := maxf(_start_height, cruise_height)
+	if _flight_height < target_height:
+		return
+	if launch_phase_duration > 0.0 and _flight_time < launch_phase_duration:
+		return
+
+	var desired_dir := (target_pos - global_position).normalized()
+	if desired_dir.length_squared() <= 0.0001:
+		return
+
+	var angle := _velocity.angle_to(desired_dir)
+	# No hard turn self-destruct when flying to last position - just turn as best we can
+	var max_turn := turn_rate * delta
+	_velocity = _velocity.rotated(clampf(angle, -max_turn, max_turn))
+
+func _has_valid_target() -> bool:
+	if target_missile != null and is_instance_valid(target_missile):
+		return true
+	if target_aircraft != null and is_instance_valid(target_aircraft):
+		return true
+	return false
+
+func _get_target_position() -> Vector2:
+	if target_missile != null and is_instance_valid(target_missile):
+		return target_missile.global_position
+	if target_aircraft != null and is_instance_valid(target_aircraft):
+		return target_aircraft.global_position
+	return Vector2.ZERO
+
 func _get_target_velocity() -> Vector2:
-	if target_missile == null or not is_instance_valid(target_missile):
-		return Vector2.ZERO
-	var vel_value: Variant = target_missile.get("_velocity") if target_missile.has_method("get") else null
-	if vel_value is Vector2:
-		return vel_value
+	if target_missile != null and is_instance_valid(target_missile):
+		var vel_value: Variant = target_missile.get("_velocity") if target_missile.has_method("get") else null
+		if vel_value is Vector2:
+			return vel_value
+	if target_aircraft != null and is_instance_valid(target_aircraft):
+		var vel_value: Variant = target_aircraft.get("_velocity") if target_aircraft.has_method("get") else null
+		if vel_value is Vector2:
+			return vel_value
 	return Vector2.ZERO
 
 func _compute_intercept_direction(target_pos: Vector2, target_vel: Vector2, interceptor_speed: float) -> Vector2:
@@ -234,9 +286,17 @@ func _get_current_speed() -> float:
 	return speed * maxf(0.0, mult)
 
 func _check_intercept() -> void:
-	if target_missile == null or not is_instance_valid(target_missile):
+	# Check missile intercept
+	if target_missile != null and is_instance_valid(target_missile):
+		_check_missile_intercept()
 		return
 
+	# Check aircraft intercept
+	if target_aircraft != null and is_instance_valid(target_aircraft):
+		_check_aircraft_intercept()
+		return
+
+func _check_missile_intercept() -> void:
 	var dist := global_position.distance_to(target_missile.global_position)
 	var target_radius := 0.0
 	if target_missile.has_method("get_warhead_radius"):
@@ -260,13 +320,38 @@ func _check_intercept() -> void:
 			_spawn_intercept_explosion_at_height(impact_pos)
 			# Tell the missile it was intercepted (this will queue_free it without explosion)
 			target_missile.intercept_silent()
-			print("[PATRIOT] Missile intercepted at ", missile_pos, " height=", _flight_height)
 		else:
 			# Missed intercept, still explode
 			_spawn_intercept_explosion_at_height(impact_pos)
-			print("[PATRIOT] Intercept FAILED at ", missile_pos)
 
 		emit_signal("intercept_result", success, missile_pos, global_position)
+		queue_free()
+
+func _check_aircraft_intercept() -> void:
+	var dist := global_position.distance_to(target_aircraft.global_position)
+	var target_radius := 12.0  # Aircraft hit radius
+	var collision_distance := maxf(0.0, body_radius) + target_radius
+	var effective_hit := maxf(hit_radius, collision_distance)
+	if dist <= effective_hit:
+		# Reached target - roll for intercept success
+		var collided := dist <= collision_distance
+		var success := collided
+		if not success:
+			var roll := _rng.randf()
+			success = roll < success_chance
+
+		var aircraft_pos := target_aircraft.global_position
+		var impact_pos := aircraft_pos.lerp(global_position, 0.5)
+
+		# Always spawn explosion
+		_spawn_intercept_explosion_at_height(impact_pos)
+
+		if success:
+			# Successfully hit aircraft - deal heavy damage
+			if target_aircraft.has_method("take_damage"):
+				target_aircraft.take_damage(target_aircraft.max_hp * 0.8, "interceptor")
+
+		emit_signal("intercept_result", success, aircraft_pos, global_position)
 		queue_free()
 
 func _spawn_intercept_explosion_at_height(pos: Vector2) -> void:
@@ -280,7 +365,6 @@ func _self_destruct() -> void:
 	# Explode in the air - creates a visual explosion
 	# Emit a fake "intercepted" signal to trigger the explosion effect in visual_sync_3d
 	# We use the Missile class's impact signal pattern
-	print("[INTERCEPTOR] Self-destruct at ", global_position, " height=", _flight_height)
 
 	# Find visual_sync_3d and trigger explosion effect directly
 	var visual_syncs := get_tree().get_nodes_in_group("visual_sync_3d")

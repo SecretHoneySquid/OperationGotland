@@ -79,6 +79,9 @@ var is_rtb_fuel := false  # Returning to base due to low fuel (not reload)
 # Air power rating (for dominance calculation)
 var air_power := 2.0  # Default, can be modified per aircraft type
 
+# Extended radar upgrade
+var extended_radar_enabled := false  # When true: +20% sight, detected enemies get ghost effect
+
 # =============================================================================
 # INITIALIZATION
 # =============================================================================
@@ -151,6 +154,10 @@ func cleanup() -> void:
 func update(delta: float) -> void:
 	missile_timer = maxf(0.0, missile_timer - delta)
 	_refresh_squad_state()
+
+	# Update extended radar effect (ghost effect on enemy aircraft)
+	if extended_radar_enabled:
+		_apply_extended_radar_ghost_effect()
 
 	# Update fuel consumption
 	_update_fuel(delta)
@@ -549,9 +556,25 @@ func _missile_role_for_target(target: Node2D) -> String:
 	return "a2g"
 
 func _is_target_visible(target: Node2D) -> bool:
-	if target is CanvasItem:
-		return (target as CanvasItem).visible
-	return true
+	if target == null or not is_instance_valid(target):
+		return false
+
+	# For player aircraft (P1), use the fog of war visibility check
+	if unit.team_id == "p1":
+		if target is CanvasItem:
+			return (target as CanvasItem).visible
+		return true
+
+	# For AI aircraft (P2+), check if target is within vision radius
+	# This simulates realistic detection - AI can only see what's in range
+	var vision_range := get_effective_vision_radius()
+	if vision_range <= 0.0:
+		vision_range = unit.vision_radius
+	if vision_range <= 0.0:
+		return true  # No vision limit defined, fallback to always visible
+
+	var dist_sq := unit.global_position.distance_squared_to(target.global_position)
+	return dist_sq <= vision_range * vision_range
 
 func _is_target_detected_by_radar(target: Node2D) -> bool:
 	if target == null or not is_instance_valid(target):
@@ -1529,6 +1552,8 @@ func _sync_patrol_mode_from_airfield() -> void:
 	var mode_value: Variant = unit.aircraft_home.get_meta("patrol_mode", 0)
 	var mode_int := int(mode_value) if mode_value is int or mode_value is float else 0
 	patrol_mode = PatrolMode.DEFEND_BASE if mode_int == 0 else PatrolMode.AIR_SUPERIORITY
+	# Sync extended radar upgrade
+	extended_radar_enabled = unit.aircraft_home.get_meta("has_extended_radar", false)
 
 func _generate_patrol_waypoints() -> void:
 	patrol_waypoints.clear()
@@ -1622,3 +1647,48 @@ func get_influence_radius() -> float:
 		PatrolMode.AIR_SUPERIORITY:
 			return patrol_radius_aggressive * 0.8
 	return 1000.0
+
+# =============================================================================
+# EXTENDED RADAR
+# =============================================================================
+
+func get_effective_vision_radius() -> float:
+	## Returns the effective vision radius, including extended radar bonus
+	var base_radius := unit.vision_radius
+	if extended_radar_enabled:
+		return base_radius * (1.0 + GameBalance.EXTENDED_RADAR_SIGHT_BONUS)
+	return base_radius
+
+func _apply_extended_radar_ghost_effect() -> void:
+	## Applies the ghost effect to enemy aircraft within detection range
+	## Making them targetable by A2A missiles for the configured duration
+	if not extended_radar_enabled:
+		return
+	if _is_on_ground():
+		return  # Don't detect while on ground
+
+	var tree := unit.get_tree()
+	if tree == null:
+		return
+
+	var effective_range := get_effective_vision_radius()
+	var range_sq := effective_range * effective_range
+	var ghost_duration := GameBalance.EXTENDED_RADAR_GHOST_DURATION
+
+	for node in tree.get_nodes_in_group("units"):
+		if node == null or not is_instance_valid(node):
+			continue
+		if node is not Unit:
+			continue
+		var enemy := node as Unit
+		if enemy.team_id == unit.team_id:
+			continue  # Don't detect friendly aircraft
+		if enemy.unit_kind != "aircraft":
+			continue  # Only detect aircraft
+
+		var dist_sq := unit.global_position.distance_squared_to(enemy.global_position)
+		if dist_sq > range_sq:
+			continue  # Out of range
+
+		# Apply ghost effect - make the enemy aircraft targetable by A2A missiles
+		enemy.radar_detected_timer = maxf(enemy.radar_detected_timer, ghost_duration)

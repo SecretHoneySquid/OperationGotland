@@ -1247,6 +1247,9 @@ func _find_enemy_unit_in_range(range: float) -> Node2D:
 		var enemy := node as Unit
 		if enemy == null or enemy.team_id == team_id:
 			continue
+		# Ground units cannot target aircraft
+		if unit_kind != "aircraft" and enemy.unit_kind == "aircraft":
+			continue
 		var dist := global_position.distance_squared_to(enemy.global_position)
 		if dist > range_sq:
 			continue
@@ -2077,7 +2080,7 @@ func _target_priority(enemy: Unit) -> int:
 			priority = 2
 		else:
 			priority = 0
-	if prefers_vehicle and (enemy.unit_kind == "vehicle" or enemy.unit_kind == "aircraft"):
+	if prefers_vehicle and enemy.unit_kind == "vehicle":
 		priority -= 2
 	if prefers_infantry and enemy.unit_kind == "infantry":
 		priority -= 2
@@ -2389,12 +2392,15 @@ func _find_bombardment_target() -> Node2D:
 	var best_target: Node2D = null
 	var best_dist := INF
 
-	# Check enemy units
+	# Check enemy units (ground units only, no aircraft)
 	for node in get_tree().get_nodes_in_group("units"):
 		if node == self:
 			continue
 		var enemy := node as Unit
 		if enemy == null or enemy.team_id == team_id:
+			continue
+		# Bombardment cannot target aircraft
+		if enemy.unit_kind == "aircraft":
 			continue
 		var dist := global_position.distance_squared_to(enemy.global_position)
 		if dist > range_sq:

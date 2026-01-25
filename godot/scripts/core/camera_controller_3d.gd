@@ -6,7 +6,7 @@ extends Node3D
 @export var focus_use_build_zone := true
 @export var pan_speed := 900.0
 @export var pan_drag_speed := 1.0
-@export var zoom_step := 15.0
+@export var zoom_step := 45.0
 @export_range(0.75, 2.0, 0.05) var view_scale := 1.25
 @export var pan_hold_speed := 900.0
 @export var pan_hold_deadzone := 2.0
@@ -16,7 +16,10 @@ extends Node3D
 @export var min_distance := 180.0
 @export var max_distance := 18000.0
 @export var pitch_deg := 45.0
+@export var pitch_min_deg := 10.0
+@export var pitch_max_deg := 80.0
 @export var rotate_drag_speed := 0.3
+@export var pitch_drag_speed := 0.3
 
 var _dragging := false
 var _distance := 420.0
@@ -41,6 +44,7 @@ func _ready() -> void:
 	var min_dist := min_distance / scale
 	var max_dist := max_distance / scale
 	_distance = clampf(_distance / scale, min_dist, max_dist)
+	pitch_deg = _clamp_pitch(pitch_deg)
 	_apply_camera()
 
 func _process(delta: float) -> void:
@@ -91,7 +95,9 @@ func _unhandled_input(event: InputEvent) -> void:
 		_pan_hold_dir = Vector2.ZERO
 		_pan_hold_speed_scale = 0.0
 	elif event is InputEventMouseMotion and _dragging:
-		rotate_y(deg_to_rad(-event.relative.x * rotate_drag_speed))
+		var motion := event as InputEventMouseMotion
+		rotate_y(deg_to_rad(-motion.relative.x * rotate_drag_speed))
+		pitch_deg = _clamp_pitch(pitch_deg + (motion.relative.y * pitch_drag_speed))
 		_apply_camera()
 	elif event is InputEventMouseMotion and _pan_dragging:
 		var motion := event as InputEventMouseMotion
@@ -116,6 +122,7 @@ func _zoom(amount: float) -> void:
 func _apply_camera() -> void:
 	if _camera == null:
 		return
+	pitch_deg = _clamp_pitch(pitch_deg)
 	var pitch_rad := deg_to_rad(pitch_deg)
 	var height := sin(pitch_rad) * _distance
 	var back := cos(pitch_rad) * _distance
@@ -124,6 +131,11 @@ func _apply_camera() -> void:
 
 func _scale_factor() -> float:
 	return maxf(0.01, view_scale)
+
+func _clamp_pitch(value: float) -> float:
+	var min_pitch := minf(pitch_min_deg, pitch_max_deg)
+	var max_pitch := maxf(pitch_min_deg, pitch_max_deg)
+	return clampf(value, min_pitch, max_pitch)
 
 func _screen_to_world(screen_pos: Vector2) -> Vector2:
 	if _camera == null:

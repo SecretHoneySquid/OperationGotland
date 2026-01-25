@@ -16,6 +16,8 @@ func _ready() -> void:
 	super._ready()
 	add_to_group("radar_station")
 	add_to_group("radar_station_%s" % team_id)
+	# Always use the current range from GameBalance (allows runtime tuning)
+	attack_range = GameBalance.RADAR_STATION_RANGE
 
 func update_targeting(_delta: float) -> void:
 	# Radar does not attack; keep orientation aligned with detection arc.

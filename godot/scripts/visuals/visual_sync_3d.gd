@@ -2,7 +2,7 @@ extends Node3D
 
 @export var unit_height := 6.0
 @export var infantry_model_path := "res://assets/models/Infantry/futuristic_soldier_lowpoly.glb"
-@export var infantry_model_scale := 2.0
+@export var infantry_model_scale := 3.0
 @export var infantry_model_rotation := Vector3(0.0, 180.0, 0.0)
 @export var infantry_anim_idle := "Rifle_stand"
 @export var infantry_anim_run := "Rifle_run"
@@ -13,11 +13,11 @@ extends Node3D
 @export var aircraft_follow_terrain := false
 @export var aircraft_base_height := 220.0
 @export var aircraft_model_path := "res://assets/models/gripen.glb"
-@export var aircraft_model_scale := 1.0
+@export var aircraft_model_scale := 1.5
 @export var aircraft_model_rotation := Vector3(0.0, 90.0, 0.0)
 @export var aircraft_model_offset := Vector3.ZERO
 @export var aircraft_model_path_f35 := "res://assets/models/f-35_lightning_ii_-_fighter_jet_-_free.glb"
-@export var aircraft_model_scale_f35 := 1.0
+@export var aircraft_model_scale_f35 := 1.5
 @export var aircraft_model_rotation_f35 := Vector3(0.0, 90.0, 0.0)
 @export var aircraft_model_offset_f35 := Vector3.ZERO
 @export var aircraft_bank_enabled := true
@@ -46,7 +46,7 @@ extends Node3D
 @export var health_bar_color := Color(0.2, 0.85, 0.25, 0.9)
 @export var health_bar_back := Color(0.12, 0.12, 0.12, 0.8)
 @export var barracks_model_path := "res://assets/models/barracks.glb"
-@export var barracks_model_scale := 1.0
+@export var barracks_model_scale := 1.5
 @export var barracks_model_rotation := Vector3(0.0, -90.0, 0.0)
 @export var barracks_compound_enabled := false
 @export var barracks_compound_rows := 3
@@ -65,28 +65,28 @@ extends Node3D
 	"res://assets/vendor/quaternius_ultimate_buildings/Models with Materials/FBX/1Story_RoundRoof_Mat.fbx",
 ])
 @export var factory_model_path := "res://assets/models/factory.glb"
-@export var factory_model_scale := 1.0
+@export var factory_model_scale := 1.5
 @export var airfield_model_path := "res://assets/models/airfield.glb"
-@export var airfield_model_scale := 1.0
+@export var airfield_model_scale := 1.5
 @export var airfield_runway_color := Color(0.12, 0.12, 0.14, 1.0)
 @export var airfield_marking_color := Color(0.9, 0.9, 0.9, 0.85)
 @export var supply_model_path := "res://assets/vendor/kenney_city-kit-industrial/Models/GLB format/building-r.glb"
-@export var supply_model_scale := 1.0
+@export var supply_model_scale := 1.5
 @export var power_model_path := "res://assets/vendor/kenney_city-kit-industrial/Models/GLB format/building-l.glb"
-@export var power_model_scale := 1.0
+@export var power_model_scale := 1.5
 @export var command_center_model_path := "res://assets/vendor/kenney_city-kit-industrial/Models/GLB format/building-p.glb"
-@export var command_center_model_scale := 1.0
+@export var command_center_model_scale := 1.5
 @export var defense_gun_model_path := ""
-@export var defense_gun_model_scale := 1.0
+@export var defense_gun_model_scale := 1.5
 @export var defense_missile_model_path := ""
-@export var defense_missile_model_scale := 1.0
+@export var defense_missile_model_scale := 1.5
 @export var defense_laser_model_path := ""
-@export var defense_laser_model_scale := 1.0
+@export var defense_laser_model_scale := 1.5
 @export var hq_pentagon_enabled := true
 @export var hq_pentagon_model_path := "res://assets/vendor/kenney_city-kit-industrial/Models/GLB format/building-s.glb"
-@export var hq_pentagon_model_scale := 1.0
+@export var hq_pentagon_model_scale := 1.5
 @export var hq_pentagon_center_model_path := "res://assets/vendor/kenney_city-kit-industrial/Models/GLB format/building-q.glb"
-@export var hq_pentagon_center_model_scale := 1.0
+@export var hq_pentagon_center_model_scale := 1.5
 @export var hq_pentagon_center_size_scale := 0.45
 @export var hq_pentagon_radius_scale := 0.42
 @export var hq_pentagon_wing_depth_scale := 0.22
@@ -106,11 +106,11 @@ extends Node3D
 @export var ghost_y_offset := 0.2
 @export var ghost_valid_color := Color(0.2, 0.9, 0.2, 0.35)
 @export var ghost_invalid_color := Color(0.95, 0.75, 0.2, 0.35)
-@export var show_build_zone := false  # Disabled
+@export var show_build_zone := true
 @export var build_zone_team_id := "p1"
-@export var build_zone_height := 0.4
+@export var build_zone_height := 0.3
 @export var build_zone_y_offset := 0.05
-@export var build_zone_color := Color(0.1, 0.6, 0.2, 0.2)
+@export var build_zone_color := Color(0.15, 0.5, 0.25, 0.12)
 @export var show_supply_zones := true
 @export var supply_zone_radius := 40.0
 @export var supply_zone_height := 0.25
@@ -151,7 +151,7 @@ extends Node3D
 @export var missile_medium_scale := 1.35
 @export var missile_large_scale := 1.7
 @export var missile_model_path := "res://scenes/props/missile_visual.tscn"
-@export var missile_model_scale := 1.0
+@export var missile_model_scale := 1.5
 @export var missile_impact_flash_size := 6.0  # Increased from 3.2 for bigger explosion flash
 @export var missile_impact_duration := 0.5  # Increased from 0.3 for longer flash
 @export var aircraft_missile_impact_scale := 3.0  # Increased from 1.8 for much bigger explosions
@@ -188,7 +188,7 @@ extends Node3D
 @export var prop_detail_enabled := true
 @export var prop_tank_model_path := "res://assets/vendor/kenney_city-kit-industrial/Models/GLB format/detail-tank.glb"
 @export var prop_chimney_model_path := "res://assets/vendor/kenney_city-kit-industrial/Models/GLB format/chimney-medium.glb"
-@export var prop_model_scale := 1.0
+@export var prop_model_scale := 1.5
 @export var show_unit_health := true
 @export var unit_health_selected_only := false
 @export var unit_health_height := 4.0
@@ -219,11 +219,11 @@ extends Node3D
 @export var patriot_protection_tracking_color := Color(0.7, 0.3, 0.3, 0.2)
 @export var patriot_protection_height := 0.8
 @export var patriot_protection_y_offset := 0.3
-@export var show_build_zone_outline := false  # Disabled - was showing as diagonal line
-@export var build_zone_outline_color := Color(0.1, 0.8, 0.3, 0.6)
-@export var build_zone_outline_width := 4.0
-@export var build_zone_outline_height := 0.6
-@export var build_zone_outline_y_offset := 0.3
+@export var show_build_zone_outline := true
+@export var build_zone_outline_color := Color(0.2, 0.85, 0.4, 0.75)
+@export var build_zone_outline_width := 8.0
+@export var build_zone_outline_height := 1.2
+@export var build_zone_outline_y_offset := 0.2
 
 var _proxies: Dictionary[int, Node3D] = {}
 var _live_ids: Dictionary[int, bool] = {}
@@ -297,6 +297,7 @@ func _process(delta: float) -> void:
 	_sync_group("defense_turret")
 	_sync_group("building")
 	_sync_group("hq")
+	_sync_group("spy_satellite_vision")
 	_cleanup()
 
 func _sync_group(group_name: String) -> void:
@@ -379,6 +380,8 @@ func _create_proxy(node, group_name: String) -> Node3D:
 			_build_building_proxy(proxy, node)
 		"hq":
 			_build_hq_proxy(proxy, node)
+		"spy_satellite_vision":
+			_build_spy_satellite_proxy(proxy, node)
 	return proxy
 
 func _build_unit_proxy(proxy: Node3D, unit) -> void:
@@ -628,11 +631,8 @@ func _build_missile_proxy(proxy: Node3D, missile) -> void:
 	var base_color := _get_color(missile, "color", Color(0.9, 0.55, 0.2, 1.0))
 	var scale := _get_missile_scale(missile)
 	var source_kind := str(_get_value(missile, "source_kind", ""))
-	print("[MISSILE_PROXY] Building missile proxy. source_kind=", source_kind, " color=", base_color, " scale=", scale)
 	if _add_missile_model(proxy, missile, base_color, scale):
-		print("[MISSILE_PROXY] Custom model loaded successfully for ", source_kind)
 		return
-	print("[MISSILE_PROXY] Using procedural model for ", source_kind)
 	var body_radius := missile_body_radius * scale
 	var body_length := missile_body_length * scale
 	var nose_length := missile_nose_length * scale
@@ -905,6 +905,46 @@ func _build_hq_proxy(proxy: Node3D, hq) -> void:
 	_add_hq_props(proxy, size2d, maxf(height, max_height), base_color)
 	_attach_health_bar(proxy, size2d.x, max_height, health_bar_height, health_bar_offset)
 
+func _build_spy_satellite_proxy(proxy: Node3D, satellite) -> void:
+	# Create expanding ring effect for spy satellite vision
+	var radius := _get_float(satellite, "vision_radius", 400.0)
+	var edge_color := Color(0.3, 0.6, 1.0, 0.8)  # Blue intelligence color
+	var glow_color := Color(0.2, 0.5, 1.0, 0.4)
+
+	# Main edge ring (torus)
+	var ring := MeshInstance3D.new()
+	ring.name = "EdgeRing"
+	var torus := TorusMesh.new()
+	torus.inner_radius = radius - 1.5
+	torus.outer_radius = radius + 1.5
+	torus.rings = 64
+	torus.ring_segments = 6
+	ring.mesh = torus
+	ring.material_override = _make_ring_material(edge_color)
+	ring.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	ring.position = Vector3(0.0, 2.0, 0.0)  # Slightly above ground
+	proxy.add_child(ring)
+	proxy.set_meta("edge_ring", ring)
+
+	# Outer glow ring
+	var glow := MeshInstance3D.new()
+	glow.name = "GlowRing"
+	var glow_torus := TorusMesh.new()
+	glow_torus.inner_radius = radius + 1.5
+	glow_torus.outer_radius = radius + 6.0
+	glow_torus.rings = 64
+	glow_torus.ring_segments = 6
+	glow.mesh = glow_torus
+	glow.material_override = _make_ring_material(glow_color)
+	glow.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	glow.position = Vector3(0.0, 1.5, 0.0)
+	proxy.add_child(glow)
+	proxy.set_meta("glow_ring", glow)
+
+	# Store initial radius for animation
+	proxy.set_meta("target_radius", radius)
+	proxy.set_meta("current_scale", 0.0)
+
 func _update_proxy(node, proxy: Node3D, group_name: String) -> void:
 	var id := int(node.get_instance_id())
 	var unit_kind := ""
@@ -933,8 +973,6 @@ func _update_proxy(node, proxy: Node3D, group_name: String) -> void:
 				if altitude > 0.01:
 					ground_y = lerpf(ground_y, aircraft_base_height, altitude)
 			y_offset += aircraft_height * altitude * height_multiplier
-			if is_uav:
-				print("[UAV Visual] UAV detected, height_multiplier: ", height_multiplier, " final y_offset: ", y_offset)
 		var target_pos := Vector2.ZERO
 		var target_air_y := -1.0
 		var target_is_aircraft := false
@@ -1068,6 +1106,43 @@ func _update_proxy(node, proxy: Node3D, group_name: String) -> void:
 			# Update infantry animations based on movement
 			if unit_kind == "infantry" or unit_kind == "":
 				_update_infantry_animation(proxy, id, pos2)
+		elif group_name == "spy_satellite_vision":
+			_update_spy_satellite_proxy(node, proxy)
+
+func _update_spy_satellite_proxy(satellite, proxy: Node3D) -> void:
+	# Get animation state from the satellite
+	var expand_progress := _get_float(satellite, "_expand_progress", 1.0)
+	var is_expanding := bool(_get_value(satellite, "_is_expanding", false))
+	var time_remaining := _get_float(satellite, "_time_remaining", 30.0)
+	var target_radius := _get_float(satellite, "vision_radius", 400.0)
+
+	# Calculate scale based on expansion progress (ease out cubic)
+	var eased := 1.0 - pow(1.0 - expand_progress, 3.0)
+	var current_scale := eased
+
+	# Update ring scales
+	var edge_ring: MeshInstance3D = proxy.get_meta("edge_ring") as MeshInstance3D
+	var glow_ring: MeshInstance3D = proxy.get_meta("glow_ring") as MeshInstance3D
+
+	if edge_ring != null:
+		edge_ring.scale = Vector3(current_scale, current_scale, 1.0)
+	if glow_ring != null:
+		glow_ring.scale = Vector3(current_scale, current_scale, 1.0)
+
+	# Fade out in last 5 seconds
+	var fade_factor := 1.0
+	if not is_expanding and time_remaining < 5.0 and time_remaining > 0.0:
+		fade_factor = time_remaining / 5.0
+
+	# Update material alpha for fade
+	if edge_ring != null and edge_ring.material_override != null:
+		var mat := edge_ring.material_override as StandardMaterial3D
+		if mat != null:
+			mat.albedo_color.a = 0.8 * fade_factor
+	if glow_ring != null and glow_ring.material_override != null:
+		var mat := glow_ring.material_override as StandardMaterial3D
+		if mat != null:
+			mat.albedo_color.a = 0.4 * fade_factor
 
 func _update_turret_yaw(proxy: Node3D, facing: Vector2) -> bool:
 	var yaw_node: Node3D = null
@@ -1496,7 +1571,7 @@ func _make_fog_material(color: Color) -> StandardMaterial3D:
 	material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	material.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
-	material.no_depth_test = true
+	material.no_depth_test = false  # Enable depth test so fog renders behind aircraft
 	material.cull_mode = BaseMaterial3D.CULL_DISABLED
 	return material
 
@@ -2250,10 +2325,7 @@ func _add_missile_model(proxy: Node3D, missile, base_color: Color, scale: float)
 	var visual_path := str(_get_value(missile, "visual_scene_path", ""))
 	var model_path := visual_path if visual_path != "" else missile_model_path
 
-	print("[3D Missile] visual_path from missile: '", visual_path, "' | final model_path: '", model_path, "' | scale: ", scale)
-
 	if model_path == "" or not ResourceLoader.exists(model_path):
-		print("[3D Missile] Model path empty or doesn't exist!")
 		return false
 	var target_size := Vector2(
 		maxf(0.5, missile_body_radius * 2.6 * scale),
@@ -2268,7 +2340,6 @@ func _add_missile_model(proxy: Node3D, missile, base_color: Color, scale: float)
 		rotation = Vector3(-90, 0, 0)  # Rotate to point forward (nose along -Z)
 		debug_scale *= 0.75  # Make ATACMS smaller
 
-	print("[3D Missile] target_size: ", target_size, " | missile_model_scale: ", missile_model_scale, " | debug_scale: ", debug_scale, " | rotation: ", rotation)
 	var model := _add_scene_model_instance(
 		proxy,
 		model_path,
@@ -2279,9 +2350,7 @@ func _add_missile_model(proxy: Node3D, missile, base_color: Color, scale: float)
 		rotation
 	)
 	if model == null:
-		print("[3D Missile] ERROR: Model returned null from _add_scene_model_instance!")
 		return false
-	print("[3D Missile] SUCCESS: Model created! Node: ", model.name, " | Scale: ", model.scale, " | Local Pos: ", model.position, " | Proxy Global Pos: ", proxy.global_position, " | Visible: ", model.visible)
 
 	# Apply materials to ATACMS to make it visible
 	if "atacms" in model_path.to_lower():
@@ -3916,7 +3985,6 @@ func _apply_materials_to_model(node: Node, base_color: Color) -> void:
 	if node is MeshInstance3D:
 		var mesh_inst := node as MeshInstance3D
 		if mesh_inst.mesh != null:
-			print("[MATERIAL] Applying material to mesh: ", mesh_inst.name, " with ", mesh_inst.mesh.get_surface_count(), " surfaces")
 			# Create a simple StandardMaterial3D
 			var mat := StandardMaterial3D.new()
 			mat.albedo_color = base_color
@@ -3925,7 +3993,6 @@ func _apply_materials_to_model(node: Node, base_color: Color) -> void:
 			# Apply to all surface materials
 			for i in range(mesh_inst.mesh.get_surface_count()):
 				mesh_inst.set_surface_override_material(i, mat)
-			print("[MATERIAL] Material applied successfully, visible: ", mesh_inst.visible, " layers: ", mesh_inst.layers)
 	# Recursively apply to children
 	for child in node.get_children():
 		_apply_materials_to_model(child, base_color)
@@ -3940,7 +4007,6 @@ func _ensure_model_visible(node: Node) -> void:
 	if node is VisualInstance3D:
 		var visual_inst := node as VisualInstance3D
 		visual_inst.layers = 1  # Default layer
-		print("[VISIBILITY] Set layers for: ", visual_inst.name)
 
 	# Recursively apply to children
 	for child in node.get_children():

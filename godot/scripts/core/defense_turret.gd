@@ -71,6 +71,9 @@ func _find_target() -> Node2D:
 	var best_dist := attack_range * attack_range
 	for node in get_tree().get_nodes_in_group("units"):
 		if node is Unit and node.team_id != team_id:
+			# Ground turrets cannot target aircraft
+			if node.unit_kind == "aircraft":
+				continue
 			var dist := global_position.distance_squared_to(node.global_position)
 			if dist > best_dist:
 				continue
@@ -83,7 +86,7 @@ func _find_target() -> Node2D:
 
 func _target_priority(enemy: Unit) -> int:
 	var priority := 0
-	if prefers_vehicle and (enemy.unit_kind == "vehicle" or enemy.unit_kind == "aircraft"):
+	if prefers_vehicle and enemy.unit_kind == "vehicle":
 		priority -= 2
 	if prefers_infantry and enemy.unit_kind == "infantry":
 		priority -= 2

@@ -9,6 +9,7 @@ signal build_mode_changed(active_id: String)
 @export var placement_snap := 10.0
 @export var show_ghost := true
 @export var render_2d := true
+@export var vision_based_building := true  ## Allow building anywhere with vision
 
 @export var ghost_valid_fill := Color(0.2, 0.9, 0.2, 0.3)
 @export var ghost_invalid_fill := Color(0.9, 0.2, 0.2, 0.3)
@@ -343,8 +344,29 @@ func _can_place(pos: Vector2, size: Vector2) -> bool:
 	return true
 
 func _is_inside_build_zone(rect: Rect2) -> bool:
+	# Check fixed build zones first
 	for zone in _build_zones:
 		if zone is Rect2 and zone.encloses(rect):
+			return true
+	# Check vision-based building if enabled
+	if vision_based_building:
+		if _is_in_vision(rect.get_center()):
+			return true
+	return false
+
+func _is_in_vision(pos: Vector2) -> bool:
+	## Check if position is visible via any vision source
+	var vision_group := "vision_" + team_id
+	for node in get_tree().get_nodes_in_group(vision_group):
+		if node == null or not is_instance_valid(node):
+			continue
+		if not node.has_method("get_vision_radius"):
+			continue
+		var radius := float(node.get_vision_radius())
+		if radius <= 0.0:
+			continue
+		var dist_sq := pos.distance_squared_to(node.global_position)
+		if dist_sq <= radius * radius:
 			return true
 	return false
 

@@ -233,19 +233,13 @@ func _setup_visual() -> void:
 	if packed == null:
 		push_warning("Missile: missing visual scene at %s" % visual_scene_path)
 		return
-	print("[Missile Visual] Loading: ", visual_scene_path, " | Type: ", packed.get_class())
 	if packed is PackedScene:
 		var instance = packed.instantiate()
 		if instance is Node2D or instance is Node3D:
 			_visual_node = instance
 			add_child(_visual_node)
-			_visual_node.visible = true  # Always visible for debugging
+			_visual_node.visible = true
 			_update_visual_transform()
-			print("[Missile Visual] Successfully loaded as ", instance.get_class(), " | Scale: ", _visual_node.scale, " | Visible: ", _visual_node.visible)
-		else:
-			print("[Missile Visual] WARNING: Instantiated node is not Node2D/Node3D, it's: ", instance.get_class())
-	else:
-		print("[Missile Visual] WARNING: Not a PackedScene, it's: ", packed.get_class())
 
 func _update_visual_transform() -> void:
 	if _visual_node == null:

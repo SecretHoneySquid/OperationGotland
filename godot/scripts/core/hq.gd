@@ -2,6 +2,7 @@ class_name HQ
 extends Node2D
 
 @export var team_id := "p1"
+@export var build_id := "hq"
 @export var size := Vector2(140, 140):
 	set(value):
 		size = value
@@ -36,15 +37,27 @@ extends Node2D
 var hp := 0.0
 var _visual_node: Node2D
 
+# Spy satellite cooldown
+var _spy_satellite_cooldown := 0.0
+var _spy_satellite_ready := true
+
 func _ready() -> void:
 	hp = max_hp
 	add_to_group("hq")
 	add_to_group("hq_%s" % team_id)
+	add_to_group("building")  # Make HQ selectable like other buildings
 	if team_id == "p1" and vision_radius > 0.0:
 		add_to_group("vision_p1")
 		var light := VisionHelper.create_light(vision_radius)
 		add_child(light)
 	_setup_visual()
+
+func _process(delta: float) -> void:
+	if not _spy_satellite_ready:
+		_spy_satellite_cooldown -= delta
+		if _spy_satellite_cooldown <= 0.0:
+			_spy_satellite_cooldown = 0.0
+			_spy_satellite_ready = true
 
 func take_damage(amount: float, attacker_type: String = "") -> void:
 	if hp <= 0.0:
@@ -88,3 +101,14 @@ func _update_visual_color() -> void:
 	if _visual_node == null:
 		return
 	_visual_node.modulate = fill_color
+
+# Spy Satellite ability
+func is_spy_satellite_ready() -> bool:
+	return _spy_satellite_ready
+
+func start_spy_satellite_cooldown() -> void:
+	_spy_satellite_ready = false
+	_spy_satellite_cooldown = GameBalance.SPY_SATELLITE_COOLDOWN
+
+func get_cooldown_remaining() -> float:
+	return _spy_satellite_cooldown

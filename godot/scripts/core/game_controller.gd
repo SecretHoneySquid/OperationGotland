@@ -77,6 +77,7 @@ var _production_controller: ProductionController
 var _visibility_controller: VisibilityController
 var _battalion_controller: BattalionController
 var _region_controller: RegionController
+var _spy_satellite_controller: SpySatelliteController
 var _region_grid_visual: RegionGridVisual
 
 # Rally line 3D visualization
@@ -166,6 +167,11 @@ func _init_controllers() -> void:
 	_region_controller.name = "RegionController"
 	_region_controller.configure(teams, _visibility_controller)
 	add_child(_region_controller)
+
+	# Spy satellite controller - targeting mode for satellite vision
+	_spy_satellite_controller = SpySatelliteController.new()
+	_spy_satellite_controller.name = "SpySatelliteController"
+	add_child(_spy_satellite_controller)
 
 func _process(delta: float) -> void:
 	_update_hq_state()
@@ -292,6 +298,36 @@ func get_airfield_aircraft_tier(airfield: Building) -> String:
 		airfield.set_meta("aircraft_tier", "f16")
 	return str(airfield.get_meta("aircraft_tier", "f16"))
 
+func purchase_extended_radar(team_id: String, airfield: Building) -> bool:
+	if airfield == null or not is_instance_valid(airfield):
+		return false
+	if airfield.build_id != "airfield" or airfield.team_id != team_id:
+		return false
+	var team := _get_team(team_id)
+	var cost := GameBalance.EXTENDED_RADAR_COST
+	if not team.has_credits(cost):
+		return false
+	if airfield.get_meta("has_extended_radar", false):
+		return false
+	team.deduct_credits(cost)
+	airfield.set_meta("has_extended_radar", true)
+	# Update all existing aircraft from this airfield with the new upgrade
+	for node in get_tree().get_nodes_in_group("units"):
+		var unit := node as Unit
+		if unit == null or unit.unit_kind != "aircraft":
+			continue
+		if unit.aircraft_home != airfield:
+			continue
+		if unit._aircraft_behavior != null:
+			unit._aircraft_behavior.extended_radar_enabled = true
+	print("[Airfield] Extended Radar upgrade purchased for airfield at ", airfield.global_position)
+	return true
+
+func has_extended_radar(airfield: Building) -> bool:
+	if airfield == null or not is_instance_valid(airfield):
+		return false
+	return airfield.get_meta("has_extended_radar", false)
+
 func cycle_airfield_production_type(team_id: String, airfield: Building) -> bool:
 	if airfield == null or not is_instance_valid(airfield):
 		return false
@@ -400,6 +436,36 @@ func harvest_resource(index: int, amount: float) -> float:
 	_supply_remaining = maxf(0.0, _supply_remaining - taken)
 	GameState.total_supply_remaining = _supply_remaining
 	return taken
+
+# =============================================================================
+# PUBLIC API - HQ Abilities
+# =============================================================================
+
+func activate_spy_satellite(team_id: String, position: Vector2) -> bool:
+	var team := _get_team(team_id)
+	if team == null:
+		return false
+	var hq := team.hq
+	if hq == null or not is_instance_valid(hq):
+		return false
+	if not hq.is_spy_satellite_ready():
+		return false
+	var cost := GameBalance.SPY_SATELLITE_COST
+	if not team.has_credits(cost):
+		return false
+	team.deduct_credits(cost)
+	hq.start_spy_satellite_cooldown()
+	var vision := SpySatelliteVision.create(
+		position,
+		GameBalance.SPY_SATELLITE_VISION_RADIUS,
+		GameBalance.SPY_SATELLITE_DURATION
+	)
+	add_child(vision)
+	print("[SPY SATELLITE] Vision activated at ", position, " for ", GameBalance.SPY_SATELLITE_DURATION, " seconds")
+	return true
+
+func get_spy_satellite_controller() -> SpySatelliteController:
+	return _spy_satellite_controller
 
 # =============================================================================
 # PUBLIC API - Type Options

@@ -446,7 +446,7 @@ func spawn_defense_turret(team_id: String, pos: Vector2, build_id: String = "def
 func _spawn_radar_station(team_id: String, pos: Vector2) -> RadarStation:
 	var radar := RadarStation.new()
 	radar.team_id = team_id
-	radar.attack_range = 2400.0
+	radar.attack_range = GameBalance.RADAR_STATION_RANGE
 	radar.support_radius = 600.0
 	radar.damage = 0.0
 	radar.fire_rate = 999.0

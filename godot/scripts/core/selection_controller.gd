@@ -5,6 +5,7 @@ signal building_selected(building: Building)
 signal units_selected(units: Array[Unit])
 signal battalion_selected(battalion: Battalion)
 signal turret_selected(turret: DefenseTurret)
+signal hq_selected(hq: HQ)
 
 @export var team_id := "p1"
 @export var build_controller_path := NodePath("../BuildController")
@@ -120,6 +121,16 @@ func set_render_2d(value: bool) -> void:
 	queue_redraw()
 
 func _select_single(pos: Vector2, add: bool) -> void:
+	# Check for HQ selection first (HQ is not a Building type)
+	var hq := _pick_hq(pos)
+	if hq != null:
+		_clear_selection()
+		_clear_selected_building()
+		_clear_selected_battalion()
+		_clear_selected_turret()
+		emit_signal("hq_selected", hq)
+		return
+
 	var building := _pick_building(pos)
 	if building != null:
 		# Check if this building has a linked turret (defense buildings)
@@ -270,6 +281,24 @@ func _pick_building(pos: Vector2) -> Building:
 		if dist < best_dist:
 			best_dist = dist
 			best = building
+	return best
+
+func _pick_hq(pos: Vector2) -> HQ:
+	var best: HQ = null
+	var best_dist := INF
+	for node in get_tree().get_nodes_in_group("hq"):
+		var hq := node as HQ
+		if hq == null:
+			continue
+		if hq.team_id != team_id:
+			continue
+		var rect := Rect2(hq.global_position - (hq.size / 2.0), hq.size)
+		if not rect.has_point(pos):
+			continue
+		var dist := hq.global_position.distance_squared_to(pos)
+		if dist < best_dist:
+			best_dist = dist
+			best = hq
 	return best
 
 func _screen_to_world(pos: Vector2) -> Vector2:

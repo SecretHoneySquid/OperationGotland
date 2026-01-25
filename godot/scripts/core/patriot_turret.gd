@@ -38,6 +38,7 @@ signal missile_intercepted(missile_pos: Vector2, interceptor_pos: Vector2)
 @export var protection_pulse_no_radar_multiplier := 1.3
 
 var _tracked_missiles: Array[Missile] = []
+var _tracked_aircraft: Array[Unit] = []
 var _active_interceptors: Array[Node2D] = []
 var _rng := RandomNumberGenerator.new()
 var _shots_remaining: int = 0
@@ -57,7 +58,6 @@ func _ready() -> void:
 	_shots_remaining = maxi(0, interceptor_shots_per_reload)
 	# Note: 3D visual is handled by visual_sync_3d.gd, 2D visual by _draw()
 	_setup_visual()  # This sets up 2D visual only
-	print("[PATRIOT] Ready! team=", team_id, " range=", attack_range)
 
 func update_targeting(delta: float) -> void:
 	_cooldown = maxf(0.0, _cooldown - delta)
@@ -68,23 +68,36 @@ func update_targeting(delta: float) -> void:
 		queue_redraw()
 		return
 
-	# Clean up invalid tracked missiles
+	# Clean up invalid tracked targets
 	_cleanup_tracked_missiles()
+	_cleanup_tracked_aircraft()
+
+	# Calculate total tracked targets
+	var total_tracked := _tracked_missiles.size() + _tracked_aircraft.size()
 
 	# Find new interceptable missiles if we have capacity
-	if _tracked_missiles.size() < max_simultaneous_intercepts:
+	if total_tracked < max_simultaneous_intercepts:
 		_find_interceptable_missiles()
 
-	# Update facing toward closest tracked missile
-	if not _tracked_missiles.is_empty():
-		var closest := _get_closest_tracked_missile()
-		if closest != null:
-			var to_target := closest.global_position - global_position
-			_rotate_facing_toward(to_target, delta)
-			_sync_visual_rotation()
+	# Find new targetable aircraft if we have capacity (requires radar)
+	total_tracked = _tracked_missiles.size() + _tracked_aircraft.size()
+	if total_tracked < max_simultaneous_intercepts:
+		_find_targetable_aircraft()
 
-	# Fire interceptors at tracked missiles
-	if _cooldown <= 0.0 and not _tracked_missiles.is_empty():
+	# Update facing toward closest tracked target (prioritize missiles)
+	var closest_target: Node2D = null
+	if not _tracked_missiles.is_empty():
+		closest_target = _get_closest_tracked_missile()
+	elif not _tracked_aircraft.is_empty():
+		closest_target = _get_closest_tracked_aircraft()
+
+	if closest_target != null:
+		var to_target := closest_target.global_position - global_position
+		_rotate_facing_toward(to_target, delta)
+		_sync_visual_rotation()
+
+	# Fire interceptors at tracked targets (prioritize missiles)
+	if _cooldown <= 0.0 and (not _tracked_missiles.is_empty() or not _tracked_aircraft.is_empty()):
 		if _reloading:
 			queue_redraw()
 			return
@@ -92,14 +105,26 @@ func update_targeting(delta: float) -> void:
 			_start_reload()
 			queue_redraw()
 			return
+
+		# Prioritize missiles over aircraft
 		var target_missile := _get_highest_priority_missile()
 		if target_missile != null:
-			var fired := _fire_interceptor(target_missile)
+			var fired := _fire_interceptor_at_missile(target_missile)
 			if fired:
 				_shots_remaining -= 1
 				if _shots_remaining <= 0:
 					_start_reload()
 				_cooldown = fire_rate
+		else:
+			# No missiles, try aircraft
+			var target_aircraft := _get_highest_priority_aircraft()
+			if target_aircraft != null:
+				var fired := _fire_interceptor_at_aircraft(target_aircraft)
+				if fired:
+					_shots_remaining -= 1
+					if _shots_remaining <= 0:
+						_start_reload()
+					_cooldown = fire_rate
 
 	queue_redraw()
 
@@ -140,6 +165,22 @@ func _cleanup_tracked_missiles() -> void:
 		if is_instance_valid(interceptor):
 			valid_interceptors.append(interceptor)
 	_active_interceptors = valid_interceptors
+
+func _cleanup_tracked_aircraft() -> void:
+	var valid_aircraft: Array[Unit] = []
+	var detection_range := _get_detection_range()
+	for aircraft in _tracked_aircraft:
+		if not is_instance_valid(aircraft):
+			continue
+		if aircraft.hp <= 0:
+			continue
+		# Must still be radar detected or we have radar support
+		if not _has_radar_support() and aircraft.radar_detected_timer <= 0:
+			continue
+		var dist := global_position.distance_to(aircraft.global_position)
+		if dist <= detection_range:
+			valid_aircraft.append(aircraft)
+	_tracked_aircraft = valid_aircraft
 
 func _rotate_facing_toward(to_target: Vector2, delta: float) -> void:
 	if to_target.length_squared() <= 0.0001:
@@ -207,7 +248,6 @@ func _find_interceptable_missiles() -> void:
 	# Track up to available slots
 	for i in range(mini(slots_available, candidates.size())):
 		_tracked_missiles.append(candidates[i])
-		print("[PATRIOT] Now tracking NEW missile, total tracked: ", _tracked_missiles.size())
 
 func _compare_missile_priority(a: Missile, b: Missile) -> bool:
 	# Priority: fewer interceptors assigned, then closer missiles, then difficulty
@@ -224,6 +264,96 @@ func _compare_missile_priority(a: Missile, b: Missile) -> bool:
 	var priority_b := dist_b * b.get_intercept_difficulty()
 
 	return priority_a < priority_b
+
+func _find_targetable_aircraft() -> void:
+	# Only target aircraft if we have radar support or aircraft is radar detected
+	var slots_available := max_simultaneous_intercepts - _tracked_missiles.size() - _tracked_aircraft.size()
+	if slots_available <= 0:
+		return
+
+	if not protection_configured:
+		return
+
+	var candidates: Array[Unit] = []
+	var all_units := get_tree().get_nodes_in_group("units")
+	var detection_range := _get_detection_range()
+	var has_radar := _has_radar_support()
+
+	for node in all_units:
+		if node == null or not is_instance_valid(node):
+			continue
+		if not (node is Unit):
+			continue
+		var unit := node as Unit
+
+		# Only target aircraft
+		if unit.unit_kind != "aircraft":
+			continue
+
+		# Skip friendly aircraft
+		if unit.team_id == team_id:
+			continue
+
+		# Skip dead aircraft
+		if unit.hp <= 0:
+			continue
+
+		# Skip already tracked
+		if _tracked_aircraft.has(unit):
+			continue
+
+		# Must have radar support OR aircraft must be radar detected
+		if not has_radar and unit.radar_detected_timer <= 0:
+			continue
+
+		# Check range
+		var dist := global_position.distance_to(unit.global_position)
+		if dist > detection_range:
+			continue
+
+		# Check if aircraft is in protection area
+		if not is_in_protection_area(unit.global_position):
+			continue
+
+		candidates.append(unit)
+
+	# Sort by distance (closest first)
+	candidates.sort_custom(_compare_aircraft_priority)
+
+	# Track up to available slots
+	for i in range(mini(slots_available, candidates.size())):
+		_tracked_aircraft.append(candidates[i])
+
+func _compare_aircraft_priority(a: Unit, b: Unit) -> bool:
+	var dist_a := global_position.distance_to(a.global_position)
+	var dist_b := global_position.distance_to(b.global_position)
+	return dist_a < dist_b
+
+func _get_closest_tracked_aircraft() -> Unit:
+	var closest: Unit = null
+	var closest_dist := INF
+	for aircraft in _tracked_aircraft:
+		if not is_instance_valid(aircraft):
+			continue
+		var dist := global_position.distance_to(aircraft.global_position)
+		if dist < closest_dist:
+			closest_dist = dist
+			closest = aircraft
+	return closest
+
+func _get_highest_priority_aircraft() -> Unit:
+	var best: Unit = null
+	var best_dist := INF
+	for aircraft in _tracked_aircraft:
+		if not is_instance_valid(aircraft):
+			continue
+		if aircraft.hp <= 0:
+			continue
+		var dist := global_position.distance_to(aircraft.global_position)
+		if dist < best_dist:
+			best_dist = dist
+			best = aircraft
+	return best
 
 func _count_interceptors_targeting(missile: Missile) -> int:
 	if missile == null:
@@ -297,7 +427,7 @@ func _get_highest_priority_missile() -> Missile:
 
 	return best
 
-func _fire_interceptor(target_missile: Missile) -> bool:
+func _fire_interceptor_at_missile(target_missile: Missile) -> bool:
 	if target_missile == null or not is_instance_valid(target_missile):
 		return false
 
@@ -311,7 +441,6 @@ func _fire_interceptor(target_missile: Missile) -> bool:
 	if count <= 0:
 		return false
 
-	print("[PATRIOT] FIRING INTERCEPTOR at missile at ", target_missile.global_position)
 
 	var spacing := maxf(0.0, interceptor_salvo_spacing)
 	var start_pos := global_position + (_facing * (base_radius + 4.0))
@@ -352,9 +481,7 @@ func _spawn_interceptor_instance(target_missile: Missile, spawn_pos: Vector2, su
 	get_parent().add_child(interceptor)
 	# Set position AFTER adding to scene tree
 	interceptor.global_position = spawn_pos
-	print("[PATRIOT] Interceptor spawned at ", interceptor.global_position)
 	_active_interceptors.append(interceptor)
-	print("[PATRIOT] Interceptor launched! Active interceptors: ", _active_interceptors.size())
 
 func _queue_interceptor_spawn(target_missile: Missile, spawn_pos: Vector2, success_chance: float, delay: float) -> void:
 	if delay <= 0.0:
@@ -372,6 +499,56 @@ func _on_delayed_interceptor_spawn(target_missile: Missile, spawn_pos: Vector2, 
 	if not is_inside_tree():
 		return
 	_spawn_interceptor_instance(target_missile, spawn_pos, success_chance)
+
+func _fire_interceptor_at_aircraft(target_aircraft: Unit) -> bool:
+	if target_aircraft == null or not is_instance_valid(target_aircraft):
+		return false
+	if target_aircraft.hp <= 0:
+		return false
+
+	# Fire a single interceptor at aircraft (no salvo like missiles)
+	var start_pos := global_position + (_facing * (base_radius + 4.0))
+	var success_chance := _calculate_aircraft_intercept_chance(target_aircraft)
+	_spawn_interceptor_at_aircraft(target_aircraft, start_pos, success_chance)
+	return true
+
+func _spawn_interceptor_at_aircraft(target_aircraft: Unit, spawn_pos: Vector2, success_chance: float) -> void:
+	if target_aircraft == null or not is_instance_valid(target_aircraft):
+		return
+	if target_aircraft.hp <= 0:
+		return
+	if get_parent() == null:
+		return
+	var interceptor := InterceptorMissile.new()
+	interceptor.speed = interceptor_speed
+	interceptor.turn_rate = interceptor_turn_rate
+	interceptor.lifetime = interceptor_lifetime
+	interceptor.target_aircraft = target_aircraft
+	interceptor.success_chance = success_chance
+	interceptor.color = missile_color
+	interceptor.trail_color = Color(missile_color.r, missile_color.g, missile_color.b, 0.6)
+	interceptor.team_id = team_id
+	interceptor.set_origin(global_position)
+
+	# Connect to intercept result
+	interceptor.intercept_result.connect(_on_intercept_result)
+
+	get_parent().add_child(interceptor)
+	interceptor.global_position = spawn_pos
+	_active_interceptors.append(interceptor)
+
+func _calculate_aircraft_intercept_chance(target_aircraft: Unit) -> float:
+	var chance := _get_teamwork_intercept_base()
+
+	# Aircraft are harder to intercept than missiles
+	chance *= 0.7
+
+	# Reduce chance based on distance
+	var dist := global_position.distance_to(target_aircraft.global_position)
+	var dist_factor := 1.0 - (dist / attack_range) * 0.3
+	chance *= dist_factor
+
+	return clampf(chance, 0.1, 0.85)
 
 func _count_nearby_patriots() -> int:
 	if patriot_coordination_range <= 0.0:
@@ -798,8 +975,6 @@ func set_protection_area(direction_angle: float, arc_half_angle: float) -> void:
 	protection_direction = Vector2.from_angle(direction_angle)
 	protection_arc_half_angle = arc_half_angle
 	protection_configured = true
-	print("[PATRIOT] Protection area configured: direction=", protection_direction,
-		  " arc=", rad_to_deg(arc_half_angle * 2), " degrees")
 
 func is_in_protection_area(pos: Vector2, range_override := -1.0) -> bool:
 	if not protection_configured:

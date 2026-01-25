@@ -245,3 +245,23 @@ const BATTALION_WITHDRAW_SAFE_DISTANCE := 300.0  # Distance from enemies to stop
 
 ## AI behavior
 const AI_BATTALION_CHECK_INTERVAL := 5.0  # How often AI considers buying battalions
+
+# =============================================================================
+# AIRFIELD UPGRADES
+# =============================================================================
+
+const EXTENDED_RADAR_COST := 300  # Cost for extended radar upgrade
+const EXTENDED_RADAR_SIGHT_BONUS := 0.4  # 40% sight increase
+const EXTENDED_RADAR_GHOST_DURATION := 4.0  # Enemy aircraft become targetable for 4 seconds
+
+# Radar Station
+const RADAR_STATION_RANGE := 4800.0  # Detection range (doubled from 2400)
+
+# =============================================================================
+# SPY SATELLITE
+# =============================================================================
+
+const SPY_SATELLITE_COST := 300
+const SPY_SATELLITE_DURATION := 30.0  # seconds of vision
+const SPY_SATELLITE_COOLDOWN := 45.0  # seconds after use
+const SPY_SATELLITE_VISION_RADIUS := 400.0

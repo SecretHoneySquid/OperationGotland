@@ -54,6 +54,7 @@ var _factory_updating := false
 var _airfield_panel: VBoxContainer
 var _airfield_name_label: Label
 var _airfield_f35_button: Button
+var _airfield_extended_radar_button: Button
 var _airfield_uav_button: TextureButton
 var _airfield_command_button: Button
 var _selected_airfield: Building
@@ -104,6 +105,14 @@ var _radar_area_button: Button
 var _selected_radar: RadarStation = null
 var _protection_area_controller: Node = null
 
+# HQ UI
+var _hq_panel: VBoxContainer
+var _hq_name_label: Label
+var _hq_status_label: Label
+var _spy_satellite_button: Button
+var _selected_hq: HQ = null
+var _spy_satellite_controller: SpySatelliteController = null
+
 func _ready() -> void:
 	_controller = get_node_or_null(build_controller_path) as BuildController
 	_game_controller = get_node_or_null(game_controller_path) as GameController
@@ -118,6 +127,7 @@ func _ready() -> void:
 		_selection_controller.building_selected.connect(_on_building_selected)
 		_selection_controller.units_selected.connect(_on_units_selected)
 		_selection_controller.turret_selected.connect(_on_turret_selected)
+		_selection_controller.hq_selected.connect(_on_hq_selected)
 	if _battalion_controller != null:
 		_battalion_controller.battalion_selected.connect(_on_battalion_selected)
 		_battalion_controller.placement_started.connect(_on_battalion_placement_started)
@@ -202,6 +212,8 @@ func _process(_delta: float) -> void:
 		_update_airforce_panel()
 	if _bombardment_panel != null:
 		_update_bombardment_panel()
+	if _hq_panel != null and _hq_panel.visible:
+		_update_hq_panel()
 	if _patriot_panel != null:
 		_update_patriot_panel()
 	if _radar_panel != null:
@@ -532,6 +544,19 @@ func _build_ui() -> void:
 	)
 	_airfield_panel.add_child(_airfield_f35_button)
 
+	# Extended Radar Upgrade Button
+	_airfield_extended_radar_button = Button.new()
+	_airfield_extended_radar_button.text = "Extended Radar ($%d)" % GameBalance.EXTENDED_RADAR_COST
+	_airfield_extended_radar_button.tooltip_text = "Upgrades aircraft with extended radar:\n- 40%% sight increase\n- Detected enemies become targetable by A2A missiles for 4s"
+	_airfield_extended_radar_button.pressed.connect(func():
+		if _game_controller == null:
+			return
+		if _selected_airfield == null or not is_instance_valid(_selected_airfield):
+			return
+		_game_controller.purchase_extended_radar("p1", _selected_airfield)
+	)
+	_airfield_panel.add_child(_airfield_extended_radar_button)
+
 	# UAV Icon Button (64x64 square)
 	var uav_container = AspectRatioContainer.new()
 	uav_container.ratio = 1.0
@@ -712,6 +737,34 @@ func _build_ui() -> void:
 	_radar_area_button.text = "Set Detection Area"
 	_radar_area_button.pressed.connect(_on_radar_area_pressed)
 	_radar_panel.add_child(_radar_area_button)
+
+	# ========== HQ PANEL ==========
+	_hq_panel = VBoxContainer.new()
+	_hq_panel.visible = false
+	_hq_panel.add_theme_constant_override("separation", _si(6.0))
+	_hq_panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	bottom_hbox.add_child(_hq_panel)
+
+	var hq_title := Label.new()
+	hq_title.text = "HQ Command"
+	_hq_panel.add_child(hq_title)
+
+	_hq_name_label = Label.new()
+	_hq_name_label.text = "No HQ selected"
+	_hq_panel.add_child(_hq_name_label)
+
+	_hq_status_label = Label.new()
+	_hq_status_label.text = "Satellite: Ready"
+	_hq_panel.add_child(_hq_status_label)
+
+	_spy_satellite_button = Button.new()
+	_spy_satellite_button.text = "Spy Satellite ($%d)" % GameBalance.SPY_SATELLITE_COST
+	_spy_satellite_button.tooltip_text = "Reveals an area for %d seconds. %d second cooldown." % [
+		int(GameBalance.SPY_SATELLITE_DURATION),
+		int(GameBalance.SPY_SATELLITE_COOLDOWN)
+	]
+	_spy_satellite_button.pressed.connect(_on_spy_satellite_pressed)
+	_hq_panel.add_child(_spy_satellite_button)
 
 	# ========== BATTALION PANELS ==========
 
@@ -1007,6 +1060,27 @@ func _update_airfield_panel() -> void:
 
 		_airfield_f35_button.text = label
 		_airfield_f35_button.disabled = disabled
+
+	# Update Extended Radar button
+	if _airfield_extended_radar_button != null and _game_controller != null:
+		var has_radar := _game_controller.has_extended_radar(_selected_airfield)
+		var radar_cost := GameBalance.EXTENDED_RADAR_COST
+		var radar_disabled := false
+		var radar_label := ""
+
+		if _selected_airfield.team_id != "p1":
+			radar_disabled = true
+			radar_label = "Enemy Airfield"
+		elif has_radar:
+			radar_label = "Extended Radar (Owned)"
+			radar_disabled = true
+		else:
+			radar_label = "Extended Radar ($%d)" % radar_cost
+			if GameState.p1_credits < radar_cost:
+				radar_disabled = true
+
+		_airfield_extended_radar_button.text = radar_label
+		_airfield_extended_radar_button.disabled = radar_disabled
 
 func _update_bombardment_panel() -> void:
 	# Check if any selected units are HIMARS
@@ -1358,3 +1432,75 @@ func _update_radar_panel() -> void:
 			_radar_area_button.text = "Change Detection Area"
 		else:
 			_radar_area_button.text = "Set Detection Area"
+
+# =============================================================================
+# HQ UI HANDLERS
+# =============================================================================
+
+func _on_hq_selected(hq: HQ) -> void:
+	# Clear other selections
+	_selected_barracks = null
+	_selected_factory = null
+	_selected_airfield = null
+	_selected_patriot = null
+	_selected_radar = null
+	_selected_units.clear()
+	_selected_battalion = null
+	if _barracks_panel != null:
+		_barracks_panel.visible = false
+	if _factory_panel != null:
+		_factory_panel.visible = false
+	if _airfield_panel != null:
+		_airfield_panel.visible = false
+	if _airforce_panel != null:
+		_airforce_panel.visible = false
+	if _bombardment_panel != null:
+		_bombardment_panel.visible = false
+	if _patriot_panel != null:
+		_patriot_panel.visible = false
+	if _radar_panel != null:
+		_radar_panel.visible = false
+	if _battalion_selected_panel != null:
+		_battalion_selected_panel.visible = false
+	_airforce_mode_active = false
+
+	_selected_hq = hq
+	_update_hq_panel()
+
+func _on_spy_satellite_pressed() -> void:
+	if _selected_hq == null or not is_instance_valid(_selected_hq):
+		return
+	if _spy_satellite_controller == null:
+		if _game_controller != null:
+			_spy_satellite_controller = _game_controller.get_spy_satellite_controller()
+		if _spy_satellite_controller == null:
+			_spy_satellite_controller = get_tree().get_first_node_in_group("spy_satellite_controller")
+	if _spy_satellite_controller != null:
+		_spy_satellite_controller.start_satellite_mode(_selected_hq)
+
+func _update_hq_panel() -> void:
+	if _hq_panel == null:
+		return
+	if _selected_hq == null or not is_instance_valid(_selected_hq):
+		_hq_panel.visible = false
+		return
+	_hq_panel.visible = true
+	if _hq_name_label != null:
+		_hq_name_label.text = "HQ @ (%.0f, %.0f)" % [
+			_selected_hq.global_position.x,
+			_selected_hq.global_position.y
+		]
+	if _spy_satellite_button != null:
+		var ready := _selected_hq.is_spy_satellite_ready()
+		var can_afford := GameState.p1_credits >= GameBalance.SPY_SATELLITE_COST
+		_spy_satellite_button.disabled = not (ready and can_afford)
+		if ready:
+			_spy_satellite_button.text = "Spy Satellite ($%d)" % GameBalance.SPY_SATELLITE_COST
+		else:
+			var remaining := _selected_hq.get_cooldown_remaining()
+			_spy_satellite_button.text = "Spy Satellite (%.0fs)" % remaining
+	if _hq_status_label != null:
+		if _selected_hq.is_spy_satellite_ready():
+			_hq_status_label.text = "Satellite: Ready"
+		else:
+			_hq_status_label.text = "Satellite: Cooldown %.0fs" % _selected_hq.get_cooldown_remaining()
