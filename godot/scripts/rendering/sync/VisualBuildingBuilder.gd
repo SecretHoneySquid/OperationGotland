@@ -225,6 +225,11 @@ func build_building_proxy(proxy: Node3D, building, ui_overlays: VisualUIOverlays
 		ui_overlays.attach_health_bar(proxy, size2d.x, defense_height, health_bar_height, health_bar_offset)
 		return
 
+	elif build_id == "missile_carrier":
+		var ship_height := _build_missile_carrier_ship(proxy, size2d, height, base_color)
+		ui_overlays.attach_health_bar(proxy, size2d.x, ship_height, health_bar_height, health_bar_offset)
+		return
+
 	# Default building
 	var body := VisualUtilities.make_box(size, base_color)
 	body.position = Vector3(0, height * 0.5, 0)
@@ -730,6 +735,112 @@ func _build_defense_base(proxy: Node3D, build_id: String, size2d: Vector2, heigh
 			proxy.add_child(cell_b)
 			max_height = maxf(max_height, emitter_y + emitter_height * 0.5)
 
+	return max_height
+
+func _build_missile_carrier_ship(proxy: Node3D, size2d: Vector2, height: float, base_color: Color) -> float:
+	# Ship sits on water - no building pad needed
+	var hull_color := base_color
+	var deck_color := base_color.lightened(0.1)
+	var superstructure_color := base_color.lightened(0.2)
+	var radar_color := Color(0.6, 0.65, 0.7, 1.0)
+
+	# Hull - main body of the ship (elongated box with slight taper)
+	var hull_height := height * 0.35
+	var hull_length := size2d.x * 0.95
+	var hull_width := size2d.y * 0.85
+	var hull := VisualUtilities.make_box(Vector3(hull_length, hull_height, hull_width), hull_color)
+	hull.position = Vector3(0.0, hull_height * 0.5, 0.0)
+	proxy.add_child(hull)
+
+	# Bow (front) - tapered section
+	var bow_length := size2d.x * 0.15
+	var bow_height := hull_height * 0.8
+	var bow := VisualUtilities.make_box(Vector3(bow_length, bow_height, hull_width * 0.6), hull_color.darkened(0.05))
+	bow.position = Vector3(-hull_length * 0.5 - bow_length * 0.4, bow_height * 0.5, 0.0)
+	proxy.add_child(bow)
+
+	# Deck surface
+	var deck_height := height * 0.04
+	var deck := VisualUtilities.make_box(Vector3(hull_length * 0.9, deck_height, hull_width * 0.9), deck_color)
+	deck.position = Vector3(0.0, hull_height + deck_height * 0.5, 0.0)
+	proxy.add_child(deck)
+
+	# Superstructure / Bridge tower (aft section)
+	var bridge_height := height * 0.5
+	var bridge_length := size2d.x * 0.25
+	var bridge_width := size2d.y * 0.5
+	var bridge := VisualUtilities.make_box(Vector3(bridge_length, bridge_height, bridge_width), superstructure_color)
+	bridge.position = Vector3(hull_length * 0.25, hull_height + bridge_height * 0.5, 0.0)
+	proxy.add_child(bridge)
+
+	# Bridge windows (dark strip)
+	var window_height := bridge_height * 0.15
+	var windows := VisualUtilities.make_box(Vector3(bridge_length * 1.02, window_height, bridge_width * 1.02), Color(0.1, 0.15, 0.2, 1.0))
+	windows.position = Vector3(hull_length * 0.25, hull_height + bridge_height * 0.75, 0.0)
+	proxy.add_child(windows)
+
+	# VLS (Vertical Launch System) missile cells - main weapon
+	var vls_height := height * 0.2
+	var vls_length := size2d.x * 0.3
+	var vls_width := size2d.y * 0.45
+	var vls := VisualUtilities.make_box(Vector3(vls_length, vls_height, vls_width), hull_color.darkened(0.15))
+	vls.position = Vector3(-hull_length * 0.15, hull_height + vls_height * 0.5, 0.0)
+	proxy.add_child(vls)
+
+	# VLS cell hatches (grid pattern)
+	var hatch_size := minf(vls_length, vls_width) * 0.12
+	var hatch_height := vls_height * 0.1
+	for row in range(2):
+		for col in range(4):
+			var hatch_x := -hull_length * 0.15 + (float(col) - 1.5) * (hatch_size * 1.4)
+			var hatch_z := (float(row) - 0.5) * (hatch_size * 1.6)
+			var hatch := VisualUtilities.make_box(Vector3(hatch_size, hatch_height, hatch_size), Color(0.25, 0.28, 0.3, 1.0))
+			hatch.position = Vector3(hatch_x, hull_height + vls_height + hatch_height * 0.5, hatch_z)
+			proxy.add_child(hatch)
+
+	# Radar mast on bridge
+	var mast_height := height * 0.35
+	var mast_radius := size2d.x * 0.02
+	var mast := VisualUtilities.make_cylinder(mast_radius, mast_height, superstructure_color.darkened(0.1))
+	mast.position = Vector3(hull_length * 0.25, hull_height + bridge_height + mast_height * 0.5, 0.0)
+	proxy.add_child(mast)
+
+	# Radar dome (sphere on mast)
+	var radar_radius := size2d.x * 0.06
+	var radar := VisualUtilities.make_sphere(radar_radius, radar_color)
+	radar.position = Vector3(hull_length * 0.25, hull_height + bridge_height + mast_height, 0.0)
+	radar.scale = Vector3(1.2, 0.7, 1.2)
+	proxy.add_child(radar)
+
+	# Secondary radar/antenna
+	var antenna_height := height * 0.18
+	var antenna := VisualUtilities.make_cylinder(mast_radius * 0.6, antenna_height, superstructure_color)
+	antenna.position = Vector3(hull_length * 0.35, hull_height + bridge_height * 0.6 + antenna_height * 0.5, bridge_width * 0.3)
+	proxy.add_child(antenna)
+
+	# Funnel/exhaust stack
+	var funnel_height := height * 0.25
+	var funnel_radius := size2d.y * 0.08
+	var funnel := VisualUtilities.make_cylinder(funnel_radius, funnel_height, hull_color.darkened(0.2))
+	funnel.position = Vector3(hull_length * 0.08, hull_height + funnel_height * 0.5, 0.0)
+	proxy.add_child(funnel)
+
+	# Gun turret (fore)
+	var turret_height := height * 0.15
+	var turret_radius := size2d.y * 0.12
+	var turret_base := VisualUtilities.make_cylinder(turret_radius, turret_height, hull_color.lightened(0.05))
+	turret_base.position = Vector3(-hull_length * 0.35, hull_height + turret_height * 0.5, 0.0)
+	proxy.add_child(turret_base)
+
+	# Gun barrel
+	var barrel_length := size2d.x * 0.12
+	var barrel_radius := turret_radius * 0.15
+	var barrel := VisualUtilities.make_cylinder(barrel_radius, barrel_length, hull_color.darkened(0.3))
+	barrel.rotation_degrees = Vector3(90.0, 0.0, 0.0)
+	barrel.position = Vector3(-hull_length * 0.35, hull_height + turret_height * 0.8, -turret_radius - barrel_length * 0.4)
+	proxy.add_child(barrel)
+
+	var max_height := hull_height + bridge_height + mast_height + radar_radius
 	return max_height
 
 # =============================================================================

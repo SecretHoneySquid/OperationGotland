@@ -23,6 +23,7 @@ const BUILDING_HP := {
 	"defense": 240.0,
 	"defense_patriot": 280.0,
 	"radar": 240.0,
+	"missile_carrier": 320.0,
 }
 
 static func get_building_hp(build_id: String) -> float:
@@ -45,6 +46,7 @@ const BUILDING_SIZE := {
 	"defense_laser": Vector2(70, 70),
 	"defense_patriot": Vector2(90, 90),
 	"radar": Vector2(90, 90),
+	"missile_carrier": Vector2(120, 50),
 }
 
 static func get_building_size(build_id: String) -> Vector2:
@@ -61,6 +63,7 @@ const BUILDING_VISUAL_BASE_SIZE := {
 	"supply": Vector2(100, 80),
 	"power": Vector2(80, 80),
 	"command_center": Vector2(130, 110),
+	"missile_carrier": Vector2(120, 50),
 }
 
 static func get_building_visual_base_size(build_id: String) -> Vector2:
@@ -81,6 +84,7 @@ const BUILDING_COLOR := {
 	"defense_missile": Color(0.7, 0.7, 0.7, 1.0),
 	"defense_patriot": Color(0.3, 0.45, 0.3, 1.0),
 	"radar": Color(0.2, 0.55, 0.7, 1.0),
+	"missile_carrier": Color(0.25, 0.35, 0.55, 1.0),
 }
 
 static func get_building_color(build_id: String, team_hq_color: Color) -> Color:
@@ -172,6 +176,25 @@ static func get_defense_profile(build_id: String) -> Dictionary:
 				"intercept_success_base": 0.3,  # Base success rate when solo without radar
 				"max_simultaneous_intercepts": 2,  # Can track 2 missiles at once
 				"max_interceptors_per_missile": 4,
+			}
+		"missile_carrier":
+			return {
+				"range": 1200.0,  # Long bombardment range
+				"damage": 80.0,  # ATACMS damage
+				"fire_rate": 15.0,  # Reload time between salvos
+				"missile_speed": 400.0,
+				"missile_turn_rate": 0.5,  # Minimal corrections for ballistic
+				"missile_color": Color(1.0, 0.4, 0.1, 1.0),
+				"warhead_size": "large",
+				"hitscan": false,
+				"prefers_infantry": false,
+				"prefers_vehicle": false,
+				"damage_vs_infantry": 1.0,
+				"damage_vs_vehicle": 1.0,
+				"is_bombardment": true,  # Special flag for bombardment capability
+				"bombardment_missiles_per_salvo": 1,
+				"splash_radius": 60.0,
+				"ballistic_arc": 800.0,
 			}
 	# Default fallback
 	return {

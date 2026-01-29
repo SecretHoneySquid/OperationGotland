@@ -1,2 +1,4 @@
-res://scripts/core/spy_satellite_vision.gd
-res://scripts/visuals/visual_sync_3d.gd
+res://scripts/core/build_controller.gd
+res://scripts/core/selection_controller.gd
+res://scripts/core/building_bombardment_controller.gd
+res://scripts/core/missile_carrier_turret.gd

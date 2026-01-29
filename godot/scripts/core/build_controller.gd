@@ -19,7 +19,11 @@ signal build_mode_changed(active_id: String)
 @export var defense_fire_rate_multiplier := 0.75
 @export var cancel_drag_threshold := 8.0
 
+# Ocean water level (Y position of Ocean mesh in main_3d.tscn)
+const OCEAN_WATER_LEVEL := 50.0
+
 var _build_zones: Array = []
+var _terrain: Node = null
 var _buildings: Array = []
 var _active_build_id := ""
 var _ghost_pos := Vector2.ZERO
@@ -40,7 +44,8 @@ var _build_order := [
 	"defense_missile",
 	"defense_laser",
 	"defense_patriot",
-	"radar"
+	"radar",
+	"missile_carrier"
 ]
 var _build_defs := {
 	"barracks": {
@@ -130,6 +135,15 @@ var _build_defs := {
 		"range": 2400.0,
 		"support_radius": 600.0,
 	},
+	"missile_carrier": {
+		"name": "Missile Carrier",
+		"size": Vector2(120, 50),
+		"cost": 600,
+		"hp": 320.0,
+		"color": Color(0.25, 0.35, 0.55, 1.0),
+		"water_only": true,
+		"vision_radius": 300.0,
+	},
 }
 
 var _defense_profiles := {
@@ -202,6 +216,7 @@ var _defense_profiles := {
 func _ready() -> void:
 	_load_build_zones(map_path, build_zone_id)
 	_world_input = _find_world_input()
+	_terrain = _find_terrain()
 
 func _process(_delta: float) -> void:
 # DEBUG: Press B key to force build mode for testing	if Input.is_key_pressed(KEY_B):		if _active_build_id == "":			start_placement("barracks")			print("[BuildController] BUILD MODE ACTIVATED - Press B was detected")	# DEBUG: Press ESC to cancel build mode	if Input.is_key_pressed(KEY_ESCAPE):		if _active_build_id != "":			cancel_placement()			print("[BuildController] BUILD MODE CANCELLED")
@@ -326,12 +341,30 @@ func _try_place() -> void:
 	elif _active_build_id == "radar":
 		var radar := _spawn_radar_station(_ghost_pos, data)
 		building.set_meta("linked_turret", radar)
+	elif _active_build_id == "missile_carrier":
+		var carrier := _spawn_missile_carrier(_ghost_pos)
+		building.set_meta("linked_turret", carrier)
 	cancel_placement()
 
 func _can_place(pos: Vector2, size: Vector2) -> bool:
 	var rect := Rect2(pos - (size / 2.0), size)
-	if not _is_inside_build_zone(rect):
-		return false
+	var build_data: Dictionary = _build_defs.get(_active_build_id, {})
+	var is_water_only: bool = build_data.get("water_only", false)
+
+	# Check water-only requirement for naval buildings
+	if is_water_only:
+		if not _is_on_water(pos):
+			return false
+		# Water buildings still need vision to place
+		if vision_based_building and not _is_in_vision(pos):
+			return false
+	else:
+		# Non-water buildings must be on land (in build zone or vision)
+		if _is_on_water(pos):
+			return false
+		if not _is_inside_build_zone(rect):
+			return false
+
 	if _get_team_credits() < int(_build_defs[_active_build_id]["cost"]):
 		return false
 	for building in _buildings:
@@ -370,6 +403,137 @@ func _is_in_vision(pos: Vector2) -> bool:
 			return true
 	return false
 
+var _water_debug_printed := false
+var _terrain_data: Object = null
+
+func _is_on_water(pos: Vector2) -> bool:
+	## Check if position is on water by checking terrain height vs water surface.
+	## Water = terrain below water surface level OR no terrain data within water mesh.
+
+	# First, try to get terrain height at this position
+	if _terrain == null:
+		_terrain = _find_terrain()
+		if not _water_debug_printed:
+			if _terrain == null:
+				print("[WATER_CHECK] Terrain NOT found!")
+			else:
+				print("[WATER_CHECK] Terrain found: ", _terrain.name, " at ", _terrain.get_path())
+				# Terrain3D uses terrain.data.get_height() not terrain.get_height()
+				var data_value: Variant = _terrain.get("data")
+				if data_value is Object:
+					_terrain_data = data_value
+					print("[WATER_CHECK] Terrain data found, has get_height: ", _terrain_data.has_method("get_height"))
+				else:
+					print("[WATER_CHECK] Terrain has no 'data' property")
+
+	var world_pos := Vector3(pos.x, 0, pos.y)
+	var height := NAN
+
+	# Try to get height from terrain data (Terrain3D uses data.get_height)
+	if _terrain_data != null and _terrain_data.has_method("get_height"):
+		# Convert to local space if terrain has transform
+		var local_pos := world_pos
+		if _terrain is Node3D:
+			local_pos = (_terrain as Node3D).to_local(world_pos)
+		var height_value: Variant = _terrain_data.call("get_height", Vector3(local_pos.x, 0.0, local_pos.z))
+		if height_value is float or height_value is int:
+			height = float(height_value)
+			# Convert back to global Y if needed
+			if _terrain is Node3D and is_finite(height):
+				height = (_terrain as Node3D).to_global(Vector3(local_pos.x, height, local_pos.z)).y
+	elif _terrain != null and _terrain.has_method("get_height"):
+		# Fallback: direct get_height on terrain node
+		height = _terrain.get_height(world_pos)
+
+	# Determine water surface level from any water mesh at this position
+	var water_info := _get_water_mesh_at_position(pos)
+	var water_surface_y: float = OCEAN_WATER_LEVEL
+	var within_water_mesh := not water_info.is_empty()
+	if within_water_mesh:
+		water_surface_y = water_info.get("surface_y", OCEAN_WATER_LEVEL)
+
+	# Debug output (first few calls only)
+	if not _water_debug_printed:
+		_water_debug_printed = true
+		print("[WATER_CHECK] pos=", pos, " height=", height, " water_y=", water_surface_y, " in_mesh=", within_water_mesh)
+		if is_nan(height):
+			print("[WATER_CHECK] Height is NaN - no terrain data at this position")
+		elif height >= water_surface_y:
+			print("[WATER_CHECK] Height >= water level = LAND")
+		else:
+			print("[WATER_CHECK] Height < water level = WATER")
+
+	# If we have valid terrain height data, use it to determine water vs land
+	if not is_nan(height):
+		# Terrain above or at water surface = land (not water)
+		if height >= water_surface_y:
+			return false
+		# Terrain below water surface AND within water mesh = water
+		if height < water_surface_y and within_water_mesh:
+			return true
+		# Below water level but no water mesh = unusual, treat as land
+		return false
+
+	# No terrain data (NaN) - be conservative, require explicit water mesh
+	# ONLY allow water building in areas clearly marked as ocean/water
+	# AND where there's no terrain data (meaning it's outside the island)
+	if within_water_mesh:
+		# Check if we're far enough from terrain coverage to be "real" ocean
+		# This is a heuristic - if terrain doesn't cover this point but ocean does,
+		# it's likely deep water outside the island
+		return true
+
+	# No terrain and no water mesh = definitely not water
+	return false
+
+func _get_water_mesh_at_position(pos: Vector2) -> Dictionary:
+	## Find any water mesh that contains this 2D position and return its info.
+	## Returns empty dict if no water mesh found.
+
+	# Search for water meshes in the scene (Ocean, lakes, etc.)
+	var water_nodes := []
+	var root := get_tree().root
+	_find_water_nodes_recursive(root, water_nodes)
+
+	for water_node in water_nodes:
+		if water_node is MeshInstance3D:
+			var mesh_inst := water_node as MeshInstance3D
+			var mesh := mesh_inst.mesh
+			if mesh == null:
+				continue
+
+			# Get the mesh AABB and transform it to global space
+			var aabb := mesh.get_aabb()
+			var global_transform := mesh_inst.global_transform
+			var global_pos := global_transform.origin
+			var global_scale := global_transform.basis.get_scale()
+
+			# Calculate bounds in 2D (XZ plane)
+			var half_size_x := (aabb.size.x * global_scale.x) / 2.0
+			var half_size_z := (aabb.size.z * global_scale.z) / 2.0
+			var min_x := global_pos.x - half_size_x
+			var max_x := global_pos.x + half_size_x
+			var min_z := global_pos.z - half_size_z
+			var max_z := global_pos.z + half_size_z
+
+			# Check if position is within this water mesh bounds
+			if pos.x >= min_x and pos.x <= max_x and pos.y >= min_z and pos.y <= max_z:
+				return {
+					"node": water_node,
+					"surface_y": global_pos.y
+				}
+
+	return {}
+
+func _find_water_nodes_recursive(node: Node, result: Array) -> void:
+	## Find all nodes that are likely water meshes
+	var node_name := node.name.to_lower()
+	if "water" in node_name or "ocean" in node_name or "lake" in node_name or "sea" in node_name:
+		if node is MeshInstance3D:
+			result.append(node)
+	for child in node.get_children():
+		_find_water_nodes_recursive(child, result)
+
 func _get_mouse_world_pos() -> Vector2:
 	var input := _world_input
 	if input == null or not is_instance_valid(input):
@@ -392,6 +556,43 @@ func _find_world_input() -> Node:
 	if nodes.is_empty():
 		return null
 	return nodes[0] as Node
+
+func _find_terrain() -> Node:
+	## Find the Terrain3D node in the scene tree
+	# Try common paths first
+	var paths := [
+		"/root/Main3D/World3D/NavigationRegion3D/Ground/Terrain3D",
+		"../../World3D/NavigationRegion3D/Ground/Terrain3D",
+		"../World3D/NavigationRegion3D/Ground/Terrain3D",
+	]
+	for path in paths:
+		var terrain := get_node_or_null(path)
+		if terrain != null and _is_valid_terrain(terrain):
+			return terrain
+	# Fallback: search for Terrain3D node by name
+	var root := get_tree().root
+	return _find_terrain_recursive(root)
+
+func _find_terrain_recursive(node: Node) -> Node:
+	# Look for node named "Terrain3D" or with Terrain3D class
+	if _is_valid_terrain(node):
+		return node
+	for child in node.get_children():
+		var found := _find_terrain_recursive(child)
+		if found != null:
+			return found
+	return null
+
+func _is_valid_terrain(node: Node) -> bool:
+	## Check if node is a valid Terrain3D that can query height
+	if node == null:
+		return false
+	# Check by class name or node name
+	var node_class := node.get_class()
+	if node_class == "Terrain3D" or "Terrain3D" in node.name:
+		if node.has_method("get_height"):
+			return true
+	return false
 
 func _load_build_zones(path: String, zone_id: String) -> void:
 	var file := FileAccess.open(path, FileAccess.READ)
@@ -503,6 +704,21 @@ func _spawn_patriot_turret(pos: Vector2, profile: Dictionary) -> PatriotTurret:
 	add_child(turret)
 	return turret
 
+func _spawn_missile_carrier(pos: Vector2) -> MissileCarrierTurret:
+	var carrier := MissileCarrierTurret.new()
+	carrier.team_id = team_id
+	carrier.bombardment_range = 1200.0
+	carrier.bombardment_missile_damage = 80.0
+	carrier.bombardment_missile_speed = 400.0
+	carrier.bombardment_reload_time = 15.0
+	carrier.base_radius = 30.0
+	carrier.base_color = Color(0.25, 0.35, 0.55, 1.0)
+	carrier.visual_scene_path = _get_turret_visual_path("missile_carrier")
+	carrier.visual_base_radius = 30.0
+	carrier.position = pos
+	add_child(carrier)
+	return carrier
+
 func _compute_defense_range(pos: Vector2) -> float:
 	if _primary_zone == Rect2():
 		return 140.0
@@ -571,6 +787,9 @@ func _get_turret_visual_path(build_id: String) -> String:
 	if build_id == "defense_patriot":
 		# Use the GLB directly for 3D visual sync
 		return "res://assets/models/Patriot/mim-104_patriot_air_defense_system.glb"
+	if build_id == "missile_carrier":
+		# Naval missile carrier - procedural visual for now
+		return ""
 	if build_id.begins_with("defense"):
 		return "res://scenes/buildings/turret_visual.tscn"
 	return ""

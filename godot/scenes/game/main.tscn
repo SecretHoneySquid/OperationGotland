@@ -1,4 +1,4 @@
-[gd_scene load_steps=31 format=3 uid="uid://fo5h4srnvbrq"]
+[gd_scene load_steps=34 format=3 uid="uid://fo5h4srnvbrq"]
 
 [ext_resource type="Script" uid="uid://cw7e3v4l114bn" path="res://scripts/core/debug_overlay.gd" id="1"]
 [ext_resource type="Script" uid="uid://deqd3q3icoi8c" path="res://scripts/core/map_loader.gd" id="2"]
@@ -125,14 +125,21 @@ texture_list = Array[Terrain3DTextureAsset]([SubResource("Terrain3DTextureAsset_
 background_mode = 2
 background_color = Color(0.45, 0.55, 0.7, 1)
 ambient_light_color = Color(0.6, 0.66, 0.72, 1)
-ambient_light_energy = 0.35
 ambient_light_sky_contribution = 0.0
+ambient_light_energy = 0.35
 tonemap_mode = 3
-tonemap_exposure = 1.0
 tonemap_white = 6.0
 
 [sub_resource type="NavigationMesh" id="NavigationMesh_main"]
 sample_partition_type = 1
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_43pvk"]
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_7a7dk"]
+albedo_color = Color(0.029494092, 0, 0.52371114, 1)
+
+[sub_resource type="PlaneMesh" id="PlaneMesh_r0p23"]
+size = Vector2(30000, 30000)
 
 [node name="Main" type="Node"]
 
@@ -221,14 +228,12 @@ current = true
 [node name="DirectionalLight3D" type="DirectionalLight3D" parent="World3D"]
 transform = Transform3D(0.8660254, -0.40957603, 0.28678823, 0, 0.57357645, 0.81915206, -0.5, -0.7094065, 0.49673176, 0, 0, 0)
 light_color = Color(1, 0.96, 0.9, 1)
-light_energy = 1.0
 shadow_enabled = true
 
 [node name="FillLight3D" type="DirectionalLight3D" parent="World3D"]
-rotation_degrees = Vector3(-25, 130, 0)
+transform = Transform3D(-0.64278764, -0.3237444, 0.69427204, 0, 0.90630776, 0.42261827, -0.76604444, 0.2716538, -0.5825634, 0, 0, 0)
 light_color = Color(0.65, 0.73, 0.85, 1)
 light_energy = 0.25
-shadow_enabled = false
 
 [node name="Environment" type="WorldEnvironment" parent="World3D"]
 environment = SubResource("Environment_main")
@@ -244,5 +249,12 @@ script = ExtResource("11_vsync")
 ground_path = NodePath("../../Terrain3D")
 build_controller_path = NodePath("../../BuildController")
 building_pad_enabled = false
+
+[node name="Ocean" type="MeshInstance3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 4608, -0.1, 4608)
+material_override = SubResource("StandardMaterial3D_43pvk")
+material_overlay = SubResource("StandardMaterial3D_7a7dk")
+mesh = SubResource("PlaneMesh_r0p23")
+skeleton = NodePath("../World3D")
 
 [node name="UI2" type="CanvasLayer" parent="."]

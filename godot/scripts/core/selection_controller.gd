@@ -136,9 +136,9 @@ func _select_single(pos: Vector2, add: bool) -> void:
 		# Check if this building has a linked turret (defense buildings)
 		var linked_turret = building.get_meta("linked_turret", null)
 		print("[SELECTION] Building clicked: ", building.build_id, " linked_turret: ", linked_turret)
-		if linked_turret != null and is_instance_valid(linked_turret) and (linked_turret is PatriotTurret or linked_turret is RadarStation):
-			# Select the linked defense/radar turret instead of the building
-			print("[SELECTION] Selecting linked turret")
+		if linked_turret != null and is_instance_valid(linked_turret) and (linked_turret is PatriotTurret or linked_turret is RadarStation or linked_turret is MissileCarrierTurret):
+			# Select the linked defense/radar/carrier turret instead of the building
+			print("[SELECTION] Selecting linked turret: ", linked_turret.get_class())
 			_clear_selection()
 			_clear_selected_building()
 			_clear_selected_battalion()

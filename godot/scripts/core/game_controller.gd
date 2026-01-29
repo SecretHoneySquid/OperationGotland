@@ -78,6 +78,7 @@ var _visibility_controller: VisibilityController
 var _battalion_controller: BattalionController
 var _region_controller: RegionController
 var _spy_satellite_controller: SpySatelliteController
+var _building_bombardment_controller: BuildingBombardmentController
 var _region_grid_visual: RegionGridVisual
 
 # Rally line 3D visualization
@@ -172,6 +173,12 @@ func _init_controllers() -> void:
 	_spy_satellite_controller = SpySatelliteController.new()
 	_spy_satellite_controller.name = "SpySatelliteController"
 	add_child(_spy_satellite_controller)
+
+	# Building bombardment controller - for missile carrier targeting
+	_building_bombardment_controller = BuildingBombardmentController.new()
+	_building_bombardment_controller.name = "BuildingBombardmentController"
+	_building_bombardment_controller.team_id = "p1"
+	add_child(_building_bombardment_controller)
 
 func _process(delta: float) -> void:
 	_update_hq_state()
@@ -466,6 +473,9 @@ func activate_spy_satellite(team_id: String, position: Vector2) -> bool:
 
 func get_spy_satellite_controller() -> SpySatelliteController:
 	return _spy_satellite_controller
+
+func get_building_bombardment_controller() -> BuildingBombardmentController:
+	return _building_bombardment_controller
 
 # =============================================================================
 # PUBLIC API - Type Options

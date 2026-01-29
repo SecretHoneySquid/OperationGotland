@@ -105,6 +105,14 @@ var _radar_area_button: Button
 var _selected_radar: RadarStation = null
 var _protection_area_controller: Node = null
 
+# Missile Carrier UI
+var _missile_carrier_panel: VBoxContainer
+var _missile_carrier_name_label: Label
+var _missile_carrier_status_label: Label
+var _missile_carrier_bombardment_button: Button
+var _selected_missile_carrier: MissileCarrierTurret = null
+var _building_bombardment_controller: BuildingBombardmentController = null
+
 # HQ UI
 var _hq_panel: VBoxContainer
 var _hq_name_label: Label
@@ -218,6 +226,8 @@ func _process(_delta: float) -> void:
 		_update_patriot_panel()
 	if _radar_panel != null:
 		_update_radar_panel()
+	if _missile_carrier_panel != null:
+		_update_missile_carrier_panel()
 
 func _build_ui() -> void:
 	# LEFT PANEL - Buildings only
@@ -737,6 +747,30 @@ func _build_ui() -> void:
 	_radar_area_button.text = "Set Detection Area"
 	_radar_area_button.pressed.connect(_on_radar_area_pressed)
 	_radar_panel.add_child(_radar_area_button)
+
+	# ========== MISSILE CARRIER PANEL ==========
+	_missile_carrier_panel = VBoxContainer.new()
+	_missile_carrier_panel.visible = false
+	_missile_carrier_panel.add_theme_constant_override("separation", _si(6.0))
+	_missile_carrier_panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	bottom_hbox.add_child(_missile_carrier_panel)
+
+	var carrier_title := Label.new()
+	carrier_title.text = "Missile Carrier Control"
+	_missile_carrier_panel.add_child(carrier_title)
+
+	_missile_carrier_name_label = Label.new()
+	_missile_carrier_name_label.text = "No carrier selected"
+	_missile_carrier_panel.add_child(_missile_carrier_name_label)
+
+	_missile_carrier_status_label = Label.new()
+	_missile_carrier_status_label.text = "Status: Ready"
+	_missile_carrier_panel.add_child(_missile_carrier_status_label)
+
+	_missile_carrier_bombardment_button = Button.new()
+	_missile_carrier_bombardment_button.text = "Launch Bombardment"
+	_missile_carrier_bombardment_button.pressed.connect(_on_missile_carrier_bombardment_pressed)
+	_missile_carrier_panel.add_child(_missile_carrier_bombardment_button)
 
 	# ========== HQ PANEL ==========
 	_hq_panel = VBoxContainer.new()
@@ -1350,6 +1384,9 @@ func _on_turret_selected(turret: DefenseTurret) -> void:
 	_selected_radar = null
 	if _radar_panel != null:
 		_radar_panel.visible = false
+	_selected_missile_carrier = null
+	if _missile_carrier_panel != null:
+		_missile_carrier_panel.visible = false
 
 	if turret == null or not is_instance_valid(turret):
 		print("[BUILD_UI] turret is null or invalid")
@@ -1364,6 +1401,10 @@ func _on_turret_selected(turret: DefenseTurret) -> void:
 		print("[BUILD_UI] turret is RadarStation, showing panel")
 		_selected_radar = turret as RadarStation
 		_update_radar_panel()
+	elif turret is MissileCarrierTurret:
+		print("[BUILD_UI] turret is MissileCarrierTurret, showing panel")
+		_selected_missile_carrier = turret as MissileCarrierTurret
+		_update_missile_carrier_panel()
 	else:
 		print("[BUILD_UI] turret is NOT PatriotTurret, type: ", turret.get_class())
 
@@ -1504,3 +1545,43 @@ func _update_hq_panel() -> void:
 			_hq_status_label.text = "Satellite: Ready"
 		else:
 			_hq_status_label.text = "Satellite: Cooldown %.0fs" % _selected_hq.get_cooldown_remaining()
+
+# =============================================================================
+# MISSILE CARRIER UI HANDLERS
+# =============================================================================
+
+func _on_missile_carrier_bombardment_pressed() -> void:
+	if _selected_missile_carrier == null or not is_instance_valid(_selected_missile_carrier):
+		return
+	if _building_bombardment_controller == null:
+		_building_bombardment_controller = get_tree().get_first_node_in_group("building_bombardment_controller")
+	if _building_bombardment_controller != null:
+		if _controller != null:
+			_controller.cancel_placement()
+		_building_bombardment_controller.start_bombardment(_selected_missile_carrier)
+
+func _update_missile_carrier_panel() -> void:
+	if _missile_carrier_panel == null:
+		return
+	if _selected_missile_carrier == null or not is_instance_valid(_selected_missile_carrier):
+		_missile_carrier_panel.visible = false
+		return
+	_missile_carrier_panel.visible = true
+	if _missile_carrier_name_label != null:
+		_missile_carrier_name_label.text = "Carrier @ (%.0f, %.0f)" % [
+			_selected_missile_carrier.global_position.x,
+			_selected_missile_carrier.global_position.y
+		]
+	if _missile_carrier_status_label != null:
+		if _selected_missile_carrier.is_bombardment_ready():
+			_missile_carrier_status_label.text = "Status: Ready to Fire"
+		else:
+			var remaining := _selected_missile_carrier.get_cooldown_remaining()
+			var progress := _selected_missile_carrier.get_cooldown_progress() * 100.0
+			_missile_carrier_status_label.text = "Status: Reloading (%.1fs / %.0f%%)" % [remaining, progress]
+	if _missile_carrier_bombardment_button != null:
+		_missile_carrier_bombardment_button.disabled = not _selected_missile_carrier.is_bombardment_ready()
+		if _selected_missile_carrier.is_bombardment_ready():
+			_missile_carrier_bombardment_button.text = "Launch Bombardment (Ready)"
+		else:
+			_missile_carrier_bombardment_button.text = "Launch Bombardment (Reloading...)"
